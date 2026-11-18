@@ -25,11 +25,42 @@ The technical design (layered paint model, map format, IBL) lives in
 | 3 | Base PBR (Cook-Torrance, GGX, Fresnel, Smith, IBL) | |
 | 4 | Automotive materials (clearcoat, candy, gloss, matte, satin, chrome) | |
 | 5 | Reflection quality on the body (specular AA, curvature) | |
-| 6 | Lighting and colour (HDR, exposure, tonemap) | done in part: HDR + ACES |
+| 6 | Tone mapping and colour (HDR, exposure, ACES) | done in part: HDR + ACES |
+| 6b | **Light system** (Point/Spot from game data, light registry, shadows) | separate branch |
 | 7 | Material editor | deliberately last |
 
 Stage 7 is last on purpose: a nice editor around mediocre shaders is the
 wrong order.
+
+## Roadmap reconciliation
+
+Stage 6 was named "Lighting and colour", which read as if it covered the light
+system. It does not: HDR, exposure and tone mapping are the *output* stage, and
+Point/Spot lights are an *input* stage. Splitting them matters because they
+have different risks, and because `docs/PBR_PLAN.md` treats lighting as art
+direction while this file treated it as an output problem.
+
+The agreed shape is two independent branches:
+
+- **Branch A - materials and IBL**: linear pipeline, HDR reflection capture,
+  real GGX prefilter, DFG LUT, base PBR, layered automotive paint, legacy SCX
+  compatibility.
+- **Branch B - dynamic lighting**: Point/Spot restored from game data, a common
+  light structure and registry, game-state wiring, integration into the main
+  render **and into the reflection capture**, shadows.
+
+Shared contract, to be written before either branch starts: how a light is
+represented, where it lives, how it updates, and how it reaches both the main
+render and the cubemap capture. If a light is missing from the capture,
+reflections and lighting disagree and it looks like a material bug.
+
+Shadow priority is agreed: spot shadows from car headlights first, CSM second.
+Existing shadows stay until a full replacement is verified.
+
+Units: point and spot in candela, directional in lux, area in cd/m^2 when it
+arrives. One documented global conversion factor is allowed; per-type fudge
+factors are not. Ctrl+F12 stays a scene exposure control, not a way to
+compensate for badly set lights.
 
 ## Acceptance criteria
 
