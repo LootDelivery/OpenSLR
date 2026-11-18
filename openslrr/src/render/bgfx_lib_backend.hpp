@@ -294,6 +294,11 @@ class LibBgfxBackend final : public IRenderBackend {
   // previews_ is rebuilt every frame, so a spin stored on it never accumulates.
   // Keyed by the preview camera instead, which is stable across rebuilds.
   std::unordered_map<const void*, float> preview_spins_;
+  // The slot's pivot is averaged from the instances, and previews_ is rebuilt
+  // every frame with a varying set of parts -- so a pivot recomputed each frame
+  // jumps around and a car in assembly comes apart. Fix it per camera on first
+  // use and keep it.
+  std::unordered_map<const void*, std::array<float, 3>> preview_pivots_;
   int mouse_y_ = 0;
   int32_t tip_hover_ = -2;
   float tip_since_ = 0.f;

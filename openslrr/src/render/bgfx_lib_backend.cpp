@@ -2315,14 +2315,20 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         // its own sits near the origin and looked right, but a car in assembly
         // came apart, each part swinging around the world.
         float pivot[3] = {0.f, 0.f, 0.f};
-        for (const auto& i : p.instances) {
-          pivot[0] += i.transform[12];
-          pivot[1] += i.transform[13];
-          pivot[2] += i.transform[14];
-        }
-        if (!p.instances.empty()) {
-          const float inv = 1.f / static_cast<float>(p.instances.size());
-          pivot[0] *= inv; pivot[1] *= inv; pivot[2] *= inv;
+        {
+          auto& stored = preview_pivots_[p.camera.key];
+          if (stored[0] == 0.f && stored[1] == 0.f && stored[2] == 0.f && !p.instances.empty()) {
+            for (const auto& i : p.instances) {
+              pivot[0] += i.transform[12];
+              pivot[1] += i.transform[13];
+              pivot[2] += i.transform[14];
+            }
+            const float inv = 1.f / static_cast<float>(p.instances.size());
+            stored[0] = pivot[0] * inv;
+            stored[1] = pivot[1] * inv;
+            stored[2] = pivot[2] * inv;
+          }
+          pivot[0] = stored[0]; pivot[1] = stored[1]; pivot[2] = stored[2];
         }
         for(const auto&i:p.instances){
           if (spin == 0.f) {
