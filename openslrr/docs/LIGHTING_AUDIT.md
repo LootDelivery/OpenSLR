@@ -113,3 +113,118 @@ prefilter" is counting work that has not been done.
   vestigial.
 
 These four are the questions the next pass should answer, and they are cheap.
+
+---
+
+# Game data scan
+
+Read-only scan of `Street Legal Racing - Redline` resources.
+
+## Confirmed by game resources
+
+All three light types exist in the shipped data. The format is D3D-style
+(`D3DLIGHT9`), text, and far richer than what the backend consumes.
+
+A spot light from `cars/racers.rpk` -- a car headlight:
+
+```
+type spot
+diffuse  a r g b
+specular a r g b
+ambient  a r g b
+position x y z
+direction x y z
+range 250.000
+attenuation 1.000 0.030 0.000     ; constant, linear, quadratic
+theta 1.896                       ; inner cone
+phi 2.020                         ; outer cone
+lf_texture 0x00000100
+lf_glow_color a r g b
+lit_dynamic 1.000
+attH_texture 0x0000000B           ; horizontal projection gobo
+attV_texture 0x0000000C           ; vertical projection gobo
+```
+
+A point light from `objects.rpk`:
+
+```
+type point
+diffuse  a r g b
+specular a r g b
+ambient  a r g b
+position x y z
+direction x y z
+range 500.000
+attenuation 1.000 0.030 0.000
+lf_texture 0x000004D2
+lf_glow_color a r g b
+lf_glow_colortype 2.000
+lf_glow_offset 4.000
+lf_glow_minsize 2.000
+lf_glow_maxsize 40.000
+lf_ray_minwidth 2.000
+lf_ray_maxwidth 2.000
+lf_ray_minlenght 1.000
+lf_ray_maxlenght 70.000
+lf_flare_minsi...
+```
+
+Directional lights carry the same fields with `position`, `range` and
+`attenuation` present but zeroed -- the format is uniform across types.
+
+### Where they live
+
+| Resource | Light types found |
+|---|---|
+| `cars/racers.rpk` | `type spot` -- car headlights |
+| `parts.rpk` | `type spot` |
+| `particles.rpk` | `type spot` |
+| `objects.rpk` | `type point` -- lamps and street lights |
+| `frontend.rpk`, `maps/city.rpk`, `maps/city2.rpk` | `type directional` |
+
+### Fields the backend ignores entirely
+
+- `theta`, `phi` -- cone angles, so spot shape is already authored;
+- `attenuation` -- the constant/linear/quadratic triple;
+- `range` -- parsed nowhere;
+- `position` -- only used by the garage hack;
+- `attH_texture`, `attV_texture` -- projection gobos for the light cone;
+- `lf_*` -- the whole lens-flare block (glow colour and size, ray width and
+  length, flare size);
+- `lit_dynamic` -- the lamp on/off flag.
+
+## Confirmed by code
+
+- `apply_directional_light()` parses `type`, `diffuse`, `ambient`, `specular`
+  and `direction` only. Everything above is read past.
+- Its comment "Point lights are left alone" refers to this: non-directional
+  resources are skipped, not understood.
+- `gameref_directional_lights()` filters on `directional_light.set`, so even
+  loaded point/spot nodes are unreachable from the renderer.
+- `part_lamp_lit()` decides whether a lamp mesh is **visible**, from flags, the
+  engine and time. It never creates a light source. `lit_dynamic` is the data
+  side of the same idea and is unused.
+- `update_local_light()` picks the first `0x001D` node, offsets it +3.3 in Y,
+  and hardcodes intensity 8 and radius 8. The shader then multiplies by 3.0 and
+  applies a warm tint. Those two constants are the entire garage lighting.
+
+## Still unknown
+
+- How many spot and point resources exist per map and per car -- the scan found
+  types, not counts.
+- Whether `theta`/`phi` are half-angles or full angles in this data.
+- Units of `range` and `attenuation` relative to world scale.
+- Whether `attH_texture`/`attV_texture` are meaningful for most lights or only
+  for a few authored ones.
+- What the old lightmaps contain, and whether any of it is worth keeping as AO.
+
+## Consequence for the roadmap
+
+The "restore Point/Spot from game data" step is smaller than it looked: the
+data is complete and already parsed for the directional case. What is missing
+is a general light structure, an accessor that does not filter by type, and a
+shader loop. Cone angles and attenuation are already authored and simply
+waiting.
+
+The lens-flare block is a separate feature and should not be on the critical
+path for lighting.
