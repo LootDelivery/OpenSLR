@@ -2337,7 +2337,12 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         float pivot[3] = {0.f, 0.f, 0.f};
         {
           auto& stored = preview_pivots_[p.camera.key];
-          if (stored[0] == 0.f && stored[1] == 0.f && stored[2] == 0.f && !p.instances.empty()) {
+          // An explicit "computed" flag, not a test for zero: a car parked near
+          // the origin has a pivot of about zero, so that test re-averaged it
+          // every frame and the axis followed the parts around.
+          bool& pivot_set = preview_pivot_set_[p.camera.key];
+          if (!pivot_set && !p.instances.empty()) {
+            pivot_set = true;
             for (const auto& i : p.instances) {
               pivot[0] += i.transform[12];
               pivot[1] += i.transform[13];

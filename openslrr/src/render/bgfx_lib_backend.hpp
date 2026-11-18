@@ -299,6 +299,7 @@ class LibBgfxBackend final : public IRenderBackend {
   // jumps around and a car in assembly comes apart. Fix it per camera on first
   // use and keep it.
   std::unordered_map<const void*, std::array<float, 3>> preview_pivots_;
+  std::unordered_map<const void*, bool> preview_pivot_set_;
   int mouse_y_ = 0;
   int32_t tip_hover_ = -2;
   float tip_since_ = 0.f;
