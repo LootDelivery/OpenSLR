@@ -50,6 +50,13 @@ namespace slrr {
         th = bgfx::createTexture2D(
             static_cast<uint16_t>(img.width),
             static_cast<uint16_t>(img.height), false, 1, fmt,
+            // These are colour images: the catalogue plate, menu art, icons.
+            // They are gamma-encoded on disk, so without the sRGB flag they
+            // arrive as if linear and the sRGB backbuffer then encodes them a
+            // second time -- which is why the catalogue read washed out and
+            // paler than the original. Masks and glyphs are not loaded here
+            // (tex_for_font handles those) and must stay linear.
+            BGFX_TEXTURE_SRGB |
             BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, mem);
       }
     }
