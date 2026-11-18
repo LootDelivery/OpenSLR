@@ -2329,17 +2329,16 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         // Just a pivot spin for now, no orbit and no drag.
         const bool hover = mouse_x_ >= x && mouse_x_ < x + w &&
                            mouse_y_ >= y && mouse_y_ < y + h;
-        float& spin = preview_spins_[p.camera.key];
-        if (hover) spin += 0.008f;
-        // Rotate about the slot's own centre, not the world origin. A part on
-        // its own sits near the origin and looked right, but a car in assembly
-        // came apart, each part swinging around the world.
+        // Rotate about the slot's own centre, not the world origin.
         float pivot[3] = {0.f, 0.f, 0.f};
+        float spin = preview_spins_[p.camera.key];
+        if (hover) spin += 0.008f;
+        preview_spins_[p.camera.key] = spin;
         {
           auto& stored = preview_pivots_[p.camera.key];
           // An explicit "computed" flag, not a test for zero: a car parked near
-          // the origin has a pivot of about zero, so that test re-averaged it
-          // every frame and the axis followed the parts around.
+          // the origin has a pivot of about exactly zero, so that test
+          // re-averaged it every frame and the axis followed the parts around.
           bool& pivot_set = preview_pivot_set_[p.camera.key];
           if (!pivot_set && !p.instances.empty()) {
             pivot_set = true;
@@ -2355,22 +2354,22 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
           }
           pivot[0] = stored[0]; pivot[1] = stored[1]; pivot[2] = stored[2];
         }
-        for(const auto&i:p.instances){
-          if (spin == 0.f) {
-            draw_instance(id,i,i.transform.data(),true,pass,p.full_materials);
-            continue;
-          }
-          float to_pivot[16], spin_mtx[16], back[16], about[16], m[16];
+        if (spin != 0.f) {
+          // Turn the slot, not its parts. Rotating each instance made a car in
+          // assembly read as separate pieces; folding the rotation into the
+          // view turns whatever is in the slot as one rigid body, the way the
+          // original turns the parent and lets the children follow.
+          float to_pivot[16], spin_mtx[16], back[16], about[16], turned[16];
           bx::mtxTranslate(to_pivot, -pivot[0], -pivot[1], -pivot[2]);
           bx::mtxRotateY(spin_mtx, spin);
           bx::mtxTranslate(back, pivot[0], pivot[1], pivot[2]);
           bx::mtxMul(about, to_pivot, spin_mtx);
           bx::mtxMul(about, about, back);
-          bx::mtxMul(m, about, i.transform.data());
-          SceneInstance spun = i;
-          std::memcpy(spun.transform.data(), m, sizeof(float) * 16);
-          draw_instance(id,spun,spun.transform.data(),true,pass,p.full_materials);
+          bx::mtxMul(turned, view, about);
+          std::memcpy(view, turned, sizeof(view));
         }
+        for(const auto&i:p.instances)
+          draw_instance(id,i,i.transform.data(),true,pass,p.full_materials);
       }
       ++id;
     }
