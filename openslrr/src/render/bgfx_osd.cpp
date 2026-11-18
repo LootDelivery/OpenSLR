@@ -902,7 +902,20 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
                      (layer == front_window_layer || plate_behind_preview(w)))
                         ? kOsdUnder
                         : kOsdView;
-        draw_osd_quad(w);
+        {
+        // Diagnostic: the tooltip plate is a background widget whose size the
+        // script sets after creating it. If the first showing uses the default
+        // extent it will cover the part previews. Log the first plates seen so
+        // first and second showing can be compared.
+        static int seen = 0;
+        if (seen < 24) {
+          ++seen;
+          std::printf("[bgfx] plate #%d layer=%d x=%.3f y=%.3f hw=%.3f hh=%.3f hidden=%d bg=%d\n",
+                      seen, w.layer, w.x, w.y, w.half_w, w.half_h,
+                      w.hidden ? 1 : 0, w.background ? 1 : 0);
+        }
+      }
+      draw_osd_quad(w);
       }
       osd_view_ = kOsdView;
       if (const OsdWidget* hw = osd_hover_widget()) {
