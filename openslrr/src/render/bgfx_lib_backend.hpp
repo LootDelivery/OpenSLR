@@ -423,6 +423,9 @@ class LibBgfxBackend final : public IRenderBackend {
   // the capture does not make a previously captured environment unusable, so
   // this must not follow reflection_scene_.
   bool reflection_env_valid_ = false;
+  // Which world reflection_env_valid_ refers to, so a cubemap captured for one
+  // world cannot be sampled by another.
+  const void* reflection_env_world_ = nullptr;
   bool reflection_scene_ = false;
   bool static_shadow_active_ = false;
   bgfx::FrameBufferHandle car_depth_fb_ = BGFX_INVALID_HANDLE;

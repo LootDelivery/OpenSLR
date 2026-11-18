@@ -1472,10 +1472,11 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
   }
   void LibBgfxBackend::clear_scene()
 {
-    // The captured environment belongs to the scene that was just torn down.
-    // Leaving it valid would let the next scene sample a cubemap from the
-    // previous one.
-    reflection_env_valid_ = false;
+    // NOTE: reflection_env_valid_ deliberately survives here. Entering the
+    // catalogue rebuilds the scene, and clearing the flag on every rebuild
+    // left the parts reflecting nothing -- the exact opposite of the point.
+    // The captured environment is invalidated when the world actually
+    // changes, in update_reflections, not on an incidental scene rebuild.
     for (auto& entry : instance_meshes_)
       destroy_part(entry.second);
     instance_meshes_.clear();
@@ -1828,6 +1829,11 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       return;
     }
     reflection_box_valid_ = false;
+    // A cubemap captured for another world must not be sampled by this one.
+    if (reflection_env_world_ != ground->key) {
+      reflection_env_valid_ = false;
+      reflection_env_world_ = ground->key;
+    }
     if (garage_) {
       reflection_box_min_ = {1e20f, 1e20f, 1e20f};
       reflection_box_max_ = {-1e20f, -1e20f, -1e20f};
@@ -1996,6 +2002,7 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       // All six faces are in and a fresh read buffer is published, so the
       // environment is complete and safe to sample from any scene.
       reflection_env_valid_ = true;
+      reflection_env_world_ = ground->key;
       reflection_sample_origin_ = reflection_origin_;
       s_refl_published_generation = s_refl_generation;
       s_refl_published_frame = s_refl_frame;
