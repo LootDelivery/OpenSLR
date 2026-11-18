@@ -23,7 +23,8 @@ vec3 aces(vec3 x)
 
 void main()
 {
-	vec3 color = texture2D(s_texColor, v_texcoord0).rgb;
+	vec4 src = texture2D(s_texColor, v_texcoord0);
+	vec3 color = src.rgb;
 	if (u_presentParams.y > 0.5) {
 		// The scene target is linear now: the colour maps are decoded on sample
 		// (BGFX_TEXTURE_SRGB) and the lighting multiplies linear values. Decoding
@@ -34,5 +35,8 @@ void main()
 		// (BGFX_RESET_SRGB_BACKBUFFER) and the hardware converts linear to sRGB on
 		// write. Encoding in the shader as well would be a double gamma.
 	}
-	gl_FragColor = vec4(color, 1.0);
+	// Keep the source alpha. The preview composite blends by alpha so that the
+	// empty parts of its target leave the scene underneath alone; forcing 1.0
+	// here made that pass paint over the whole window.
+	gl_FragColor = vec4(color, src.a);
 }
