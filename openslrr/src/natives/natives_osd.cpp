@@ -620,7 +620,12 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (const SlrrFont* f = slrr_font_get(font))
           if (f->px_height > 0) px = static_cast<float>(f->px_height);
         const float screen = video_axis("video_y", osd_framebuffer_height(), 600);
-        return Value::make_float(2.f * px / (screen * vp_span(vp, "vp_h")));
+        // Normalise by the framebuffer, not by the viewport. The viewport a
+        // tooltip draws in is short, and dividing by its height blew the result
+        // up: the plate came out 0.60 half-height, taller than the whole
+        // screen, where it covered every part preview and shifted the image.
+        (void)vp;
+        return Value::make_float(2.f * px / screen);
       });
   jvm.natives().register_method(
       "java.render.Text", "getPos", "()Ljava.lang.Vector3;",
