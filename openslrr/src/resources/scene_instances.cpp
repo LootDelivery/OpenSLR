@@ -1,0 +1,2719 @@
+#include "slrr/gc_roots.hpp"
+#include "slrr/scene_instances.hpp"
+#include "slrr/scene_collision.hpp"
+#include <limits>
+#include "slrr/gameref.hpp"
+#include "slrr/part_config.hpp"
+#include "slrr/part_runtime.hpp"
+#include "slrr/rpk_index.hpp"
+#include "slrr/scene_ambience.hpp"
+#include "slrr/skeleton.hpp"
+#include "slrr/vehicle_dynamics.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <charconv>
+#include <cctype>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace slrr {
+namespace {
+const RpkIndex *g_resources = nullptr;
+void *g_world = nullptr;
+SceneHizTest g_hiz = nullptr;
+void* g_hiz_user = nullptr;
+void *g_sky = nullptr;
+bool g_preview_lamps = false;
+uint32_t g_environment = 0;
+struct ShadowInfo {
+  uint32_t flags = 0;
+  SceneShadowDecal decal;
+};
+std::unordered_map<uint32_t, ShadowInfo> g_shadow_info;
+std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_meshes;
+std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_overrides;
+std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_collision_overrides;
+std::unordered_map<uint32_t, std::string> g_texture_paths;
+struct StaticMesh {
+  std::vector<float> positions;
+  std::vector<uint32_t> indices;
+  float scale = 0.01f;
+  float cell_size = 2.f;
+  std::unordered_map<uint64_t, std::vector<uint32_t>> cells;
+  std::vector<uint32_t> large_triangles;
+};
+std::vector<StaticMesh> g_static;
+bool g_static_enabled = true;
+uint64_t floor_cell(int32_t x, int32_t z) {
+  return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
+         static_cast<uint32_t>(z);
+}
+struct GroundPropBatch {
+  uint32_t render_id = 0;
+  std::vector<uint32_t> indices;
+};
+struct GroundProp {
+  uint32_t render_id;
+  PartMatrix pose;
+  uint32_t color;
+  std::array<float, 3> center{};
+  float radius = 0.f;
+  bool batched = false;
+  bool hidden = false;   // replaced by a live loose body
+  int32_t dormant = -1;  // index into GroundPropMap::dormant, or -1
+};
+struct GroundPropCell {
+  std::vector<GroundProp> props;
+  std::vector<GroundPropBatch> batches;
+  std::array<float, 3> center{};
+  float radius = 0.f;
+};
+// A positive-mass placement stays an instanced render prop until a car comes
+// close. Only then does it become a live loose body, so a map with thousands of
+// small props costs nothing per tick while they lie undisturbed.
+struct DormantProp {
+  std::shared_ptr<const PartConfig> config;
+  PartMatrix pose{};
+  int32_t seed = 0;
+  std::array<float, 3> local_lower{}, local_upper{};  // collision bounds, object frame
+  std::array<float, 3> lower{}, upper{};  // shell-local bounds, padded
+  bool promoted = false;
+  void* live = nullptr;     // the loose body's node while promoted
+  PartMatrix live_shell{};  // its ground shell's world frame, captured on promotion
+  std::vector<std::pair<GroundPropCell*, uint32_t>> props;  // render instances to hide
+};
+struct GroundPropMap {
+  std::vector<DormantProp> dormant;
+  std::unordered_map<uint64_t, std::vector<uint32_t>> dormant_grid;
+  std::unordered_map<uint64_t, GroundPropCell> cells;
+  std::vector<uint32_t> resources;
+  std::vector<StaticMesh> collision_meshes;
+  collision::StaticIndex collision_shapes;
+};
+std::unordered_map<uint32_t, GroundPropMap> g_ground_props;
+// The map is cached per render id and outlives its GroundRef: each visit to a
+// city builds a new GroundRef, so the one to parent a promoted prop to is
+// taken from the shell that woke it, never stored with the placement.
+struct PendingDormant {
+  GroundPropMap* map = nullptr;
+  uint32_t index = 0;
+  void* ground = nullptr;
+  PartMatrix shell{};
+};
+std::vector<PendingDormant> g_pending_dormant;
+std::unordered_map<void*, std::pair<GroundPropMap*, uint32_t>> g_live_dormant;
+
+struct GroundCollisionWorld {
+  PartMatrix matrix{};
+  PartMatrix inverse{};
+  const GroundPropMap* source = nullptr;
+  std::vector<StaticMesh> meshes;
+  std::array<float, 3> bounds_min{};
+  std::array<float, 3> bounds_max{};
+  bool has_bounds = false;
+};
+std::unordered_map<void*, GroundCollisionWorld> g_ground_collision;
+collision::StaticIndex g_script_collision_shapes;
+
+struct PrimitiveSource {
+  PhysicsShape shape = PhysicsShape::None;
+  std::array<float, 3> size{};
+  std::shared_ptr<const ScxGeometry> geometry;
+};
+std::unordered_map<void*, PrimitiveSource> g_primitive_sources;
+
+struct NativeCollisionData {
+  bool dynamic = false;
+  // Sum and centre of the positive-mass collision bodies, object frame.
+  float mass = 0.f;
+  std::array<float, 3> center{};
+  // SCX bodies baked into the native object's local frame, in metres.
+  std::shared_ptr<const ScxGeometry> mesh;
+  // Primitive bodies keep their local poses until each placement is known.
+  std::vector<PartBody> primitives;
+};
+std::unordered_map<uint32_t, NativeCollisionData> g_native_collision;
+bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out);
+const NativeCollisionData& native_collision_data(
+    const RpkIndex& rpk, uint32_t type, const PartConfig* parsed = nullptr);
+constexpr float kPropCellSize = 64.f;
+constexpr float kDormantCell = 16.f;
+
+int32_t prop_cell(float value) {
+  return static_cast<int32_t>(std::floor(value / kPropCellSize));
+}
+int32_t cell_coordinate(double position, const StaticMesh& mesh) {
+  return static_cast<int32_t>(std::floor(position / mesh.cell_size));
+}
+
+struct FloorMesh {
+  std::shared_ptr<const ScxGeometry> source;
+  std::array<float, 16> matrix{};
+  StaticMesh mesh;
+  std::vector<void *> ancestors;
+};
+std::unordered_map<void *, FloorMesh> g_floor_meshes;
+bool g_floor_prepared = false;
+uint64_t g_floor_builds = 0;
+uint64_t g_floor_revision = 1;
+void index_floor(StaticMesh &mesh) {
+  // Static garage triangles are indexed once in script space. Physics asks
+  // for several support samples per 240 Hz tick; rescanning the whole shell
+  // for every wheel/corner is unnecessary.
+  for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+    float min_x = 0, max_x = 0, min_z = 0, max_z = 0;
+    bool valid = true;
+    for (int k = 0; k < 3; ++k) {
+      const auto vertex = static_cast<size_t>(mesh.indices[i + k]) * 3;
+      if (vertex + 2 >= mesh.positions.size()) {
+        valid = false;
+        break;
+      }
+      float x = mesh.positions[vertex] * mesh.scale,
+            z = mesh.positions[vertex + 2] * mesh.scale;
+      if (!std::isfinite(x) || !std::isfinite(z)) {
+        valid = false;
+        break;
+      }
+      if (!k) {
+        min_x = max_x = x;
+        min_z = max_z = z;
+      } else {
+        min_x = std::min(min_x, x);
+        max_x = std::max(max_x, x);
+        min_z = std::min(min_z, z);
+        max_z = std::max(max_z, z);
+      }
+    }
+    if (!valid)
+      continue;
+    const int32_t x0 = cell_coordinate(min_x, mesh), x1 = cell_coordinate(max_x, mesh);
+    const int32_t z0 = cell_coordinate(min_z, mesh), z1 = cell_coordinate(max_z, mesh);
+    if ((int64_t(x1) - x0 + 1) * (int64_t(z1) - z0 + 1) > 4096) {
+      mesh.large_triangles.insert(mesh.large_triangles.end(),
+                                  mesh.indices.begin() + i,
+                                  mesh.indices.begin() + i + 3);
+      continue;
+    }
+    for (int32_t x = x0; x <= x1; ++x)
+      for (int32_t z = z0; z <= z1; ++z) {
+        auto &cell = mesh.cells[floor_cell(x, z)];
+        cell.insert(cell.end(), mesh.indices.begin() + i,
+                    mesh.indices.begin() + i + 3);
+      }
+  }
+}
+
+StaticMesh bake_static_mesh(const ScxGeometry& geo, const PartMatrix& matrix) {
+  StaticMesh mesh;
+  mesh.scale = 1.f;
+  if (geo.indices.size() > 100000) mesh.cell_size = 8.f;
+  mesh.indices = geo.indices;
+  mesh.positions.resize(geo.positions.size());
+  for (size_t i = 0; i + 2 < geo.positions.size(); i += 3) {
+    const float x = geo.positions[i] * geo.position_scale;
+    const float y = geo.positions[i + 1] * geo.position_scale;
+    const float z = geo.positions[i + 2] * geo.position_scale;
+    mesh.positions[i] = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
+    mesh.positions[i + 1] = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
+    mesh.positions[i + 2] = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
+  }
+  index_floor(mesh);
+  return mesh;
+}
+
+StaticMesh transform_static_mesh(const StaticMesh& source, const PartMatrix& matrix) {
+  StaticMesh mesh;
+  mesh.scale = 1.f;
+  mesh.cell_size = source.cell_size;
+  mesh.indices = source.indices;
+  mesh.positions.resize(source.positions.size());
+  for (size_t i = 0; i + 2 < source.positions.size(); i += 3) {
+    const float x = source.positions[i] * source.scale;
+    const float y = source.positions[i + 1] * source.scale;
+    const float z = source.positions[i + 2] * source.scale;
+    mesh.positions[i] = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
+    mesh.positions[i + 1] = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
+    mesh.positions[i + 2] = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
+  }
+  index_floor(mesh);
+  return mesh;
+}
+
+void merge_static_meshes(std::vector<StaticMesh>& meshes) {
+  if (meshes.size() < 2) return;
+  StaticMesh combined;
+  combined.scale = 1.f;
+  for (const auto& source : meshes) {
+    const auto first = static_cast<uint32_t>(combined.positions.size() / 3);
+    combined.positions.reserve(combined.positions.size() + source.positions.size());
+    for (float value : source.positions)
+      combined.positions.push_back(value * source.scale);
+    combined.indices.reserve(combined.indices.size() + source.indices.size());
+    for (uint32_t index : source.indices) combined.indices.push_back(first + index);
+  }
+  if (combined.indices.size() > 100000) combined.cell_size = 8.f;
+  index_floor(combined);
+  meshes.clear();
+  meshes.push_back(std::move(combined));
+}
+
+std::shared_ptr<const ScxGeometry> primitive_geometry(GameRefState& node) {
+  const std::array<float, 3> size = {node.physics_size[0], node.physics_size[1],
+                                     node.physics_size[2]};
+  auto& cached = g_primitive_sources[node.key];
+  if (cached.geometry && cached.shape == node.physics_shape && cached.size == size)
+    return cached.geometry;
+  PartMatrix frame{};
+  frame[0] = frame[5] = frame[10] = frame[15] = 1.f;
+  std::shared_ptr<ScxGeometry> geometry;
+  if (node.physics_shape == PhysicsShape::Box)
+    geometry = std::make_shared<ScxGeometry>(
+        collision::make_box_mesh(frame, {size[0], size[1], size[2]}));
+  else if (node.physics_shape == PhysicsShape::Sphere)
+    geometry = std::make_shared<ScxGeometry>(
+        collision::make_sphere_mesh(frame, size[0], 16, 8));
+  if (geometry && !geometry->info.ok) geometry.reset();
+  cached.shape = node.physics_shape;
+  cached.size = size;
+  cached.geometry = geometry;
+  return cached.geometry;
+}
+
+void identity(float *m) {
+  std::fill(m, m + 16, 0.f);
+  m[0] = m[5] = m[10] = m[15] = 1.f;
+}
+void multiply(float *out, const float *a, const float *b) {
+  float result[16]{};
+  for (int col = 0; col < 4; ++col)
+    for (int row = 0; row < 4; ++row)
+      for (int k = 0; k < 4; ++k)
+        result[col * 4 + row] += a[k * 4 + row] * b[col * 4 + k];
+  std::copy(result, result + 16, out);
+}
+void local_matrix(const GameRefState &n, float *m) {
+  float yaw[16], pitch[16], roll[16];
+  identity(yaw);
+  identity(pitch);
+  identity(roll);
+  const float cy = std::cos(n.ypr[0]), sy = std::sin(n.ypr[0]);
+  const float cp = std::cos(n.ypr[1]), sp = std::sin(n.ypr[1]);
+  const float cr = std::cos(n.ypr[2]), sr = std::sin(n.ypr[2]);
+  yaw[0] = cy;
+  yaw[2] = -sy;
+  yaw[8] = sy;
+  yaw[10] = cy;
+  pitch[5] = cp;
+  pitch[6] = sp;
+  pitch[9] = -sp;
+  pitch[10] = cp;
+  roll[0] = cr;
+  roll[1] = sr;
+  roll[4] = -sr;
+  roll[5] = cr;
+  multiply(m, yaw, pitch);
+  multiply(m, m, roll);
+  m[12] = n.pos[0];
+  m[13] = n.pos[1];
+  m[14] = n.pos[2];
+}
+
+std::shared_ptr<const ScxGeometry> load_geometry(const RpkIndex& resources, uint32_t id) {
+  std::shared_ptr<const ScxGeometry> result;
+  const int pack = RpkIndex::pack_from_full(id);
+  auto model = resources.model_for_resource(pack, id & 0xffffu);
+  if (model.ok) {
+    std::string source = model.source;
+    std::replace(source.begin(), source.end(), '\\', '/');
+    std::filesystem::path path =
+        std::filesystem::path(resources.game_root()) / source;
+    std::string ext = path.extension().string();
+    for (char &c : ext)
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (ext == ".scy") {
+      auto scx = path;
+      scx.replace_extension(".scx");
+      std::error_code error;
+      if (std::filesystem::exists(scx, error))
+        path = scx;
+    }
+    ext = path.extension().string();
+    for (char &c : ext)
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (ext == ".scx" || ext == ".scy") {
+      auto mesh =
+          std::make_shared<ScxGeometry>(load_scx_geometry(path.string()));
+      if (mesh->info.ok && !mesh->indices.empty()) {
+        for (auto &texture : model.textures) {
+          std::replace(texture.begin(), texture.end(), '\\', '/');
+          if (!texture.empty() && std::filesystem::path(texture).is_relative())
+            texture =
+                (std::filesystem::path(resources.game_root()) / texture)
+                    .string();
+        }
+        mesh->textures = std::move(model.textures);
+        scx_resolve_baked_lightmaps(*mesh);
+        result = std::move(mesh);
+        std::printf("[scene] resource=0x%x source=%s vertices=%d\n", id,
+                    path.string().c_str(), result->info.vertices);
+      }
+    }
+  }
+  return result;
+}
+
+std::shared_ptr<const ScxGeometry> geometry(uint32_t id) {
+  if (auto over = g_overrides.find(id); over != g_overrides.end()) return over->second;
+  if (auto found = g_meshes.find(id); found != g_meshes.end()) return found->second;
+  auto mesh = load_geometry(*g_resources, id);
+  g_meshes.emplace(id, mesh);
+  return mesh;
+}
+
+void preload_ground_meshes(const std::vector<uint32_t>& resources) {
+  std::vector<uint32_t> missing;
+  for (const auto id : resources)
+    if (!g_meshes.contains(id) && !g_overrides.contains(id)) missing.push_back(id);
+  if (missing.empty()) return;
+  std::vector<std::shared_ptr<const ScxGeometry>> decoded(missing.size());
+  std::atomic_size_t next{0};
+  const auto& index = *g_resources;
+  const auto parse = [&] {
+    for (size_t job = next.fetch_add(1); job < missing.size(); job = next.fetch_add(1))
+      decoded[job] = load_geometry(index, missing[job]);
+  };
+  // Workers only read assets. Publish the completed cache on the host thread,
+  // while the loading screen is still up.
+  {
+    std::vector<std::jthread> workers;
+    const auto count = std::min<size_t>({missing.size(), 4u,
+        std::max(1u, std::thread::hardware_concurrency())});
+    try {
+      for (size_t i = 1; i < count; ++i) workers.emplace_back(parse);
+    } catch (const std::system_error&) {
+      // The calling thread can finish the queue if a worker cannot start.
+    }
+    parse();
+  }
+  for (size_t i = 0; i < missing.size(); ++i)
+    g_meshes.emplace(missing[i], std::move(decoded[i]));
+}
+
+std::array<float, 3> transform_point(const PartMatrix& matrix, const std::array<float, 3>& p) {
+  return {matrix[0] * p[0] + matrix[4] * p[1] + matrix[8] * p[2] + matrix[12],
+          matrix[1] * p[0] + matrix[5] * p[1] + matrix[9] * p[2] + matrix[13],
+          matrix[2] * p[0] + matrix[6] * p[1] + matrix[10] * p[2] + matrix[14]};
+}
+
+uint32_t rd32(const uint8_t *p) {
+  return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+         (static_cast<uint32_t>(p[2]) << 16) |
+         (static_cast<uint32_t>(p[3]) << 24);
+}
+float rdf(const uint8_t *p) {
+  float f;
+  std::memcpy(&f, p, 4);
+  return f;
+}
+
+struct PolySection {
+  uint32_t material = 0;
+  std::vector<float> pos, nrm, uv0, uv1, uv2;
+  std::vector<uint32_t> indices;
+  std::vector<uint32_t> colors;
+};
+
+struct GroundWalk {
+  const std::vector<uint8_t> *file = nullptr;
+  std::string params;
+  std::vector<PolySection> poly;
+  std::vector<uint32_t> exterior_slots;
+  ScxGeometry collision;
+  std::vector<GroundMapData::Placement> placements;
+};
+
+void append_ground_placement(GroundWalk& walk, std::string_view text) {
+  constexpr std::string_view type_prefix = "gametype 0x";
+  if (!text.starts_with(type_prefix)) return;
+  text.remove_prefix(type_prefix.size());
+  GroundMapData::Placement placement;
+  const auto end = text.data() + text.size();
+  const auto type = std::from_chars(text.data(), end, placement.type, 16);
+  if (type.ec != std::errc{}) return;
+  text.remove_prefix(type.ptr - text.data());
+  const auto params = text.find_first_not_of("\r\n");
+  if (params == std::string_view::npos) return;
+  text.remove_prefix(params);
+  constexpr std::string_view params_prefix = "params ";
+  if (!text.starts_with(params_prefix)) return;
+  text.remove_prefix(params_prefix.size());
+  for (size_t i = 0; i < 6; ++i) {
+    const auto start = text.find_first_not_of(" \t");
+    if (start == std::string_view::npos) return;
+    text.remove_prefix(start);
+    float& value = i < 3 ? placement.position[i] : placement.rotation[i - 3];
+    const auto parsed = std::from_chars(text.data(), end, value);
+    if (parsed.ec != std::errc{} || !std::isfinite(value)) return;
+    text.remove_prefix(parsed.ptr - text.data());
+    if (i < 5) {
+      const auto comma = text.find_first_not_of(" \t");
+      if (comma == std::string_view::npos || text[comma] != ',') return;
+      text.remove_prefix(comma + 1);
+    }
+  }
+  const auto tail = text.find_first_not_of(" \t");
+  text.remove_prefix(tail == std::string_view::npos ? text.size() : tail);
+  if (text.starts_with(',')) {
+    text.remove_prefix(1);
+    const auto start = text.find_first_not_of(" \t");
+    if (start == std::string_view::npos) return;
+    text.remove_prefix(start);
+    const auto parsed = std::from_chars(text.data(), end, placement.seed);
+    if (parsed.ec != std::errc{}) return;
+    text.remove_prefix(parsed.ptr - text.data());
+  }
+  if (text.empty() || text.front() == '\r' || text.front() == '\n' || text.front() == '\0')
+    walk.placements.push_back(placement);
+}
+
+void append_ground_collision(ScxGeometry& mesh, const uint8_t* data, size_t size) {
+  if (size < 8) return;
+  const uint32_t faces = rd32(data);
+  if (faces > (size - 8) / 28) return;
+  const size_t vertices_offset = 4 + static_cast<size_t>(faces) * 28;
+  const uint32_t vertices = rd32(data + vertices_offset);
+  if (vertices > (size - vertices_offset - 4) / 12) return;
+  const uint32_t base = static_cast<uint32_t>(mesh.positions.size() / 3);
+  const uint8_t* positions = data + vertices_offset + 4;
+  for (size_t i = 0; i < static_cast<size_t>(vertices) * 3; ++i)
+    mesh.positions.push_back(rdf(positions + i * 4));
+  for (uint32_t i = 0; i < faces; ++i) {
+    const uint8_t* face = data + 4 + static_cast<size_t>(i) * 28;
+    const uint32_t a = rd32(face + 4), b = rd32(face + 8), c = rd32(face + 12);
+    if (a < vertices && b < vertices && c < vertices)
+      mesh.indices.insert(mesh.indices.end(), {base + a, base + b, base + c});
+  }
+}
+
+void take_params(GroundWalk &w, const uint8_t *data, const uint8_t *end) {
+  if (!w.params.empty() || !data)
+    return;
+  const uint8_t *s = data;
+  while (s < end && *s != 0) {
+    const uint8_t *line = s;
+    while (s < end && *s != '\n' && *s != '\r' && *s != 0)
+      ++s;
+    std::string text(reinterpret_cast<const char *>(line),
+                     static_cast<size_t>(s - line));
+    while (s < end && (*s == '\n' || *s == '\r'))
+      ++s;
+    size_t a = 0;
+    while (a < text.size() && (text[a] == ' ' || text[a] == '\t'))
+      ++a;
+    if (text.size() < a + 6)
+      continue;
+    std::string key = text.substr(a, 6);
+    for (char &c : key)
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (key != "params")
+      continue;
+    if (a + 6 < text.size() && text[a + 6] != ' ' && text[a + 6] != '\t')
+      continue;
+    size_t v = a + 6;
+    while (v < text.size() && (text[v] == ' ' || text[v] == '\t'))
+      ++v;
+    size_t e = v;
+    while (e < text.size() && text[e] != ' ' && text[e] != '\t' &&
+           text[e] != ',')
+      ++e;
+    if (e > v)
+      w.params = text.substr(v, e - v);
+  }
+}
+
+void walk_ground_node(GroundWalk &w, uint32_t offset, uint32_t size,
+                      int depth, bool placement = false) {
+  const std::vector<uint8_t> &file = *w.file;
+  if (size < 8 || offset > file.size() || size > file.size() - offset)
+    return;
+  const uint8_t *base = file.data() + offset;
+  const uint8_t *end = base + size;
+  const uint32_t n0 = rd32(base);
+  if (n0 > (size - 8) / 4)
+    return;
+  const uint8_t *p = base + 4 + 4 * static_cast<size_t>(n0);
+  if (end - p < 4)
+    return;
+  const uint32_t child_count = rd32(p);
+  p += 4;
+  struct Kid {
+    uint8_t restype;
+    uint32_t off, sz;
+    bool placement;
+  };
+  std::vector<Kid> kids;
+  bool ok = true;
+  for (uint32_t i = 0; i < child_count; ++i) {
+    if (end - p < 0x17) {
+      ok = false;
+      break;
+    }
+    const uint8_t restype = p[8];
+    const uint8_t flags = p[9];
+    const uint32_t foff = rd32(p + 0xE);
+    const uint32_t sz = rd32(p + 0x12);
+    const size_t name_len = p[0x16];
+    size_t rec = 0x17 + name_len;
+    if (static_cast<size_t>(end - p) < rec) {
+      ok = false;
+      break;
+    }
+    if (flags & 1u) {
+      if (static_cast<size_t>(end - p) < rec + 48) {
+        ok = false;
+        break;
+      }
+      rec += 48;
+    }
+    p += rec;
+    kids.push_back(Kid{restype, foff, sz, (flags & 0x20u) != 0});
+  }
+  while (ok && p + 8 <= end) {
+    const uint32_t tag = rd32(p);
+    const uint32_t csize = rd32(p + 4);
+    const uint8_t *data = p + 8;
+    if (tag == 0 && csize == 0) {
+      if (end - p < 12)
+        break;
+      take_params(w, p + 12, end);
+      break;
+    }
+    if (csize > static_cast<size_t>(end - data))
+      break;
+    if (tag == 0x00445352u) {
+      if (!placement)
+        take_params(w, data, data + csize);
+      else
+        append_ground_placement(w, {reinterpret_cast<const char*>(data), csize});
+    } else if (tag == 0x50545845u && depth == 0) { // EXTP
+      for (size_t i = 0; i + 4 <= csize; i += 4)
+        w.exterior_slots.push_back(rd32(data + i));
+    } else if (tag == 0x53594850u) { // PHYS
+      append_ground_collision(w.collision, data, csize);
+    } else if (tag == 0x594C4F50u && csize >= 8) {
+      const uint32_t nsec = rd32(data + 4);
+      const uint8_t *q = data + 8;
+      const uint8_t *cend = data + csize;
+      for (uint32_t s = 0; s < nsec; ++s) {
+        if (cend - q < 12)
+          break;
+        const uint32_t mat = rd32(q);
+        const uint32_t nv = rd32(q + 4);
+        const uint32_t nt = rd32(q + 8);
+        q += 12;
+        if (nv > 200000u || nt > 200000u)
+          break;
+        const uint64_t need =
+            static_cast<uint64_t>(nv) * 56u + static_cast<uint64_t>(nt) * 12u;
+        if (need > static_cast<uint64_t>(cend - q))
+          break;
+        PolySection sec;
+        sec.material = mat;
+        sec.pos.resize(static_cast<size_t>(nv) * 3u);
+        sec.nrm.resize(sec.pos.size());
+        sec.colors.resize(nv);
+        sec.uv0.resize(static_cast<size_t>(nv) * 2u);
+        sec.uv1.resize(sec.uv0.size());
+        sec.uv2.resize(sec.uv0.size());
+        for (uint32_t vi = 0; vi < nv; ++vi) {
+          const uint8_t *v = q + static_cast<size_t>(vi) * 56u;
+          sec.pos[vi * 3] = rdf(v);
+          sec.pos[vi * 3 + 1] = rdf(v + 4);
+          sec.pos[vi * 3 + 2] = rdf(v + 8);
+          sec.nrm[vi * 3] = rdf(v + 12);
+          sec.nrm[vi * 3 + 1] = rdf(v + 16);
+          sec.nrm[vi * 3 + 2] = rdf(v + 20);
+          sec.colors[vi] = rd32(v + 24);
+          sec.uv0[vi * 2] = rdf(v + 32);
+          sec.uv0[vi * 2 + 1] = rdf(v + 36);
+          sec.uv1[vi * 2] = rdf(v + 40);
+          sec.uv1[vi * 2 + 1] = rdf(v + 44);
+          sec.uv2[vi * 2] = rdf(v + 48);
+          sec.uv2[vi * 2 + 1] = rdf(v + 52);
+        }
+        q += static_cast<size_t>(nv) * 56u;
+        bool oob = false;
+        sec.indices.resize(static_cast<size_t>(nt) * 3u);
+        for (uint32_t ii = 0; ii < nt * 3u; ++ii) {
+          sec.indices[ii] = rd32(q + static_cast<size_t>(ii) * 4u);
+          if (sec.indices[ii] >= nv)
+            oob = true;
+        }
+        q += static_cast<size_t>(nt) * 12u;
+        if (!oob && nv && nt)
+          w.poly.push_back(std::move(sec));
+      }
+    }
+    p = data + csize;
+  }
+  if (depth >= 64)
+    return;
+  for (const Kid &k : kids)
+    if (k.restype == 1)
+      walk_ground_node(w, k.off, k.sz, depth + 1, k.placement);
+}
+
+struct GroundMat {
+  uint16_t tex = 0xffff;
+  uint16_t mix = 0xffff;
+  int16_t lm = -1;
+  uint16_t tex_channel = 0, mix_channel = 0;
+  uint32_t flags = 0;
+};
+
+std::vector<GroundMat>
+read_ground_materials(const std::filesystem::path &path) {
+  std::vector<GroundMat> mats;
+  std::ifstream in(path, std::ios::binary | std::ios::ate);
+  if (!in)
+    return mats;
+  const auto sz = static_cast<size_t>(in.tellg());
+  if (sz < 16)
+    return mats;
+  in.seekg(0);
+  std::vector<uint8_t> buf(sz);
+  in.read(reinterpret_cast<char *>(buf.data()),
+          static_cast<std::streamsize>(sz));
+  if (!in || std::memcmp(buf.data(), "INVO", 4) != 0 ||
+      rd32(buf.data() + 4) != 3)
+    return {};
+  size_t p = 8;
+  while (p + 4 <= buf.size() && mats.size() < 4096) {
+    const uint32_t hsz = rd32(buf.data() + p);
+    if (hsz == 0)
+      break;
+    if (hsz < 46 || p + hsz + 8 > buf.size())
+      break;
+    // A material table steps over a zero vertex count and a zero face count.
+    // A real mesh has geometry there; don't treat it as the table.
+    if (rd32(buf.data() + p + hsz) != 0 || rd32(buf.data() + p + hsz + 4) != 0)
+      return {};
+    GroundMat m;
+    m.tex = static_cast<uint16_t>(buf[p + 44] | (buf[p + 45] << 8));
+    if (hsz > 0x39) {
+      m.lm = static_cast<int16_t>(buf[p + 0x38] | (buf[p + 0x39] << 8));
+    }
+    m.flags = rd32(buf.data() + p + 40);
+    if ((m.flags & 0x40u) && hsz >= 54)
+      m.mix = static_cast<uint16_t>(buf[p + 52] | (buf[p + 53] << 8));
+    if (hsz >= 74) {
+      m.tex_channel = static_cast<uint16_t>(buf[p + 70] | (buf[p + 71] << 8));
+      m.mix_channel = static_cast<uint16_t>(buf[p + 72] | (buf[p + 73] << 8));
+    }
+    mats.push_back(m);
+    p += static_cast<size_t>(hsz) + 8;
+  }
+  return mats;
+}
+} // namespace
+
+void scene_instances_preload(const std::vector<uint32_t>& resources) {
+  if (!g_resources || resources.empty()) return;
+  preload_ground_meshes(resources);
+}
+
+void scene_instances_set_resources(const RpkIndex *resources) {
+  character_forget_all();
+  g_resources = resources;
+  g_world = g_sky = nullptr;
+  g_preview_lamps = false;
+  g_meshes.clear();
+  g_overrides.clear();
+  g_collision_overrides.clear();
+  g_ground_props.clear();
+  scene_ambience_reset();
+  g_pending_dormant.clear();
+  g_live_dormant.clear();
+  g_ground_collision.clear();
+  g_native_collision.clear();
+  g_script_collision_shapes.clear();
+  g_primitive_sources.clear();
+  g_texture_paths.clear();
+  g_static.clear();
+  g_floor_meshes.clear();
+  g_floor_prepared = false;
+  g_floor_builds = 0;
+  ++g_floor_revision;
+  g_static_enabled = true;
+  g_environment = 0;
+}
+void scene_instances_set_envmap(uint32_t resource) { g_environment = resource; }
+std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource) {
+  return geometry(resource);
+}
+std::string scene_instances_texture(uint32_t resource) {
+  if (!resource || !g_resources) return {};
+  if (const auto it = g_texture_paths.find(resource); it != g_texture_paths.end())
+    return it->second;
+  auto path = g_resources->texture_path_for_id(resource);
+  if (!path.empty()) g_texture_paths.emplace(resource, path);
+  return path;
+}
+std::string scene_instances_envmap() {
+  return g_resources ? g_resources->texture_path_for_id(g_environment)
+                     : std::string{};
+}
+void scene_instances_select(void *world, void *skydome, bool preview_lamps) {
+  if (g_world != world) ++g_floor_revision;
+  g_world = world;
+  g_sky = skydome;
+  g_preview_lamps = preview_lamps;
+  g_floor_prepared = false;
+  if (auto *sky = gameref_get(skydome))
+    sky->sky_render = true;
+}
+
+bool chain_matrix(void *key, void *root, float *matrix, bool reflect,
+                  bool drawn = false) {
+  if (!key || !root || !matrix)
+    return false;
+  identity(matrix);
+  // A parent cycle also ends here, after 128 links. This runs for every
+  // render node several times per frame, so it does not allocate.
+  size_t depth = 0;
+  for (void *current = key; current;) {
+    if (++depth > 128)
+      return false;
+    auto *n = gameref_get(current);
+    if (!n || n->empty || (n->flags & kWorldTreeLeaf))
+      return false;
+    // Inventory items are independent worlds even though their roots have
+    // an owning inventory parent. Never leak their meshes into the garage.
+    if (current != root && (n->flags & kWorldTreeRoot))
+      return false;
+    float local[16];
+    if (const float *pose = drawn ? gameref_render_matrix(*n) : nullptr)
+      std::copy(pose, pose + 16, local);
+    else if (n->matrix_override)
+      std::copy(n->local_matrix, n->local_matrix + 16, local);
+    else
+      local_matrix(*n, local);
+    void* bone_owner = nullptr;
+    int bone_id = 0;
+    if (character_linked_bone(current, &bone_owner, &bone_id) && bone_owner == n->parent) {
+      float bone[16];
+      if (character_bone_metres(bone_owner, bone_id, bone)) {
+        float placed[16];
+        multiply(placed, bone, local);
+        std::copy(placed, placed + 16, local);
+      }
+    }
+    multiply(matrix, local, matrix);
+    if (current == root) {
+      // Vertices are uploaded as S*v (S reflects Z). Instance matrix is S*M*S.
+      if (reflect)
+        for (int col = 0; col < 4; ++col)
+          for (int row = 0; row < 4; ++row)
+            if ((col == 2) != (row == 2))
+              matrix[col * 4 + row] *= -1.f;
+      return true;
+    }
+    current = n->parent;
+  }
+  return false;
+}
+bool scene_instance_transform(void *key, void *root, float *matrix) {
+  return chain_matrix(key, root, matrix, true, true);
+}
+bool scene_instances_script_matrix(void *key, float *matrix) {
+  return g_world && chain_matrix(key, g_world, matrix, false);
+}
+bool scene_instances_render_matrix(void *key, float *matrix) {
+  return g_world && chain_matrix(key, g_world, matrix, false, true);
+}
+
+namespace {
+// Shell-local bounds of a dormant placement at its current pose, padded so a
+// car is found a little before its box touches the collision mesh.
+void dormant_bounds(DormantProp& entry) {
+  entry.lower.fill(std::numeric_limits<float>::infinity());
+  entry.upper.fill(-std::numeric_limits<float>::infinity());
+  for (int corner = 0; corner < 8; ++corner) {
+    const auto world = transform_point(
+        entry.pose, {corner & 1 ? entry.local_upper[0] : entry.local_lower[0],
+                     corner & 2 ? entry.local_upper[1] : entry.local_lower[1],
+                     corner & 4 ? entry.local_upper[2] : entry.local_lower[2]});
+    for (int axis = 0; axis < 3; ++axis) {
+      entry.lower[axis] = std::min(entry.lower[axis], world[axis] - .5f);
+      entry.upper[axis] = std::max(entry.upper[axis], world[axis] + .5f);
+    }
+  }
+}
+
+template <typename Visit>
+void dormant_cells(const DormantProp& entry, Visit&& visit) {
+  const auto x0 = static_cast<int32_t>(std::floor(entry.lower[0] / kDormantCell));
+  const auto x1 = static_cast<int32_t>(std::floor(entry.upper[0] / kDormantCell));
+  const auto z0 = static_cast<int32_t>(std::floor(entry.lower[2] / kDormantCell));
+  const auto z1 = static_cast<int32_t>(std::floor(entry.upper[2] / kDormantCell));
+  for (int32_t x = x0; x <= x1; ++x)
+    for (int32_t z = z0; z <= z1; ++z) visit(floor_cell(x, z));
+}
+
+void show_dormant(DormantProp& entry, bool shown) {
+  for (const auto& [cell, prop] : entry.props)
+    if (prop < cell->props.size()) cell->props[prop].hidden = !shown;
+}
+}  // namespace
+
+void scene_instances_wake_dynamics(const float lower[3], const float upper[3]) {
+  if (!lower || !upper) return;
+  for (auto& [key, ground] : g_ground_collision) {
+    auto* map = const_cast<GroundPropMap*>(ground.source);
+    if (!map || map->dormant.empty()) continue;
+    std::array<float, 3> lo, hi;
+    lo.fill(std::numeric_limits<float>::infinity());
+    hi.fill(-std::numeric_limits<float>::infinity());
+    for (int corner = 0; corner < 8; ++corner) {
+      const auto local = transform_point(
+          ground.inverse, {corner & 1 ? upper[0] : lower[0], corner & 2 ? upper[1] : lower[1],
+                           corner & 4 ? upper[2] : lower[2]});
+      for (int axis = 0; axis < 3; ++axis) {
+        lo[axis] = std::min(lo[axis], local[axis]);
+        hi[axis] = std::max(hi[axis], local[axis]);
+      }
+    }
+    const auto x0 = static_cast<int32_t>(std::floor(lo[0] / kDormantCell));
+    const auto x1 = static_cast<int32_t>(std::floor(hi[0] / kDormantCell));
+    const auto z0 = static_cast<int32_t>(std::floor(lo[2] / kDormantCell));
+    const auto z1 = static_cast<int32_t>(std::floor(hi[2] / kDormantCell));
+    if (static_cast<int64_t>(x1 - x0 + 1) * (z1 - z0 + 1) > 256) continue;
+    for (int32_t x = x0; x <= x1; ++x)
+      for (int32_t z = z0; z <= z1; ++z) {
+        const auto cell = map->dormant_grid.find(floor_cell(x, z));
+        if (cell == map->dormant_grid.end()) continue;
+        for (const auto index : cell->second) {
+          auto& entry = map->dormant[index];
+          if (entry.promoted || entry.lower[0] > hi[0] || entry.upper[0] < lo[0] ||
+              entry.lower[1] > hi[1] || entry.upper[1] < lo[1] || entry.lower[2] > hi[2] ||
+              entry.upper[2] < lo[2])
+            continue;
+          const auto* shell = gameref_get(key);
+          if (!shell || !shell->parent) continue;
+          entry.promoted = true;
+          g_pending_dormant.push_back({map, index, shell->parent, ground.matrix});
+        }
+      }
+  }
+}
+
+void scene_instances_promote_dynamics() {
+  if (g_pending_dormant.empty()) return;
+  auto pending = std::move(g_pending_dormant);
+  g_pending_dormant.clear();
+  for (const auto& [map, index, ground, shell] : pending) {
+    auto& entry = map->dormant[index];
+    void* node = part_add_dynamic_native(*entry.config, entry.config->renders, entry.pose,
+                                         ground, entry.seed);
+    if (!node) {
+      entry.promoted = false;
+      continue;
+    }
+    // The loose body draws itself; hide the static instances it replaces.
+    entry.live = node;
+    // The frame the loose solver places the body in (see advance_loose_panels).
+    if (!scene_instances_ground_frame(ground, entry.live_shell.data())) entry.live_shell = shell;
+    g_live_dormant[node] = {map, index};
+    show_dormant(entry, false);
+  }
+}
+
+bool scene_instances_settle_dynamic(void* node, const float* world_frame) {
+  const auto found = g_live_dormant.find(node);
+  if (found == g_live_dormant.end()) return false;
+  auto [map, index] = found->second;
+  g_live_dormant.erase(found);
+  auto& entry = map->dormant[index];
+  PartMatrix pose{}, delta{};
+  bool moved = world_frame != nullptr;
+  if (moved) {
+    PartMatrix world;
+    std::copy(world_frame, world_frame + 16, world.begin());
+    pose = part_matrix_multiply(part_matrix_inverse_rigid(entry.live_shell), world);
+    delta = part_matrix_multiply(pose, part_matrix_inverse_rigid(entry.pose));
+    // Its instances stay in their cells, whose culling spheres grow to keep
+    // them. A prop pushed further than a cell's width returns to its old pose
+    // instead of making its cell visible from everywhere.
+    for (const auto& [cell, prop_index] : entry.props) {
+      if (prop_index >= cell->props.size()) continue;
+      const auto center = transform_point(delta, cell->props[prop_index].center);
+      moved = moved && std::hypot(center[0] - cell->center[0], center[1] - cell->center[1],
+                                  center[2] - cell->center[2]) <= kPropCellSize;
+    }
+  }
+  if (moved) {
+    for (const auto& [cell, prop_index] : entry.props) {
+      if (prop_index >= cell->props.size()) continue;
+      auto& prop = cell->props[prop_index];
+      prop.pose = part_matrix_multiply(delta, prop.pose);
+      prop.center = transform_point(delta, prop.center);
+      const float reach = std::hypot(prop.center[0] - cell->center[0],
+                                     prop.center[1] - cell->center[1],
+                                     prop.center[2] - cell->center[2]) + prop.radius;
+      cell->radius = std::max(cell->radius, reach);
+    }
+    dormant_cells(entry, [&](uint64_t cell) {
+      auto grid = map->dormant_grid.find(cell);
+      if (grid != map->dormant_grid.end()) std::erase(grid->second, index);
+    });
+    entry.pose = pose;
+    dormant_bounds(entry);
+    dormant_cells(entry, [&](uint64_t cell) { map->dormant_grid[cell].push_back(index); });
+  }
+  entry.live = nullptr;
+  entry.promoted = false;
+  show_dormant(entry, true);
+  return true;
+}
+
+void scene_instances_local_matrix(const GameRefState& node, float matrix[16]) {
+  if (node.matrix_override)
+    std::copy(node.local_matrix, node.local_matrix + 16, matrix);
+  else
+    local_matrix(node, matrix);
+}
+
+bool scene_instances_native_body(uint32_t type, std::shared_ptr<const ScxGeometry>& mesh,
+                                 float& mass, float center[3]) {
+  if (!g_resources || !type || !center) return false;
+  const auto& native = native_collision_data(*g_resources, type);
+  if (!native.mesh) return false;
+  mesh = native.mesh;
+  mass = native.mass;
+  std::copy(native.center.begin(), native.center.end(), center);
+  return true;
+}
+
+bool scene_instances_ground_frame(void *ground, float *matrix) {
+  if (!ground || !matrix) return false;
+  const auto* parent = gameref_get(ground);
+  if (!parent) return false;
+  for (auto* child : parent->children) {
+    const auto* shell = gameref_get(child);
+    if (!shell || !g_ground_props.contains(static_cast<uint32_t>(shell->type_id))) continue;
+    if (const auto found = g_ground_collision.find(child); found != g_ground_collision.end()) {
+      std::copy(found->second.matrix.begin(), found->second.matrix.end(), matrix);
+      return true;
+    }
+    return scene_instances_script_matrix(child, matrix);
+  }
+  return false;
+}
+
+namespace {
+void collect_render_nodes(GameRefState* node, std::vector<GameRefState*>& out,
+                          unsigned depth = 0, bool physics = false) {
+  if (!node || node->empty || (node->flags & kWorldTreeLeaf) ||
+      (depth && (node->flags & kWorldTreeRoot)) || depth >= 128)
+    return;
+  const bool render = node->kind == GameRefKind::RenderRef &&
+                      (node->type_id || node->line_geometry);
+  const bool physical = node->physics_shape != PhysicsShape::None ||
+                        (node->collision_active && node->type_id);
+  if (render || (physics && physical)) out.push_back(node);
+  for (auto* child : node->children)
+    collect_render_nodes(gameref_get(child), out, depth + 1, physics);
+}
+
+std::vector<GameRefState*> render_nodes_in_world(void* root, bool physics = false) {
+  std::vector<GameRefState*> nodes;
+  collect_render_nodes(gameref_get(root), nodes, 0, physics);
+  return nodes;
+}
+
+void floor_triangles(const float *m, const std::vector<float> &pos,
+                     const std::vector<uint32_t> &idx, float scale, float x,
+                     float z, float below, float &best, bool &hit,
+                     float *normal) {
+  if (!m || idx.size() < 3 || pos.size() < 9)
+    return;
+  for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+    float v[3][3];
+    bool ok = true;
+    float min_x = 0, max_x = 0, min_z = 0, max_z = 0;
+    for (int k = 0; k < 3; ++k) {
+      const uint32_t vi = idx[t + static_cast<size_t>(k)];
+      if (static_cast<size_t>(vi) * 3 + 2 >= pos.size()) {
+        ok = false;
+        break;
+      }
+      const float vx = pos[vi * 3] * scale;
+      const float vy = pos[vi * 3 + 1] * scale;
+      const float vz = pos[vi * 3 + 2] * scale;
+      v[k][0] = m[0] * vx + m[4] * vy + m[8] * vz + m[12];
+      v[k][1] = m[1] * vx + m[5] * vy + m[9] * vz + m[13];
+      v[k][2] = m[2] * vx + m[6] * vy + m[10] * vz + m[14];
+      if (k == 0) {
+        min_x = max_x = v[0][0];
+        min_z = max_z = v[0][2];
+      } else {
+        min_x = std::min(min_x, v[k][0]);
+        max_x = std::max(max_x, v[k][0]);
+        min_z = std::min(min_z, v[k][2]);
+        max_z = std::max(max_z, v[k][2]);
+      }
+    }
+    if (!ok || x < min_x || x > max_x || z < min_z || z > max_z)
+      continue;
+    const float x0 = v[0][0], z0 = v[0][2], x1 = v[1][0], z1 = v[1][2];
+    const float x2 = v[2][0], z2 = v[2][2];
+    const float denom = (z1 - z2) * (x0 - x2) + (x2 - x1) * (z0 - z2);
+    if (std::fabs(denom) < 1e-8f)
+      continue;
+    const float a = ((z1 - z2) * (x - x2) + (x2 - x1) * (z - z2)) / denom;
+    const float b = ((z2 - z0) * (x - x2) + (x0 - x2) * (z - z2)) / denom;
+    const float c = 1.f - a - b;
+    if (a < -1e-4f || b < -1e-4f || c < -1e-4f)
+      continue;
+    const float y = a * v[0][1] + b * v[1][1] + c * v[2][1];
+    if (y > below + 0.05f)
+      continue;
+    if (!hit || y > best) {
+      best = y;
+      hit = true;
+      if (normal) {
+        const float ax = v[1][0] - v[0][0], ay = v[1][1] - v[0][1],
+                    az = v[1][2] - v[0][2];
+        const float bx = v[2][0] - v[0][0], by = v[2][1] - v[0][1],
+                    bz = v[2][2] - v[0][2];
+        float nx = ay * bz - az * by, ny = az * bx - ax * bz,
+              nz = ax * by - ay * bx;
+        const float size = std::sqrt(nx * nx + ny * ny + nz * nz);
+        const float sign = ny < 0 ? -1.f : 1.f;
+        normal[0] = nx / size * sign;
+        normal[1] = ny / size * sign;
+        normal[2] = nz / size * sign;
+      }
+    }
+  }
+}
+} // namespace
+
+bool scene_shadow_projection(const float *frame, const SceneFloorHit &hit,
+                             float *matrix) {
+  const float n[3] = {hit.normal[0], hit.normal[1], -hit.normal[2]};
+  const float d[3] = {-.35f, -.85f, .45f};
+  const float dot = n[0] * d[0] + n[1] * d[1] + n[2] * d[2];
+  if (!std::isfinite(dot) || std::fabs(dot) <= .1f)
+    return false;
+  const float distance =
+      n[0] * frame[12] + n[1] * hit.height - n[2] * frame[14] + .012f;
+  std::fill(matrix, matrix + 16, 0.f);
+  for (int c = 0; c < 3; ++c)
+    for (int r = 0; r < 3; ++r)
+      matrix[c * 4 + r] = (r == c ? 1.f : 0.f) - d[r] * n[c] / dot;
+  for (int r = 0; r < 3; ++r)
+    matrix[12 + r] = d[r] * distance / dot;
+  matrix[15] = 1;
+  return true;
+}
+bool scene_shadow_info(uint32_t type_id, uint32_t *flags,
+                       SceneShadowDecal *decal) {
+  if (flags)
+    *flags = 0;
+  if (decal)
+    *decal = {};
+  if (!type_id || !g_resources)
+    return false;
+  auto found = g_shadow_info.find(type_id);
+  if (found == g_shadow_info.end()) {
+    ShadowInfo info;
+    const auto flag_lines = g_resources->payload_props(type_id, "flags");
+    if (!flag_lines.empty())
+      info.flags = static_cast<uint32_t>(
+          std::strtoul(flag_lines.front().c_str(), nullptr, 0));
+    float center[3]{}, axis_u[3]{}, axis_v[3]{};
+    auto parse3 = [](const std::string &text, float *out) {
+      return std::sscanf(text.c_str(), "%f %f %f", out, out + 1, out + 2) == 3;
+    };
+    parse3(g_resources->payload_prop(type_id, "shd_center"), center);
+    const bool have_u =
+        parse3(g_resources->payload_prop(type_id, "shd_diru"), axis_u);
+    const bool have_v =
+        parse3(g_resources->payload_prop(type_id, "shd_dirv"), axis_v);
+    const float ulen = axis_u[0] * axis_u[0] + axis_u[1] * axis_u[1] +
+                       axis_u[2] * axis_u[2];
+    const float vlen = axis_v[0] * axis_v[0] + axis_v[1] * axis_v[1] +
+                       axis_v[2] * axis_v[2];
+    const std::string tex = g_resources->payload_prop(type_id, "shd_texture");
+    if (!tex.empty() && have_u && have_v && ulen > 1e-8f && vlen > 1e-8f) {
+      const uint32_t rid =
+          static_cast<uint32_t>(std::strtoul(tex.c_str(), nullptr, 0));
+      const uint32_t full = g_resources->resolve_embedded_id(
+          RpkIndex::pack_from_full(type_id), rid);
+      info.decal.texture = g_resources->texture_path_for_id(full);
+      if (!info.decal.texture.empty()) {
+        info.decal.present = true;
+        std::memcpy(info.decal.center, center, sizeof(center));
+        std::memcpy(info.decal.axis_u, axis_u, sizeof(axis_u));
+        std::memcpy(info.decal.axis_v, axis_v, sizeof(axis_v));
+        float uv[4];
+        const std::string uvs = g_resources->payload_prop(type_id, "shd_uv");
+        if (std::sscanf(uvs.c_str(), "%f %f %f %f", uv, uv + 1, uv + 2,
+                        uv + 3) == 4)
+          std::memcpy(info.decal.uv, uv, sizeof(uv));
+      }
+    }
+    found = g_shadow_info.emplace(type_id, std::move(info)).first;
+  }
+  if (flags)
+    *flags = found->second.flags;
+  if (decal)
+    *decal = found->second.decal;
+  return true;
+}
+bool scene_instances_floor(float x, float z, float below, void *ignore,
+                           float *height) {
+  if (!height)
+    return false;
+  SceneFloorHit hit;
+  if (!scene_instances_sample_floor(x, z, below, ignore, hit))
+    return false;
+  *height = hit.height;
+  return true;
+}
+void scene_instances_prepare_physics() {
+  gameref_process_collision_requests();
+  g_script_collision_shapes.clear();
+  std::unordered_set<void *> active;
+  std::unordered_set<void *> active_ground;
+  if (g_world)
+    for (auto *n : render_nodes_in_world(g_world, true)) {
+      if (!n || n->empty || n->sky_render || n->vehicle_material || n->line_geometry ||
+          n->dynamic_native || n->physics_simulated)
+        continue;
+      // A skinned character is not landscape. Its bind mesh was becoming a
+      // solid obstacle, offset from the drawn body, and it destroyed the car.
+      if (n->alias == "pedestrian" || n->alias == "driver") continue;
+      std::array<float, 16> m;
+      if (!chain_matrix(n->key, g_world, m.data(), false))
+        continue;
+      const auto id = static_cast<uint32_t>(n->type_id);
+      if (n->kind == GameRefKind::RenderRef) {
+        const auto ground = g_ground_props.find(id);
+        if (ground != g_ground_props.end()) {
+          active_ground.insert(n->key);
+          auto& cached = g_ground_collision[n->key];
+          const bool source_changed = cached.source != &ground->second;
+          cached.source = &ground->second;
+          if (source_changed || cached.matrix != m) {
+            cached.matrix = m;
+            cached.inverse = part_matrix_inverse_rigid(m);
+            cached.meshes.clear();
+            cached.meshes.reserve(ground->second.collision_meshes.size());
+            for (const auto& mesh : ground->second.collision_meshes)
+              cached.meshes.push_back(transform_static_mesh(mesh, m));
+            cached.has_bounds = false;
+            for (const auto& mesh : cached.meshes) {
+              for (size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
+                for (int axis = 0; axis < 3; ++axis) {
+                  const float value = mesh.positions[i + axis] * mesh.scale;
+                  if (!cached.has_bounds) {
+                    cached.bounds_min[axis] = cached.bounds_max[axis] = value;
+                  } else {
+                    cached.bounds_min[axis] = std::min(cached.bounds_min[axis], value);
+                    cached.bounds_max[axis] = std::max(cached.bounds_max[axis], value);
+                  }
+                }
+                cached.has_bounds = true;
+              }
+            }
+            // Coarse sphere meshes can be smaller than their analytic shape.
+            // Union exact primitive bounds before using the shell AABB as a
+            // conservative rejection test.
+            if (const auto analytic = ground->second.collision_shapes.bounds()) {
+              for (unsigned corners = 0; corners < 8; ++corners) {
+                const double x = (corners & 1) ? analytic->maximum.x : analytic->minimum.x;
+                const double y = (corners & 2) ? analytic->maximum.y : analytic->minimum.y;
+                const double z = (corners & 4) ? analytic->maximum.z : analytic->minimum.z;
+                const float world[3] = {
+                    static_cast<float>(m[0] * x + m[4] * y + m[8] * z + m[12]),
+                    static_cast<float>(m[1] * x + m[5] * y + m[9] * z + m[13]),
+                    static_cast<float>(m[2] * x + m[6] * y + m[10] * z + m[14])};
+                for (int axis = 0; axis < 3; ++axis) {
+                  if (!cached.has_bounds) {
+                    cached.bounds_min[axis] = cached.bounds_max[axis] = world[axis];
+                  } else {
+                    cached.bounds_min[axis] = std::min(cached.bounds_min[axis], world[axis]);
+                    cached.bounds_max[axis] = std::max(cached.bounds_max[axis], world[axis]);
+                  }
+                }
+                cached.has_bounds = true;
+              }
+            }
+            ++g_floor_builds;
+            ++g_floor_revision;
+          }
+        }
+      }
+      std::shared_ptr<const ScxGeometry> geo;
+      if (n->physics_shape == PhysicsShape::Box ||
+          n->physics_shape == PhysicsShape::Sphere) {
+        geo = primitive_geometry(*n);
+        if (n->physics_shape == PhysicsShape::Box)
+          g_script_collision_shapes.add_box(
+              m, {n->physics_size[0], n->physics_size[1], n->physics_size[2]}, n->key);
+        else
+          g_script_collision_shapes.add_sphere(m, n->physics_size[0], n->key);
+      } else if (g_resources && (n->physics_shape == PhysicsShape::Resource ||
+                                 (n->kind != GameRefKind::RenderRef && n->collision_active))) {
+        const auto& native = native_collision_data(*g_resources, id);
+        // Native CFG bodies are authoritative. In particular, an object with
+        // no body (or `nocollision`) must not inherit its render mesh.
+        geo = native.mesh;
+        for (const auto& body : native.primitives) {
+          const auto frame = part_matrix_multiply(m, part_pose_matrix(body.pose));
+          if (body.shape == PartBodyShape::Box)
+            g_script_collision_shapes.add_box(
+                frame, {body.box_half[0], body.box_half[1], body.box_half[2]}, n->key);
+          else if (body.shape == PartBodyShape::Sphere)
+            g_script_collision_shapes.add_sphere(frame, body.sphere_radius, n->key);
+        }
+      } else {
+        const auto collision = g_collision_overrides.find(id);
+        geo = collision != g_collision_overrides.end() ? collision->second : geometry(id);
+      }
+      if (!geo || !geo->skin_weights.empty())
+        continue;
+      active.insert(n->key);
+      auto &cached = g_floor_meshes[n->key];
+      if (cached.source != geo || cached.matrix != m) {
+        cached.source = geo;
+        cached.matrix = m;
+        cached.mesh = bake_static_mesh(*geo, m);
+        ++g_floor_builds;
+        ++g_floor_revision;
+      }
+      cached.ancestors.clear();
+      void *parent = n->key;
+      for (int guard = 0; parent && guard < 32; ++guard) {
+        cached.ancestors.push_back(parent);
+        auto *node = gameref_get(parent);
+        parent = node ? node->parent : nullptr;
+      }
+    }
+  for (auto it = g_floor_meshes.begin(); it != g_floor_meshes.end();)
+    if (!active.count(it->first)) {
+      ++g_floor_revision;
+      it = g_floor_meshes.erase(it);
+    } else
+      ++it;
+  for (auto it = g_ground_collision.begin(); it != g_ground_collision.end();)
+    if (!active_ground.count(it->first)) {
+      ++g_floor_revision;
+      it = g_ground_collision.erase(it);
+    } else
+      ++it;
+  for (auto it = g_primitive_sources.begin(); it != g_primitive_sources.end();)
+    if (!active.count(it->first))
+      it = g_primitive_sources.erase(it);
+    else
+      ++it;
+  g_floor_prepared = true;
+}
+uint64_t scene_instances_floor_builds() { return g_floor_builds; }
+uint64_t scene_instances_floor_revision() { return g_floor_revision; }
+
+namespace {
+using physics::Vec3;
+
+Vec3 closest_on_edge(Vec3 p, Vec3 a, Vec3 b) {
+  const Vec3 edge = b - a;
+  const double length2 = edge.dot(edge);
+  return length2 > 0.0
+             ? a + edge * std::clamp((p - a).dot(edge) / length2, 0.0, 1.0)
+             : a;
+}
+
+Vec3 closest_on_triangle(Vec3 point, const Vec3 (&v)[3], Vec3 normal) {
+  const Vec3 projected = point - normal * (point - v[0]).dot(normal);
+  Vec3 closest = projected;
+  double edge_distance2 = std::numeric_limits<double>::infinity();
+  for (int j = 0; j < 3; ++j) {
+    const Vec3 a = v[j], b = v[(j + 1) % 3];
+    if ((b - a).cross(projected - a).dot(normal) >= 0) continue;
+    const Vec3 edge = closest_on_edge(projected, a, b);
+    const Vec3 offset = edge - projected;
+    const double distance2 = offset.dot(offset);
+    if (distance2 < edge_distance2) {
+      closest = edge;
+      edge_distance2 = distance2;
+    }
+  }
+  return closest;
+}
+
+bool triangle_vertices(const std::vector<float>& positions,
+                       const std::vector<uint32_t>& indices, size_t first,
+                       double scale, Vec3 (&v)[3]) {
+  for (int j = 0; j < 3; ++j) {
+    const size_t offset = static_cast<size_t>(indices[first + j]) * 3;
+    if (offset + 2 >= positions.size()) return false;
+    const float* p = positions.data() + offset;
+    v[j] = Vec3{p[0], p[1], p[2]} * scale;
+  }
+  return true;
+}
+
+void sweep_triangles(const std::vector<float>& positions, double scale,
+                     const std::vector<uint32_t> &indices,
+                     Vec3 start, Vec3 delta, double radius, SceneSphereHit &hit,
+                     float max_vertical_normal) {
+  const Vec3 end = start + delta;
+  for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+    Vec3 v[3];
+    if (!triangle_vertices(positions, indices, i, scale, v) ||
+        std::min({v[0].y, v[1].y, v[2].y}) > std::max(start.y, end.y) + radius ||
+        std::max({v[0].y, v[1].y, v[2].y}) < std::min(start.y, end.y) - radius)
+      continue;
+    const Vec3 n = (v[1] - v[0]).cross(v[2] - v[0]).normalized();
+    if (n.dot(n) < 0.5 || std::abs(n.y) > max_vertical_normal) continue;
+
+    double t = 0.0;
+    // Conservative advancement against the face, edges and vertices.
+    for (int step = 0; step < 12 && t < hit.fraction; ++step) {
+      const Vec3 p = start + delta * t;
+      const Vec3 offset = p - closest_on_triangle(p, v, n);
+      const double distance = offset.length();
+      const Vec3 normal = distance > 1e-8 ? offset / distance
+                                         : (delta.dot(n) > 0.0 ? -n : n);
+      const double closing = -delta.dot(normal);
+      if (closing <= 1e-8) break;
+      if (distance <= radius + 1e-5) {
+        if (std::abs(normal.y) > max_vertical_normal) break;
+        hit.fraction = static_cast<float>(t);
+        hit.normal[0] = static_cast<float>(normal.x);
+        hit.normal[1] = static_cast<float>(normal.y);
+        hit.normal[2] = static_cast<float>(normal.z);
+        hit.penetration = static_cast<float>(std::max(0., radius - distance));
+        break;
+      }
+      t += (distance - radius) / closing;
+    }
+  }
+}
+} // namespace
+
+bool scene_mesh_sweep_sphere(const ScxGeometry& mesh, Vec3 start, Vec3 movement,
+                             double radius, SceneSphereHit& hit) {
+  const Vec3 end = start + movement * hit.fraction;
+  const double a[]{start.x, start.y, start.z}, b[]{end.x, end.y, end.z};
+  for (int axis = 0; axis < 3; ++axis)
+    if (std::min(a[axis], b[axis]) > mesh.info.bbox_max[axis] * mesh.position_scale + radius ||
+        std::max(a[axis], b[axis]) < mesh.info.bbox_min[axis] * mesh.position_scale - radius)
+      return false;
+  const auto fraction = hit.fraction;
+  sweep_triangles(mesh.positions, mesh.position_scale, mesh.indices, start, movement,
+                  radius, hit, 1.f);
+  return hit.fraction < fraction;
+}
+
+double scene_mesh_nearest(const ScxGeometry& mesh, Vec3 point, Vec3& closest) {
+  double best = std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+    Vec3 v[3];
+    if (!triangle_vertices(mesh.positions, mesh.indices, i, mesh.position_scale, v)) continue;
+    const Vec3 normal = (v[1] - v[0]).cross(v[2] - v[0]).normalized();
+    if (normal.dot(normal) < .5) continue;
+    const Vec3 candidate = closest_on_triangle(point, v, normal);
+    const Vec3 offset = point - candidate;
+    const double distance2 = offset.dot(offset);
+    if (distance2 < best) {
+      best = distance2;
+      closest = candidate;
+    }
+  }
+  return std::sqrt(best);
+}
+
+bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
+                                  float radius, SceneSphereHit &hit,
+                                  float max_vertical_normal) {
+  const Vec3 from{start[0], start[1], start[2]};
+  const Vec3 movement{delta[0], delta[1], delta[2]};
+  if (!from.finite() || !movement.finite() || movement.dot(movement) < 1e-12)
+    return false;
+  if (!g_floor_prepared) scene_instances_prepare_physics();
+  hit = {};
+  const Vec3 to = from + movement;
+  const auto sweep_mesh = [&](const StaticMesh &mesh) {
+    const int32_t x0 = cell_coordinate(std::min(from.x, to.x) - radius, mesh);
+    const int32_t x1 = cell_coordinate(std::max(from.x, to.x) + radius, mesh);
+    const int32_t z0 = cell_coordinate(std::min(from.z, to.z) - radius, mesh);
+    const int32_t z1 = cell_coordinate(std::max(from.z, to.z) + radius, mesh);
+    for (int32_t x = x0; x <= x1; ++x)
+      for (int32_t z = z0; z <= z1; ++z) {
+        const auto cell = mesh.cells.find(floor_cell(x, z));
+        if (cell != mesh.cells.end())
+          sweep_triangles(mesh.positions, mesh.scale, cell->second, from, movement, radius, hit,
+                          max_vertical_normal);
+      }
+    sweep_triangles(mesh.positions, mesh.scale, mesh.large_triangles, from, movement, radius, hit,
+                    max_vertical_normal);
+  };
+  if (g_static_enabled)
+    for (const auto &mesh : g_static) sweep_mesh(mesh);
+  for (const auto& [key, ground] : g_ground_collision)
+    for (const auto& mesh : ground.meshes) sweep_mesh(mesh);
+  for (const auto &entry : g_floor_meshes) sweep_mesh(entry.second.mesh);
+  return hit.fraction < 1.f;
+}
+
+bool scene_instances_contact_box(const float frame[16], const float half[3],
+                                 SceneBodyContact& contact, const void* ignore) {
+  contact = {};
+  if (!frame || !half) return false;
+  PartMatrix moving{};
+  std::copy(frame, frame + 16, moving.begin());
+  const physics::Vec3 extents{half[0], half[1], half[2]};
+  std::array<float, 3> moving_min{}, moving_max{};
+  for (int axis = 0; axis < 3; ++axis) {
+    float radius = 0.f;
+    for (int local = 0; local < 3; ++local)
+      radius += std::fabs(moving[local * 4 + axis]) * half[local];
+    moving_min[axis] = moving[12 + axis] - radius;
+    moving_max[axis] = moving[12 + axis] + radius;
+  }
+  std::optional<collision::Contact> best;
+  const GroundCollisionWorld* best_ground = nullptr;
+  const auto consider = [&](const std::optional<collision::Contact>& candidate,
+                            const GroundCollisionWorld* ground = nullptr) {
+    if (candidate && (!best || candidate->penetration > best->penetration)) {
+      best = candidate;
+      best_ground = ground;
+    }
+  };
+  for (const auto& [key, ground] : g_ground_collision) {
+    if (!ground.source) continue;
+    bool separated = false;
+    if (ground.has_bounds)
+      for (int axis = 0; axis < 3; ++axis)
+        separated = separated || moving_max[axis] < ground.bounds_min[axis] ||
+                    moving_min[axis] > ground.bounds_max[axis];
+    if (separated) continue;
+    const auto local = part_matrix_multiply(ground.inverse, moving);
+    consider(ground.source->collision_shapes.overlap_box(local, extents, ignore), &ground);
+  }
+  consider(g_script_collision_shapes.overlap_box(moving, extents, ignore));
+  if (!best) return false;
+  contact.owner = const_cast<void*>(best->owner);
+  contact.penetration = static_cast<float>(best->penetration);
+  physics::Vec3 normal = best->normal;
+  physics::Vec3 point = best->point;
+  if (best_ground) {
+    const auto& m = best_ground->matrix;
+    normal = {m[0] * normal.x + m[4] * normal.y + m[8] * normal.z,
+              m[1] * normal.x + m[5] * normal.y + m[9] * normal.z,
+              m[2] * normal.x + m[6] * normal.y + m[10] * normal.z};
+    point = {m[0] * point.x + m[4] * point.y + m[8] * point.z + m[12],
+             m[1] * point.x + m[5] * point.y + m[9] * point.z + m[13],
+             m[2] * point.x + m[6] * point.y + m[10] * point.z + m[14]};
+  }
+  contact.normal[0] = static_cast<float>(normal.x);
+  contact.normal[1] = static_cast<float>(normal.y);
+  contact.normal[2] = static_cast<float>(normal.z);
+  contact.point[0] = static_cast<float>(point.x);
+  contact.point[1] = static_cast<float>(point.y);
+  contact.point[2] = static_cast<float>(point.z);
+  return true;
+}
+
+bool scene_instances_contact_walls(const float frame[16], const float half[3],
+                                   SceneBodyContact& contact, float max_vertical_normal) {
+  contact = {};
+  if (!frame || !half) return false;
+  PartMatrix matrix{};
+  std::copy(frame, frame + 16, matrix.begin());
+  collision::Box box;
+  if (!collision::make_box(matrix, {half[0], half[1], half[2]}, box)) return false;
+  float lower[3], upper[3];
+  for (int axis = 0; axis < 3; ++axis) {
+    float radius = 0.f;
+    for (int local = 0; local < 3; ++local)
+      radius += std::fabs(matrix[local * 4 + axis]) * half[local];
+    lower[axis] = matrix[12 + axis] - radius;
+    upper[axis] = matrix[12 + axis] + radius;
+  }
+  std::optional<collision::Contact> best;
+  const auto test = [&](const StaticMesh& mesh, const std::vector<uint32_t>& indices) {
+    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+      std::array<physics::Vec3, 3> triangle;
+      bool inside = true;
+      float tri_lower[3], tri_upper[3];
+      for (int k = 0; k < 3; ++k) {
+        const size_t offset = static_cast<size_t>(indices[i + k]) * 3;
+        if (offset + 2 >= mesh.positions.size()) {
+          inside = false;
+          break;
+        }
+        const float* p = mesh.positions.data() + offset;
+        triangle[k] = {p[0] * mesh.scale, p[1] * mesh.scale, p[2] * mesh.scale};
+        for (int axis = 0; axis < 3; ++axis) {
+          const float value = p[axis] * mesh.scale;
+          tri_lower[axis] = k ? std::min(tri_lower[axis], value) : value;
+          tri_upper[axis] = k ? std::max(tri_upper[axis], value) : value;
+        }
+      }
+      if (!inside) continue;
+      for (int axis = 0; axis < 3 && inside; ++axis)
+        inside = tri_upper[axis] >= lower[axis] && tri_lower[axis] <= upper[axis];
+      if (!inside) continue;
+      const physics::Vec3 face =
+          (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]).normalized();
+      if (face.dot(face) < .5 || std::abs(face.y) > max_vertical_normal) continue;
+      const auto candidate = collision::overlap_triangle(box, triangle);
+      if (!candidate || std::abs(candidate->normal.y) > max_vertical_normal) continue;
+      if (!best || candidate->penetration > best->penetration) best = candidate;
+    }
+  };
+  const auto test_mesh = [&](const StaticMesh& mesh) {
+    const int32_t x0 = cell_coordinate(lower[0], mesh), x1 = cell_coordinate(upper[0], mesh);
+    const int32_t z0 = cell_coordinate(lower[2], mesh), z1 = cell_coordinate(upper[2], mesh);
+    if (static_cast<int64_t>(x1 - x0 + 1) * (z1 - z0 + 1) > 256) return;
+    for (int32_t x = x0; x <= x1; ++x)
+      for (int32_t z = z0; z <= z1; ++z) {
+        const auto cell = mesh.cells.find(floor_cell(x, z));
+        if (cell != mesh.cells.end()) test(mesh, cell->second);
+      }
+    test(mesh, mesh.large_triangles);
+  };
+  // The same triangle sets as scene_instances_sweep_sphere: map collision
+  // (fences and walls included), native placements and activated objects.
+  if (!g_floor_prepared) scene_instances_prepare_physics();
+  if (g_static_enabled)
+    for (const auto& mesh : g_static) test_mesh(mesh);
+  for (const auto& [key, ground] : g_ground_collision) {
+    (void)key;
+    bool separated = false;
+    if (ground.has_bounds)
+      for (int axis = 0; axis < 3; ++axis)
+        separated = separated || upper[axis] < ground.bounds_min[axis] ||
+                    lower[axis] > ground.bounds_max[axis];
+    if (separated) continue;
+    for (const auto& mesh : ground.meshes) test_mesh(mesh);
+  }
+  for (const auto& entry : g_floor_meshes) test_mesh(entry.second.mesh);
+  if (!best) return false;
+  for (int axis = 0; axis < 3; ++axis) {
+    contact.normal[axis] = static_cast<float>(axis == 0 ? best->normal.x
+                                              : axis == 1 ? best->normal.y : best->normal.z);
+    contact.point[axis] = static_cast<float>(axis == 0 ? best->point.x
+                                             : axis == 1 ? best->point.y : best->point.z);
+  }
+  contact.penetration = static_cast<float>(best->penetration);
+  return true;
+}
+
+bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
+                                  SceneFloorHit &sample) {
+  if (!g_floor_prepared) scene_instances_prepare_physics();
+  float best = 0.f;
+  bool hit = false;
+  // Preloaded garage shells are drawn at identity with unflipped script XZ.
+  float eye[16];
+  identity(eye);
+  if (g_static_enabled)
+    for (const auto &mesh : g_static) {
+      const auto cell =
+          mesh.cells.find(floor_cell(cell_coordinate(x, mesh), cell_coordinate(z, mesh)));
+      if (cell != mesh.cells.end())
+        floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
+                        below, best, hit, sample.normal);
+      floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x,
+                      z, below, best, hit, sample.normal);
+    }
+  for (const auto& [key, ground] : g_ground_collision) {
+    for (const auto& mesh : ground.meshes) {
+      const auto cell = mesh.cells.find(floor_cell(cell_coordinate(x, mesh),
+                                                   cell_coordinate(z, mesh)));
+      if (cell != mesh.cells.end())
+        floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
+                        below, best, hit, sample.normal);
+      floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x,
+                      z, below, best, hit, sample.normal);
+    }
+  }
+  for (const auto &entry : g_floor_meshes) {
+    const auto &cached = entry.second;
+    if (ignore && std::find(cached.ancestors.begin(), cached.ancestors.end(),
+                            ignore) != cached.ancestors.end())
+      continue;
+    const auto &mesh = cached.mesh;
+    auto cell =
+        mesh.cells.find(floor_cell(cell_coordinate(x, mesh), cell_coordinate(z, mesh)));
+    if (cell != mesh.cells.end())
+      floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
+                      below, best, hit, sample.normal);
+    floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x, z,
+                    below, best, hit, sample.normal);
+  }
+  if (!hit)
+    return false;
+  sample.height = best;
+  return true;
+}
+
+bool scene_instances_supports(void *root,
+                              std::vector<std::array<float, 3>> &points) {
+  points.clear();
+  if (!g_world || !root)
+    return false;
+  for (auto *n : render_nodes_in_world(root)) {
+    if (!n || n->empty || n->sky_render || n->line_geometry)
+      continue;
+    bool under = false;
+    void *p = n->key;
+    for (int guard = 0; p && guard < 32; ++guard) {
+      if (p == root) {
+        under = true;
+        break;
+      }
+      auto *s = gameref_get(p);
+      p = s ? s->parent : nullptr;
+    }
+    if (!under)
+      continue;
+    float m[16];
+    if (!chain_matrix(n->key, g_world, m, false))
+      continue;
+    auto geo = geometry(static_cast<uint32_t>(n->type_id));
+    if (!geo || geo->positions.size() < 3)
+      continue;
+    const float scale = geo->position_scale;
+    bool any = false;
+    float best = 0.f, bx = 0.f, bz = 0.f;
+    for (size_t i = 0; i + 2 < geo->positions.size(); i += 3) {
+      const float vx = geo->positions[i] * scale;
+      const float vy = geo->positions[i + 1] * scale;
+      const float vz = geo->positions[i + 2] * scale;
+      const float y = m[1] * vx + m[5] * vy + m[9] * vz + m[13];
+      if (any && y >= best)
+        continue;
+      best = y;
+      bx = m[0] * vx + m[4] * vy + m[8] * vz + m[12];
+      bz = m[2] * vx + m[6] * vy + m[10] * vz + m[14];
+      any = true;
+    }
+    if (any)
+      points.push_back({bx, best, bz});
+  }
+  return !points.empty();
+}
+
+SceneSun scene_instances_light(void* root) {
+  if(!root)root=g_world;
+  SceneSun selected=scene_sun();int newest=0;
+  for(auto* node:gameref_directional_lights()) {
+    if(!node->directional_light.set || node->live_id<=newest)continue;
+    float frame[16];
+    // chain_matrix rejects inventory world roots and hidden subtrees.
+    if(!chain_matrix(node->key,root,frame,false))continue;
+    selected=node->directional_light;newest=node->live_id;
+    const auto& d=node->directional_light.direction;
+    for(int i=0;i<3;++i)selected.direction[i]=frame[i]*d[0]+frame[4+i]*d[1]+frame[8+i]*d[2];
+  }
+  if (root == g_world && scene_instances_has_ground_props())
+    scene_sun_apply_day_cycle(selected);
+  return selected;
+}
+namespace {
+constexpr int kSkinBones = 48;
+
+// False when the clip gives no bones; the instance then keeps the CPU pose.
+bool skin_palette(SceneInstance& instance, void* key, int32_t type_id) {
+  instance.skin.assign(static_cast<size_t>(kSkinBones) * 16, 0.f);
+  for (int bone = 0; bone < kSkinBones; ++bone) {
+    float* m = instance.skin.data() + static_cast<size_t>(bone) * 16;
+    m[0] = m[5] = m[10] = m[15] = 1.f;
+  }
+  const int count = character_skin_palette(key, type_id, *g_resources,
+                                           instance.skin.data(), kSkinBones);
+  if (count <= 0) {
+    instance.skin.clear();
+    instance.gpu_skin = false;
+    return false;
+  }
+  // Vertices are uploaded as position_scale * (x, y, -z). The palette
+  // has to land in that space: F*M*F, then scale the translation.
+  const float scale = instance.geometry->position_scale > 0.f
+      ? instance.geometry->position_scale : 0.01f;
+  for (int bone = 0; bone < kSkinBones; ++bone) {
+    float* m = instance.skin.data() + static_cast<size_t>(bone) * 16;
+    m[2] = -m[2];
+    m[6] = -m[6];
+    m[10] = -m[10];
+    m[14] = -m[14];
+    m[8] = -m[8];
+    m[9] = -m[9];
+    m[10] = -m[10];
+    m[11] = -m[11];
+    m[12] *= scale;
+    m[13] *= scale;
+    m[14] *= scale;
+  }
+  instance.gpu_skin = true;
+  return true;
+}
+
+// defer_skin leaves pedestrians with gpu_skin set and an empty palette.
+std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
+  std::vector<SceneInstance> out;
+  if (!g_resources || !root)
+    return out;
+  const auto lighting=scene_instances_light(root);
+  for (auto *n : render_nodes_in_world(root)) {
+    // Source scripts replace Scene.skydome; a superseded handle may remain
+    // alive until script cleanup. Never render it as ordinary foreground.
+    if (n->sky_render && n->key != g_sky)
+      continue;
+    if (n->light_flags &&
+        !part_lamp_lit(n->parent, n->light_flags, root == g_world && g_preview_lamps))
+      continue;
+    SceneInstance instance;
+    instance.lighting=lighting;
+    if (!scene_instance_transform(n->key, root, instance.transform.data()))
+      continue;
+    if (n->line_geometry) {
+      if (n->line_geometry->indices.empty()) continue;
+      instance.geometry = n->line_geometry;
+    } else {
+      instance.geometry = n->deformed_geometry && n->deformed_type == n->type_id
+          ? n->deformed_geometry : geometry(static_cast<uint32_t>(n->type_id));
+    }
+    if (!instance.geometry)
+      continue;
+    // Pedestrians share the bind mesh. The bone palette is a uniform, so the
+    // vertex buffer stays put while the clip advances.
+    if (!n->line_geometry && g_resources && n->alias == "pedestrian" &&
+        !instance.geometry->skin_weights.empty()) {
+      // A deferred palette is filled per view, only for walkers in its frustum.
+      if (defer_skin) instance.gpu_skin = true;
+      else skin_palette(instance, n->key, n->type_id);
+    }
+    if (!instance.gpu_skin && !n->line_geometry && g_resources) {
+      if (auto posed = character_posed(n->key, n->type_id, instance.geometry.get(), *g_resources))
+        instance.geometry = std::move(posed);
+    }
+    instance.cull_backfaces = instance.geometry->ground_polygons;
+    instance.key = n->key;
+    instance.type_id = n->type_id;
+    instance.sky = n->key == g_sky;
+    instance.color = n->color;
+    instance.vehicle_material = n->vehicle_material;
+    instance.light_flags = n->light_flags;
+    if (n->paint_source || !n->texture_replacements.empty()) {
+      // The mesh list may prefer a DDS sidecar while the resource names the
+      // original image. Match the path without the extension.
+      auto key = [](std::string path) {
+        std::replace(path.begin(), path.end(), '\\', '/');
+        for (char &c : path)
+          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const auto slash = path.find_last_of('/');
+        const auto dot = path.find_last_of('.');
+        if (dot != std::string::npos &&
+            (slash == std::string::npos || dot > slash))
+          path.resize(dot);
+        const auto game = path.rfind("game/");
+        if (game != std::string::npos)
+          path = path.substr(game + 5);
+        return path;
+      };
+      const auto paint = key(scene_instances_texture(n->paint_source));
+      if (!paint.empty()) {
+        for (size_t i = 0; i < instance.geometry->textures.size(); ++i) {
+          if (key(instance.geometry->textures[i]) == paint) {
+            instance.paint_slot = static_cast<int>(i);
+            break;
+          }
+        }
+      }
+      for (const auto& [from, to] : n->texture_replacements) {
+        const auto source = key(scene_instances_texture(from));
+        if (source.empty()) continue;
+        for (size_t i = 0; i < instance.geometry->textures.size(); ++i)
+          if (source == key(instance.geometry->textures[i]))
+            instance.texture_replacements.emplace_back(i, scene_instances_texture(to));
+      }
+      if (n->paint_texture)
+        instance.paint_texture = scene_instances_texture(n->paint_texture);
+    }
+    out.push_back(std::move(instance));
+  }
+  return out;
+}
+}  // namespace
+
+std::vector<SceneInstance> scene_instances_collect_root(void *root) {
+  return collect_root(root, false);
+}
+void* scene_instances_world() { return g_world; }
+
+namespace {
+bool g_frame_cache = false;
+bool g_frame_world_valid = false;
+void* g_frame_world_root = nullptr;
+std::vector<SceneInstance> g_frame_world;
+// Palettes (or CPU poses) already built this frame, shared by every view.
+struct FrameCharacter {
+  std::vector<float> skin;
+  std::shared_ptr<const ScxGeometry> geometry;
+  bool gpu_skin = false;
+};
+std::unordered_map<void*, FrameCharacter> g_frame_characters;
+
+// Outside a frame scope the caller's `local` receives a fresh collection.
+const std::vector<SceneInstance>& world_instances(std::vector<SceneInstance>& local) {
+  if (!g_frame_cache) {
+    local = scene_instances_collect_root(g_world);
+    return local;
+  }
+  if (!g_frame_world_valid || g_frame_world_root != g_world) {
+    g_frame_world = collect_root(g_world, true);
+    g_frame_world_root = g_world;
+    g_frame_world_valid = true;
+  }
+  return g_frame_world;
+}
+// A walker's bind mesh with a metre of slack for the swinging limbs.
+bool character_in_view(const SceneInstance& instance, const SceneFrustum& frustum) {
+  const auto& info = instance.geometry->info;
+  const float scale = instance.geometry->position_scale > 0.f
+      ? instance.geometry->position_scale : 0.01f;
+  float local[3], half[3];
+  for (int axis = 0; axis < 3; ++axis) {
+    local[axis] = (info.bbox_min[axis] + info.bbox_max[axis]) * .5f * scale;
+    half[axis] = (info.bbox_max[axis] - info.bbox_min[axis]) * .5f * scale;
+  }
+  local[2] = -local[2];
+  const auto& m = instance.transform;
+  float centre[3];
+  for (int axis = 0; axis < 3; ++axis)
+    centre[axis] = m[axis] * local[0] + m[4 + axis] * local[1] + m[8 + axis] * local[2] +
+                   m[12 + axis];
+  const float radius = std::hypot(half[0], half[1], half[2]) + 1.f;
+  for (const auto& plane : frustum)
+    if (plane[0] * centre[0] + plane[1] * centre[1] + plane[2] * centre[2] + plane[3] < -radius)
+      return false;
+  return true;
+}
+
+void complete_skin(SceneInstance& instance) {
+  auto [found, fresh] = g_frame_characters.try_emplace(instance.key);
+  auto& cached = found->second;
+  if (fresh) {
+    if (!skin_palette(instance, instance.key, instance.type_id))
+      if (auto posed = character_posed(instance.key, instance.type_id,
+                                       instance.geometry.get(), *g_resources))
+        instance.geometry = std::move(posed);
+    cached = {instance.skin, instance.geometry, instance.gpu_skin};
+    return;
+  }
+  instance.skin = cached.skin;
+  instance.geometry = cached.geometry;
+  instance.gpu_skin = cached.gpu_skin;
+}
+}  // namespace
+
+void scene_instances_frame_cache(bool enabled) {
+  g_frame_cache = enabled;
+  g_frame_world_valid = false;
+  g_frame_characters.clear();
+  if (!enabled) {
+    g_frame_world.clear();
+    g_frame_world_root = nullptr;
+  }
+}
+
+void scene_instances_set_hiz(SceneHizTest test, void* user) {
+  g_hiz = test;
+  g_hiz_user = user;
+}
+
+bool scene_instances_has_ground_props() {
+  const auto* world = gameref_get(g_world);
+  if (!world || g_ground_props.empty()) return false;
+  for (auto* child : world->children)
+    if (const auto* shell = gameref_get(child);
+        shell && g_ground_props.contains(static_cast<uint32_t>(shell->type_id)))
+      return true;
+  return false;
+}
+
+std::vector<SceneInstance> scene_instances_collect(
+    const SceneFrustum* frustum,
+    std::vector<std::shared_ptr<const ScxGeometry>>* resident_props) {
+  std::vector<SceneInstance> out;
+  if (const auto& world = world_instances(out); &world != &out) out = world;
+  // Walkers outside this view keep an empty palette; the renderer skips them.
+  for (auto& instance : out)
+    if (instance.gpu_skin && instance.skin.empty() &&
+        (!frustum || character_in_view(instance, *frustum)))
+      complete_skin(instance);
+  if (g_ground_props.empty()) return out;
+  const size_t base_count = out.size();
+  for (size_t i = 0; i < base_count; ++i) {
+    const auto found = g_ground_props.find(static_cast<uint32_t>(out[i].type_id));
+    if (found == g_ground_props.end()) continue;
+    PartMatrix shell;
+    if (!scene_instances_script_matrix(out[i].key, shell.data())) continue;
+    if (resident_props)
+      for (const auto id : found->second.resources)
+        if (auto mesh = geometry(id)) resident_props->push_back(std::move(mesh));
+    const auto visible = [&](const std::array<float, 3>& center, float radius) {
+      if (!frustum) return true;
+      const auto world = transform_point(shell, center);
+      for (const auto& plane : *frustum)
+        if (plane[0] * world[0] + plane[1] * world[1] - plane[2] * world[2] + plane[3] < -radius)
+          return false;
+      return true;
+    };
+    const SceneSun lighting = out[i].lighting;
+    for (const auto& [key, cell] : found->second.cells) {
+        if (!visible(cell.center, cell.radius)) continue;
+        if (g_hiz) {
+          const auto cell_world = transform_point(shell, cell.center);
+          if (!g_hiz(cell_world.data(), cell.radius, g_hiz_user)) continue;
+        }
+        for (const auto& prop : cell.props) {
+          if (prop.batched || prop.hidden) continue;
+          if (!visible(prop.center, prop.radius)) continue;
+          if (g_hiz) {
+            const auto prop_world = transform_point(shell, prop.center);
+            if (!g_hiz(prop_world.data(), prop.radius, g_hiz_user)) continue;
+          }
+          auto mesh = geometry(prop.render_id);
+          if (!mesh) continue;
+          SceneInstance instance;
+          instance.cull_backfaces = true;
+          instance.type_id = static_cast<int32_t>(prop.render_id);
+          instance.color = prop.color;
+          instance.lighting = lighting;
+          instance.geometry = std::move(mesh);
+          instance.transform = part_matrix_multiply(shell, prop.pose);
+          for (int col = 0; col < 4; ++col)
+            for (int row = 0; row < 4; ++row)
+              if ((col == 2) != (row == 2)) instance.transform[col * 4 + row] *= -1.f;
+          out.push_back(std::move(instance));
+        }
+      }
+  }
+  return out;
+}
+
+void scene_instances_collect_batches(const SceneFrustum* frustum,
+                                     std::vector<SceneBatch>& out,
+                                     const float* reflection_origin) {
+  out.clear();
+  if (g_ground_props.empty()) return;
+  std::vector<SceneInstance> local;
+  // One batch per mesh and shell, whatever cell its placements come from.
+  std::unordered_map<uint64_t, size_t> batch_of;
+  for (const auto& base : world_instances(local)) {
+    const auto found = g_ground_props.find(static_cast<uint32_t>(base.type_id));
+    if (found == g_ground_props.end()) continue;
+    PartMatrix shell;
+    if (!scene_instances_script_matrix(base.key, shell.data())) continue;
+    const auto visible = [&](const std::array<float, 3>& center, float radius) {
+      if (!frustum) return true;
+      const auto world = transform_point(shell, center);
+      for (const auto& plane : *frustum)
+        if (plane[0] * world[0] + plane[1] * world[1] - plane[2] * world[2] + plane[3] < -radius)
+          return false;
+      return true;
+    };
+    for (const auto& [key, cell] : found->second.cells) {
+      (void)key;
+      if (cell.batches.empty() || !visible(cell.center, cell.radius)) continue;
+      if (g_hiz) {
+        const auto cell_world = transform_point(shell, cell.center);
+        if (!g_hiz(cell_world.data(), cell.radius, g_hiz_user)) continue;
+      }
+      for (const auto& batch : cell.batches) {
+        const uint64_t batch_key = (static_cast<uint64_t>(static_cast<uint32_t>(base.type_id)) << 32) |
+                                   batch.render_id;
+        const auto existing = batch_of.find(batch_key);
+        auto mesh = existing != batch_of.end() ? out[existing->second].geometry
+                                               : geometry(batch.render_id);
+        if (!mesh) continue;
+        float extent = 0.f;
+        if (reflection_origin) {
+          const float scale = mesh->position_scale;
+          for (int axis = 0; axis < 3; ++axis)
+            extent = std::max(extent,
+                (mesh->info.bbox_max[axis] - mesh->info.bbox_min[axis]) * scale);
+        }
+        SceneBatch fresh;
+        SceneBatch& draw = existing != batch_of.end() ? out[existing->second] : fresh;
+        if (existing == batch_of.end()) {
+          draw.geometry = std::move(mesh);
+          draw.lighting = base.lighting;
+          draw.instances.reserve(batch.indices.size());
+        }
+        for (const auto index : batch.indices) {
+          if (index >= cell.props.size()) continue;
+          const auto& prop = cell.props[index];
+          if (prop.hidden || !visible(prop.center, prop.radius)) continue;
+          if (g_hiz) {
+            const auto prop_world = transform_point(shell, prop.center);
+            if (!g_hiz(prop_world.data(), prop.radius, g_hiz_user)) continue;
+          }
+          auto matrix = part_matrix_multiply(shell, prop.pose);
+          for (int col = 0; col < 4; ++col)
+            for (int row = 0; row < 4; ++row)
+              if ((col == 2) != (row == 2)) matrix[col * 4 + row] *= -1.f;
+          if (reflection_origin && extent > 0.f) {
+            const float dx = matrix[12] - reflection_origin[0];
+            const float dy = matrix[13] - reflection_origin[1];
+            const float dz = matrix[14] - reflection_origin[2];
+            const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (dist > 12.f && extent / dist * 128.f < 4.f) continue;
+          }
+          draw.instances.push_back({matrix, prop.color});
+        }
+        if (existing == batch_of.end() && !draw.instances.empty()) {
+          batch_of.emplace(batch_key, out.size());
+          out.push_back(std::move(fresh));
+        }
+      }
+    }
+  }
+}
+
+void scene_instances_override_mesh(uint32_t id,
+                                   std::shared_ptr<const ScxGeometry> geo) {
+  if (id && geo)
+    g_overrides[id] = std::move(geo);
+}
+void scene_instances_enable_static_floor(bool enabled) {
+  if (g_static_enabled != enabled) ++g_floor_revision;
+  g_static_enabled = enabled;
+}
+void scene_instances_add_static_mesh(const ScxGeometry &geo) {
+  if (!geo.info.ok || geo.indices.size() < 3 || geo.positions.size() < 9)
+    return;
+  StaticMesh mesh;
+  mesh.positions = geo.positions;
+  mesh.indices = geo.indices;
+  mesh.scale = geo.position_scale;
+  index_floor(mesh);
+  ++g_floor_revision;
+  g_static.push_back(std::move(mesh));
+}
+
+void scene_instances_override_collision(uint32_t id,
+                                        std::shared_ptr<const ScxGeometry> geo) {
+  if (id && geo) g_collision_overrides[id] = std::move(geo);
+}
+
+GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id) {
+  GroundMapData map;
+  const RpkEntry *entry = rpk.resolve(ground_id);
+  if (!entry || entry->typeof_ != 1 || entry->size < 8)
+    return map;
+  const int32_t pack = RpkIndex::pack_from_full(ground_id);
+  const std::string disk = rpk.disk_path_for_pack(pack);
+  std::ifstream in(disk, std::ios::binary | std::ios::ate);
+  if (!in)
+    return map;
+  const auto sz = static_cast<std::streamoff>(in.tellg());
+  if (sz <= 0)
+    return map;
+  in.seekg(0);
+  std::vector<uint8_t> file(static_cast<size_t>(sz));
+  in.read(reinterpret_cast<char *>(file.data()), sz);
+  if (!in)
+    return map;
+
+  GroundWalk walk;
+  walk.file = &file;
+  walk_ground_node(walk, entry->offset, entry->size, 0);
+  if (walk.params.size() < 3)
+    return map;
+  char *end = nullptr;
+  const unsigned long local = std::strtoul(walk.params.c_str(), &end, 0);
+  if (!end || end == walk.params.c_str() || local == 0)
+    return map;
+  map.render_id = rpk.resolve_embedded_id(pack, static_cast<uint32_t>(local));
+  for (auto& placement : walk.placements)
+    placement.type = rpk.resolve_embedded_id(pack, placement.type);
+  map.placements = std::move(walk.placements);
+  if (const auto* owner = rpk.pack_by_id(pack)) {
+    for (uint32_t slot : walk.exterior_slots)
+      for (const auto& dep : owner->deps)
+        if ((dep.id >> 16) == slot)
+          if (const auto* exterior = rpk.pack_by_path(dep.path))
+            map.exterior_maps.push_back(RpkIndex::make_full_id(exterior->pack_id, 1));
+  }
+  if (!walk.collision.indices.empty()) {
+    walk.collision.position_scale = 1.f;
+    map.collision = std::make_shared<ScxGeometry>(std::move(walk.collision));
+  }
+  if (walk.poly.empty())
+    return map;
+
+  const RpkIndex::ModelRef model = rpk.model_for_resource(
+      RpkIndex::pack_from_full(map.render_id), map.render_id & 0xffffu);
+  std::filesystem::path table;
+  if (model.ok && !model.source.empty()) {
+    std::string source = model.source;
+    std::replace(source.begin(), source.end(), '\\', '/');
+    table = std::filesystem::path(rpk.game_root()) / source;
+  }
+  const std::vector<GroundMat> mats = read_ground_materials(table);
+
+  auto geo = std::make_shared<ScxGeometry>();
+  geo->ground_polygons = true;
+  geo->position_scale = 1.f;
+  geo->info.ok = true;
+  geo->info.version = 3;
+  geo->info.path = table.string();
+  if (model.ok) {
+    geo->textures = model.textures;
+    for (auto &texture : geo->textures) {
+      std::replace(texture.begin(), texture.end(), '\\', '/');
+      if (!texture.empty() && std::filesystem::path(texture).is_relative())
+        texture = (std::filesystem::path(rpk.game_root()) / texture).string();
+    }
+  }
+  // The city SCY tables use this slot for black-backed window emission.
+  // Multiplying the façade by either atlas erases the unlit wall.
+  std::vector<bool> emission_slots(geo->textures.size());
+  for (size_t i = 0; i < geo->textures.size(); ++i) {
+    auto name = std::filesystem::path(geo->textures[i]).stem().string();
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    emission_slots[i] = name == "f_light" || name == "n_light";
+  }
+  for (const PolySection &sec : walk.poly) {
+    const bool known = sec.material < mats.size();
+    ScxGroup group;
+    group.index_start = static_cast<uint32_t>(geo->indices.size());
+    group.index_count = static_cast<uint32_t>(sec.indices.size());
+    group.texture_index = known ? mats[sec.material].tex : 0xffff;
+    if (known) {
+      group.base_map.channel = mats[sec.material].tex_channel;
+      group.mix_index = mats[sec.material].mix;
+      group.mix_map.channel = mats[sec.material].mix_channel;
+    }
+    const int illumination = known ? mats[sec.material].lm : -1;
+    const bool has_illumination = illumination >= 0 &&
+        static_cast<size_t>(illumination) < emission_slots.size();
+    group.mix_vertex_color = has_illumination && emission_slots[illumination];
+    if (has_illumination && !group.mix_vertex_color) {
+      group.lightmap_index = static_cast<uint16_t>(illumination);
+      group.lightmap_map.channel = 1;
+    }
+    if (known && ((mats[sec.material].flags & 1u) ||
+                  (mats[sec.material].flags & 0x20000000u)))
+      group.material_flags = 1;
+    if (known) group.material_flags |= mats[sec.material].flags & 0x02000000u;
+    const uint32_t base = static_cast<uint32_t>(geo->positions.size() / 3);
+    geo->positions.insert(geo->positions.end(), sec.pos.begin(), sec.pos.end());
+    geo->normals.insert(geo->normals.end(), sec.nrm.begin(), sec.nrm.end());
+    geo->uvs.insert(geo->uvs.end(), sec.uv0.begin(), sec.uv0.end());
+    geo->uv2.insert(geo->uv2.end(), sec.uv1.begin(), sec.uv1.end());
+    geo->uv3.insert(geo->uv3.end(), sec.uv2.begin(), sec.uv2.end());
+    geo->vertex_colors.insert(geo->vertex_colors.end(), sec.colors.begin(), sec.colors.end());
+    for (uint32_t index : sec.indices)
+      geo->indices.push_back(base + index);
+    geo->groups.push_back(std::move(group));
+    geo->info.vertices += static_cast<int32_t>(sec.pos.size() / 3);
+    geo->info.triangles += static_cast<int32_t>(sec.indices.size() / 3);
+  }
+  geo->info.groups = static_cast<int32_t>(geo->groups.size());
+  if (geo->indices.empty())
+    return map;
+  std::printf("[scene] ground poly 0x%x tris=%d materials=%zu\n", map.render_id,
+              geo->info.triangles, mats.size());
+  map.poly = std::move(geo);
+  return map;
+}
+
+namespace {
+bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out) {
+  const auto bytes = rpk.read_payload(type);
+  if (bytes.size() < 10 || std::memcmp(bytes.data(), "ICFG", 4) != 0) return false;
+  const auto separator = std::find(bytes.begin() + 8, bytes.end(), 0);
+  if (separator == bytes.end()) return false;
+  const auto offset = static_cast<size_t>(separator - bytes.begin());
+  const std::string_view subtype(reinterpret_cast<const char*>(bytes.data() + 8), offset - 8);
+  if (subtype != "object" && subtype != "trlight" && subtype != "building") return false;
+  std::string cfg(reinterpret_cast<const char*>(bytes.data() + offset + 1), bytes.size() - offset - 1);
+  // Several stock lane supports have a malformed yaw token on their second render.
+  constexpr std::string_view joined_yaw = "-1.570.000000";
+  for (size_t pos = cfg.find(joined_yaw); pos != std::string::npos;
+       pos = cfg.find(joined_yaw, pos + 6))
+    cfg.replace(pos, joined_yaw.size(), "-1.570");
+  out = parse_part_config(cfg, &rpk, RpkIndex::pack_from_full(type));
+  out.resource = type;
+  out.native_kind = std::string(subtype);
+  return true;
+}
+
+const NativeCollisionData& native_collision_data(
+    const RpkIndex& rpk, uint32_t type, const PartConfig* parsed) {
+  static const NativeCollisionData empty;
+  if (!type) return empty;
+  auto [cached, added] = g_native_collision.try_emplace(type);
+  if (!added) return cached->second;
+  PartConfig loaded;
+  if (!parsed) {
+    if (!ground_prop_config(rpk, type, loaded)) return cached->second;
+    parsed = &loaded;
+  }
+
+  auto mesh = std::make_shared<ScxGeometry>();
+  mesh->position_scale = 1.f;
+  mesh->info.ok = true;
+  bool bounds = false;
+  const auto append = [&](const ScxGeometry& source, const PartMatrix& frame) {
+    const auto first = static_cast<uint32_t>(mesh->positions.size() / 3);
+    for (size_t i = 0; i + 2 < source.positions.size(); i += 3) {
+      for (int axis = 0; axis < 3; ++axis) {
+        const float value = frame[12 + axis] + source.position_scale *
+            (frame[axis] * source.positions[i] +
+             frame[4 + axis] * source.positions[i + 1] +
+             frame[8 + axis] * source.positions[i + 2]);
+        mesh->positions.push_back(value);
+        if (!bounds) {
+          mesh->info.bbox_min[axis] = mesh->info.bbox_max[axis] = value;
+        } else {
+          mesh->info.bbox_min[axis] = std::min(mesh->info.bbox_min[axis], value);
+          mesh->info.bbox_max[axis] = std::max(mesh->info.bbox_max[axis], value);
+        }
+      }
+      bounds = true;
+    }
+    for (uint32_t index : source.indices) mesh->indices.push_back(first + index);
+  };
+  PartMatrix identity_frame{};
+  identity_frame[0] = identity_frame[5] = identity_frame[10] = identity_frame[15] = 1.f;
+  bool positive_mass = false, zero_mass = false;
+  for (const auto& body : parsed->bodies) {
+    if (!body.collision) continue;
+    if (body.mass > 0.f) {
+      positive_mass = true;
+      cached->second.mass += body.mass;
+      for (int axis = 0; axis < 3; ++axis)
+        cached->second.center[axis] += body.pose.position[axis] * body.mass;
+    } else {
+      zero_mass = true;
+    }
+  }
+  if (cached->second.mass > 0.f)
+    for (auto& value : cached->second.center) value /= cached->second.mass;
+  // Promote only an entirely positive-mass placement. A mixed placement keeps
+  // every body static instead of moving one while baking another. A dynamic
+  // type still builds its geometry: map loading uses its bounds to find the
+  // dormant placement, and only static placements enter the ground caches.
+  cached->second.dynamic = positive_mass && !zero_mass;
+  for (const auto& body : parsed->bodies) {
+    if (!body.collision) continue;
+    const auto frame = part_pose_matrix(body.pose);
+    if (body.shape == PartBodyShape::Box) {
+      cached->second.primitives.push_back(body);
+      append(collision::make_box_mesh(
+                 frame, {body.box_half[0], body.box_half[1], body.box_half[2]}),
+             identity_frame);
+      continue;
+    }
+    if (body.shape == PartBodyShape::Sphere) {
+      cached->second.primitives.push_back(body);
+      append(collision::make_sphere_mesh(frame, body.sphere_radius, 12, 6),
+             identity_frame);
+      continue;
+    }
+    if (body.shape != PartBodyShape::Mesh || body.collision_mesh.empty()) continue;
+    std::string relative = body.collision_mesh;
+    std::replace(relative.begin(), relative.end(), '\\', '/');
+    const auto source = load_scx_geometry(
+        (std::filesystem::path(rpk.game_root()) / relative).string());
+    if (!source.info.ok || source.indices.empty()) continue;
+    append(source, frame);
+  }
+  mesh->info.vertices = static_cast<int32_t>(mesh->positions.size() / 3);
+  mesh->info.triangles = static_cast<int32_t>(mesh->indices.size() / 3);
+  if (mesh->info.triangles) cached->second.mesh = std::move(mesh);
+  return cached->second;
+}
+
+bool ground_prop_is_mesh(const RpkIndex& rpk, uint32_t resource) {
+  const auto* entry = rpk.resolve(resource);
+  if (!entry || (entry->typeof_ != 14 && entry->typeof_ != 5)) return false;
+  std::string alias = entry->alias;
+  for (char& c : alias)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  const auto word = alias.find("night");
+  constexpr std::string_view separators = "/\\ _-.";
+  return word == std::string::npos ||
+      (word > 0 && separators.find(alias[word - 1]) == std::string_view::npos) ||
+      (word + 5 < alias.size() && separators.find(alias[word + 5]) == std::string_view::npos);
+}
+
+bool prop_mesh_batchable(const ScxGeometry& mesh) {
+  const bool v4 = mesh.info.version == 4;
+  const bool v3 = mesh.info.version == 3;
+  if (mesh.groups.empty() || mesh.ground_polygons || (!v4 && !v3)) return false;
+  for (const auto& group : mesh.groups) {
+    const auto flags = group.material_flags;
+    const bool glass = v4 && (flags & 0x40000000u) && (group.material_type & 0x04u);
+    const bool blend = glass || (v3 && (flags & 0x101u) == 0x101u);
+    // Blended sections are drawn after the opaque world, one by one.
+    // Alpha-tested foliage, vertex-coloured walls and ColorMixTex facades
+    // (fs_mesh mixes the instance colour under the texture) draw instanced.
+    if (blend) return false;
+  }
+  return true;
+}
+
+void build_prop_batches(GroundPropCell& cell, const std::unordered_set<uint32_t>& batchable) {
+  std::unordered_map<uint32_t, std::vector<uint32_t>> groups;
+  for (uint32_t index = 0; index < cell.props.size(); ++index) {
+    const auto id = cell.props[index].render_id;
+    if (!batchable.contains(id)) continue;
+    groups[id].push_back(index);
+  }
+  cell.batches.clear();
+  // A single placement is batched too: collection merges the same mesh from
+  // every visible cell into one instanced draw.
+  for (auto& [id, indices] : groups) {
+    for (const auto index : indices) cell.props[index].batched = true;
+    cell.batches.push_back({id, std::move(indices)});
+  }
+}
+}
+
+void scene_instances_add_ground_props(const GroundMapData& map) {
+  if (!g_resources || map.placements.empty() || g_ground_props.contains(map.render_id))
+    return;
+  auto& props_map = g_ground_props[map.render_id];
+  auto& cells = props_map.cells;
+  std::unordered_map<uint32_t, PartConfig> object_types;
+  std::unordered_map<uint32_t, std::shared_ptr<const PartConfig>> dormant_types;
+  std::unordered_map<uint32_t, bool> visible_resources;
+  const auto is_visible = [&](uint32_t resource) {
+    if (!resource) return false;
+    auto [visible, unseen] = visible_resources.try_emplace(resource, false);
+    if (unseen) visible->second = ground_prop_is_mesh(*g_resources, resource);
+    return visible->second;
+  };
+  size_t props = 0;
+  std::unordered_set<uint32_t> used_resources;
+  for (const auto& placement : map.placements) {
+    auto [type, added] = object_types.try_emplace(placement.type);
+    if (added) {
+      ground_prop_config(*g_resources, placement.type, type->second);
+      auto& renders = type->second.renders;
+      std::erase_if(renders, [&](const PartRender& render) {
+        return render.variants.empty() ? !is_visible(render.resource)
+            : std::none_of(render.variants.begin(), render.variants.end(), is_visible);
+      });
+      const auto score = [](const PartRender& render) {
+        return std::pair{render.lod_level + render.lod_last, render.lod_last};
+      };
+      const auto best = std::max_element(renders.begin(), renders.end(),
+          [&](const PartRender& a, const PartRender& b) { return score(a) < score(b); });
+      if (best != renders.end() && best->lod_level >= 0) {
+        const auto best_index = static_cast<size_t>(best - renders.begin());
+        for (size_t i = renders.size(); i-- > 0;)
+          if (i != best_index && renders[i].lod_level >= 0)
+            renders.erase(renders.begin() + i);
+      }
+    }
+    const auto pose = part_pose_matrix({placement.position, placement.rotation});
+    const auto& collision = native_collision_data(*g_resources, placement.type,
+                                                  &type->second);
+    const auto& p = placement.position;
+    // The native object uses one seed for all render slots and palettes.
+    const float sum = (p[0] + p[1]) + p[2];
+    const auto fallback = std::isfinite(sum)
+        ? static_cast<int32_t>(std::fmod(static_cast<double>(sum), 2147483648.)) : 0;
+    const uint32_t seed = static_cast<uint32_t>(placement.seed >= 0 ? placement.seed : fallback)
+                          & 0x7fffffffu;
+    int32_t dormant_index = -1;
+    if (collision.dynamic) {
+      // Rendered as a plain instanced prop until a car comes close; see
+      // scene_instances_wake_dynamics.
+      auto& shared = dormant_types[placement.type];
+      if (!shared) shared = std::make_shared<const PartConfig>(type->second);
+      DormantProp entry;
+      entry.config = shared;
+      entry.pose = pose;
+      entry.seed = static_cast<int32_t>(seed);
+      if (collision.mesh) {
+        for (int axis = 0; axis < 3; ++axis) {
+          entry.local_lower[axis] = collision.mesh->info.bbox_min[axis];
+          entry.local_upper[axis] = collision.mesh->info.bbox_max[axis];
+        }
+        dormant_bounds(entry);
+        dormant_index = static_cast<int32_t>(props_map.dormant.size());
+        dormant_cells(entry, [&](uint64_t cell) {
+          props_map.dormant_grid[cell].push_back(static_cast<uint32_t>(dormant_index));
+        });
+        props_map.dormant.push_back(std::move(entry));
+      }
+    } else if (collision.mesh) {
+      props_map.collision_meshes.push_back(bake_static_mesh(*collision.mesh, pose));
+    }
+    if (!collision.dynamic)
+      for (const auto& body : collision.primitives) {
+        const auto frame = part_matrix_multiply(pose, part_pose_matrix(body.pose));
+        if (body.shape == PartBodyShape::Box)
+          props_map.collision_shapes.add_box(
+              frame, {body.box_half[0], body.box_half[1], body.box_half[2]});
+        else if (body.shape == PartBodyShape::Sphere)
+          props_map.collision_shapes.add_sphere(frame, body.sphere_radius);
+      }
+    if (type->second.renders.empty()) continue;
+    for (const auto& render : type->second.renders) {
+      const auto resource = render.variants.empty() ? render.resource
+          : render.variants[seed % render.variants.size()];
+      if (!is_visible(resource)) continue;
+      const auto color = render.colors.empty() ? 0xffffffu : render.colors[seed % render.colors.size()];
+      const auto transform = part_matrix_multiply(pose, part_pose_matrix(render.pose));
+      auto& render_cell = cells[floor_cell(prop_cell(transform[12]), prop_cell(transform[14]))];
+      render_cell.props.push_back({resource, transform, color});
+      render_cell.props.back().dormant = dormant_index;
+      used_resources.insert(resource);
+      ++props;
+    }
+  }
+  props_map.resources.assign(used_resources.begin(), used_resources.end());
+  preload_ground_meshes(props_map.resources);
+  for (auto& [key, cell] : cells) {
+    std::array<float, 3> lower, upper;
+    lower.fill(std::numeric_limits<float>::infinity());
+    upper.fill(-std::numeric_limits<float>::infinity());
+    std::erase_if(cell.props, [](const GroundProp& prop) { return !geometry(prop.render_id); });
+    for (uint32_t index = 0; index < cell.props.size(); ++index)
+      if (cell.props[index].dormant >= 0)
+        props_map.dormant[static_cast<size_t>(cell.props[index].dormant)].props.push_back(
+            {&cell, index});
+    for (auto& prop : cell.props) {
+      const auto mesh = geometry(prop.render_id);
+      std::array<float, 3> center{}, half{};
+      for (int axis = 0; axis < 3; ++axis) {
+        center[axis] = (mesh->info.bbox_min[axis] + mesh->info.bbox_max[axis]) * mesh->position_scale * .5f;
+        half[axis] = (mesh->info.bbox_max[axis] - mesh->info.bbox_min[axis]) * mesh->position_scale * .5f;
+      }
+      prop.center = transform_point(prop.pose, center);
+      prop.radius = std::hypot(half[0], half[1], half[2]);
+      for (int axis = 0; axis < 3; ++axis) {
+        lower[axis] = std::min(lower[axis], prop.center[axis] - prop.radius);
+        upper[axis] = std::max(upper[axis], prop.center[axis] + prop.radius);
+      }
+    }
+    if (cell.props.empty()) continue;
+    for (int axis = 0; axis < 3; ++axis) cell.center[axis] = (lower[axis] + upper[axis]) * .5f;
+    cell.radius = .5f * std::hypot(upper[0] - lower[0], upper[1] - lower[1], upper[2] - lower[2]);
+  }
+  std::unordered_set<uint32_t> batchable;
+  for (const auto id : props_map.resources) {
+    const auto mesh = geometry(id);
+    if (mesh && prop_mesh_batchable(*mesh)) batchable.insert(id);
+  }
+  std::vector<GroundPropCell*> jobs;
+  jobs.reserve(cells.size());
+  for (auto& [key, cell] : cells)
+    if (!cell.props.empty()) jobs.push_back(&cell);
+  std::atomic_size_t next{0};
+  const auto group = [&] {
+    for (size_t job = next.fetch_add(1); job < jobs.size(); job = next.fetch_add(1))
+      build_prop_batches(*jobs[job], batchable);
+  };
+  {
+    std::vector<std::jthread> workers;
+    const auto count = std::min<size_t>({jobs.size(), 4u,
+        std::max<size_t>(1u, std::thread::hardware_concurrency())});
+    try {
+      for (size_t i = 1; i < count; ++i) workers.emplace_back(group);
+    } catch (const std::system_error&) {
+    }
+    group();
+  }
+  std::erase_if(cells, [](const auto& entry) { return entry.second.props.empty(); });
+  merge_static_meshes(props_map.collision_meshes);
+  if (!props_map.collision_meshes.empty() || props_map.collision_shapes.size()) {
+    ++g_floor_revision;
+    g_floor_prepared = false;
+  }
+  std::printf("[scene] ground props 0x%x placements=%zu renders=%zu "
+              "collisionMeshes=%zu collisionShapes=%zu\n",
+              map.render_id, map.placements.size(), props,
+              props_map.collision_meshes.size(), props_map.collision_shapes.size());
+}
+
+bool invert_columns(const float *m, float inv[9]) {
+  const float a00 = m[0], a10 = m[1], a20 = m[2];
+  const float a01 = m[4], a11 = m[5], a21 = m[6];
+  const float a02 = m[8], a12 = m[9], a22 = m[10];
+  const float det = a00 * (a11 * a22 - a21 * a12) -
+                    a01 * (a10 * a22 - a20 * a12) +
+                    a02 * (a10 * a21 - a20 * a11);
+  if (std::fabs(det) < 1e-12f)
+    return false;
+  const float id = 1.f / det;
+  inv[0] = (a11 * a22 - a21 * a12) * id;
+  inv[1] = (a20 * a12 - a10 * a22) * id;
+  inv[2] = (a10 * a21 - a20 * a11) * id;
+  inv[3] = (a21 * a02 - a01 * a22) * id;
+  inv[4] = (a00 * a22 - a20 * a02) * id;
+  inv[5] = (a20 * a01 - a00 * a21) * id;
+  inv[6] = (a01 * a12 - a11 * a02) * id;
+  inv[7] = (a10 * a02 - a00 * a12) * id;
+  inv[8] = (a00 * a11 - a10 * a01) * id;
+  return true;
+}
+
+bool ray_triangle(const float o[3], const float d[3], const float a[3],
+                  const float b[3], const float c[3], float &t) {
+  const float e1[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+  const float e2[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+  const float p[3] = {d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2],
+                      d[0] * e2[1] - d[1] * e2[0]};
+  const float det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+  if (std::fabs(det) < 1e-8f)
+    return false;
+  const float inv = 1.f / det;
+  const float s[3] = {o[0] - a[0], o[1] - a[1], o[2] - a[2]};
+  const float u = (s[0] * p[0] + s[1] * p[1] + s[2] * p[2]) * inv;
+  if (u < 0.f || u > 1.f)
+    return false;
+  const float q[3] = {s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2],
+                      s[0] * e1[1] - s[1] * e1[0]};
+  const float v = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) * inv;
+  if (v < 0.f || u + v > 1.f)
+    return false;
+  t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
+  return t > 1e-4f;
+}
+
+bool scene_instances_pointer_ray(int px, int py, int width, int height,
+                                 float origin[3], float direction[3]) {
+  if (width <= 0 || height <= 0) return false;
+  float at[3], fov = 60.f, zn, zf;
+  if (!gameref_world_camera(origin, at, &fov, &zn, &zf)) return false;
+  float fx = at[0] - origin[0], fy = at[1] - origin[1], fz = at[2] - origin[2];
+  const float fl = std::sqrt(fx*fx + fy*fy + fz*fz);
+  if (fl < 1e-4f) return false;
+  fx /= fl; fy /= fl; fz /= fl;
+  float rx = -fz, rz = fx;
+  const float rl = std::sqrt(rx*rx + rz*rz);
+  if (rl < 1e-4f) { rx = 1.f; rz = 0.f; }
+  else { rx /= rl; rz /= rl; }
+  const float tangent = std::tan(fov * 3.14159265f / 360.f);
+  const float x = (2.f*px/width - 1.f) * tangent * width/height;
+  const float y = (1.f - 2.f*py/height) * tangent;
+  direction[0] = fx + rx*x - rz*fy*y;
+  direction[1] = fy + (rz*fx - rx*fz)*y;
+  direction[2] = fz + rz*x + rx*fy*y;
+  const float dl = std::sqrt(direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2]);
+  if (dl < 1e-6f) return false;
+  for (int i = 0; i < 3; ++i) direction[i] /= dl;
+  return true;
+}
+void *scene_instances_pick(const float origin[3], const float direction[3], float* point) {
+  if (!origin || !direction)
+    return nullptr;
+  float best = 1e9f;
+  void *hit = nullptr;
+  for (const SceneInstance &instance : scene_instances_collect_root(g_world)) {
+    if (instance.sky || !instance.geometry || !instance.key)
+      continue;
+    float matrix[16];
+    float inv[9];
+    if (!scene_instances_script_matrix(instance.key, matrix) ||
+        !invert_columns(matrix, inv))
+      continue;
+    const float scale = instance.geometry->position_scale;
+    const ScxMeshInfo &info = instance.geometry->info;
+    const float lx = origin[0] - matrix[12];
+    const float ly = origin[1] - matrix[13];
+    const float lz = origin[2] - matrix[14];
+    const float o[3] = {inv[0] * lx + inv[3] * ly + inv[6] * lz,
+                        inv[1] * lx + inv[4] * ly + inv[7] * lz,
+                        inv[2] * lx + inv[5] * ly + inv[8] * lz};
+    const float d[3] = {
+        inv[0] * direction[0] + inv[3] * direction[1] + inv[6] * direction[2],
+        inv[1] * direction[0] + inv[4] * direction[1] + inv[7] * direction[2],
+        inv[2] * direction[0] + inv[5] * direction[1] + inv[8] * direction[2]};
+    float tmin = -1e9f, tmax = 1e9f;
+    bool miss = false;
+    for (int axis = 0; axis < 3 && !miss; ++axis) {
+      float lo = info.bbox_min[axis] * scale - 0.015f;
+      float hi = info.bbox_max[axis] * scale + 0.015f;
+      if (lo > hi)
+        std::swap(lo, hi);
+      if (std::fabs(d[axis]) < 1e-8f) {
+        miss = o[axis] < lo || o[axis] > hi;
+        continue;
+      }
+      float t1 = (lo - o[axis]) / d[axis];
+      float t2 = (hi - o[axis]) / d[axis];
+      if (t1 > t2)
+        std::swap(t1, t2);
+      tmin = std::max(tmin, t1);
+      tmax = std::min(tmax, t2);
+      miss = tmin > tmax;
+    }
+    // The chassis box contains the doors and the wheels. Rejecting on the
+    // box entry kept every child behind the body. The surface decides.
+    if (miss || tmax < 0.f || tmin >= best)
+      continue;
+    const auto &pos = instance.geometry->positions;
+    const auto &idx = instance.geometry->indices;
+    bool triangle = false;
+    for (size_t i = 0; i + 2 < idx.size(); i += 3) {
+      float v[3][3];
+      bool bad = false;
+      for (int k = 0; k < 3; ++k) {
+        const size_t vi = static_cast<size_t>(idx[i + k]) * 3;
+        if (vi + 2 >= pos.size()) {
+          bad = true;
+          break;
+        }
+        v[k][0] = pos[vi] * scale;
+        v[k][1] = pos[vi + 1] * scale;
+        v[k][2] = pos[vi + 2] * scale;
+      }
+      float t = 0.f;
+      if (!bad && ray_triangle(o, d, v[0], v[1], v[2], t) && t < best) {
+        best = t;
+        hit = instance.key;
+        triangle = true;
+      }
+    }
+    if (!triangle && idx.empty() && tmin >= 0.f && tmin < best) {
+      best = tmin;
+      hit = instance.key;
+    }
+  }
+  if (hit && point)
+    for (int i = 0; i < 3; ++i) point[i] = origin[i] + direction[i] * best;
+  return hit;
+}
+
+void scene_visit_gc_roots(const GcRootVisitor& visit) {
+  visit(g_world); visit(g_sky);
+}
+} // namespace slrr

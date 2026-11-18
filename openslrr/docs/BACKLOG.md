@@ -1,0 +1,191 @@
+# OpenSLRR backlog / known issues
+
+Working bug tracker. Each entry: symptom, evidence, suspect, status.
+Move fixed items to the bottom with the fixing commit.
+
+## Performance
+
+### PERF-1 Streaming hitch: object/texture upload stalls (fixed)
+- **Symptom:** fps drops to 40-50 in specific city places (always the same
+  spots). Frame 20-23 ms while GPU shows 6.7-7.5 ms total; flush and present
+  both wait. `batch_instances` changes right around the drop (props streaming
+  in/out).
+- **Fix (dad51aa):** frame-budgeted GPU uploads in
+  `LibBgfxBackend::sync_instances` + `flush_pending_uploads()`
+  (8 MB geometry / 6 textures per frame; `pending_uploads_` queue);
+  `load_part_textures` now returns int and participates in the budget.
+  Bench: avg 7.56 → 1.82 ms, p95 22 → 2.87 ms.
+- **Status:** fixed. Objects appear one frame later (user approved).
+
+### PERF-5 Windowed present pacing: beats / freezes / judder (fixed)
+- **Symptom history:** vsync-on frames alternated 13.3 / 26-33 ms with flat
+  GPU work (DWM composition "beats"); later, with the two-buffer chain,
+  vsync-on Present(1) alternated one/two composition periods
+  (13.3/26.6 ms) — perceived as freezes at 75 fps; vsync off uncapped
+  juddered because the present queue drains at the composition rate
+  (11% of frames blocked 16-30 ms).
+- **Root cause:** two back buffers make the flip queue empty and refill
+  every frame, so Present(1) sometimes waits a second composition period.
+- **Fix (f986f51):** three back buffers (`numBackBuffers = 3`). VSync on:
+  p99 27.4 → 13.5 ms, frames >20 ms 2% → 0.1%. VSync off uncapped:
+  blocks 11% → 1.3% (remaining blocks are DWM composed-flip drain; the
+  engine-level cure is independent flip / exclusive fullscreen — this bgfx
+  has no SetFullscreenState).
+- **Also:** the per-view GPU profiler (`BGFX_DEBUG_PROFILER`) cost ~40% fps
+  (300 vs 500+ uncapped); now behind `SLRR_GPU_STATS=1`.
+- **Status:** fixed with vsync on (user-tested smooth). VSync off keeps
+  ~1.3% composition-paced blocks; `--fps-cap` remains for benches.
+
+### PERF-6 JVM GC pauses (major part of the old "spikes")
+- **Symptom:** rare 27-39 ms full-stop hitches, place-correlated (allocation
+  pressure). The old vsync stutter masked them.
+- **Root cause 1 (fixed):** the finalizer scan ran an inherited-method
+  search per dead object (~8k/cycle). Cached per class -> GC is now 7-9 ms.
+- **Root cause 2 (fixed):** ~8k temporary objects per cycle are
+  Vector3/Ypr churn from the wheel/camera update paths (PhysicsRef.getOri /
+  getPos / getAngVel allocate fresh each call). The collector now pools
+  those two field-bag classes (recycled on allocation, bounded 8192/class),
+  which covers ~99.9% of the churn.
+- **Also:** threshold counts all heap insertions (fresh + pooled pops) and
+  scales with the live set, the heap registry is maintained incrementally,
+  dead objects are destroyed gradually (256/frame), state resets happen at
+  pop time, not in the pause.
+- **Status:** fixed for now: pauses 27-39 ms -> ~4.5 ms every ~4.4 s. If
+  still perceptible, the next step is a proper nursery (generational GC).
+
+### PERF-2 3-second stall when the city loads
+- **Symptom:** one frame takes 1931-4304 ms around city entry.
+- **Evidence:** `spike_hunt.csv` seconds 2-3, 7.
+- **Suspect:** synchronous rpk/SCX load batch (city pack + garage preloads).
+- **Status:** open (user said observe, don't fix yet). (M3.)
+
+### PERF-3 Backbuffer MSAA cost at high resolution
+- **Symptom:** MSAA 2× costs ~3 ms/frame average at 1440p and roughly doubles
+  the frame-time tail (p95 22 → 12 ms when off). A/B with
+  `SLRR_NO_MSAA=1`: `bench_city.csv` vs `bench_city_nomsaa.csv`.
+- **Cause:** our MSAA is **not an in-engine MSAA**. It is driver-level
+  backbuffer MSAA (`BGFX_RESET_MSAA_*` in `LibBgfxBackend`): the driver
+  resolves the whole swap chain every present, and the engine cannot pace or
+  optimize that. In-engine MSAA (render into an MSAA target with an
+  explicit, paced resolve) is the "real" MSAA and is not implemented; the
+  scene-target scaffolding exists in `ensure_scene_target` but is dead code.
+- **Resolved state:** after the upload/GC/vsync fixes the original x2 cost
+  estimate proved to be an artifact of queue backpressure; x4 is now the
+  default (user-tested: 350-500 fps uncapped, no visible cost on the RTX
+  4070 Ti at 1440p). `SLRR_MSAA=0..3` env switch for experiments.
+- **Status:** closed as a perf issue. The in-engine MSAA scaffold (GFX-1)
+  remains open as a quality/flexibility item.
+
+### PERF-4 Bench-mode measurement quirks
+- **Symptom:** `--bench-drive` with `--no-vsync` advances the simulation
+  1/60 s per frame; at 400+ fps the run time-warps ~7× (the car "drove like a
+  rocket" and the 90 s drive took ~13 s wall clock). Live `--perf-log`
+  sessions with vsync off also degrade the play experience.
+- **Fix direction:** cap fps during bench runs so sim time == wall time, or
+  measure with per-frame CSV.
+- **Status:** open. Bench A/B env switches: `SLRR_NO_MSAA`,
+  `SLRR_NO_REFLECTIONS`, `SLRR_NO_VOLUMETRIC` (all `=1`), see `boot.cpp`.
+
+## Rendering
+
+### GFX-1 Present program fails to link since the first build (fixed)
+- **Symptom:** `[bgfx] program present failed to link` and `hiz failed to
+  link` on every start (all logs, old and new).
+- **Impact:** the offscreen scene target + present pass (`ensure_scene_target`,
+  `present_scene`, HiZ pyramid) can never run. Blocks ALL post-processing:
+  FXAA, bloom, future PBR post passes.
+- **Root cause (fixed, e353131):** this bgfx version requires
+  `vs.m_hashOut == fs.m_hashIn` in createProgram - the fragment shader must
+  declare every varying the vertex shader outputs. `fs_present`/`fs_hiz`
+  declared only `v_texcoord0`. Declaring the full vs_mesh varying list fixed
+  the link.
+- **Status:** fixed. Unlocks the scene target for HDR/tonemap (PBR plan
+  step 2). HiZ pyramid still unconnected (views 110+, dead code).
+
+### GFX-2 Alpha textures in the city partially broken
+- **Symptom:** alpha works on trees but not on bridges/buildings (alpha parts
+  render opaque or invisible).
+- **Suspect:** the alpha-test path (`u_alpha_test_`) vs the blend path for
+  static world groups; city meshes may use a different material flag than
+  vegetation.
+- **Status:** open.
+
+### GFX-3 Jagged edges beyond alpha-test
+- **Symptom:** alpha-test edges (trees/fences) stair-step at any MSAA level
+  (by design), and the user also reports stair-stepping on car body
+  geometry edges at MSAA x4 - which MSAA should smooth.
+- **Geometry case (fixed, 26f8fb1):** the scene-target MSAA never engaged -
+  the RT_MSAA_* flags are 64-bit but the level array was declared uint32_t,
+  truncating every entry to zero. With uint64_t the x8/off screenshots
+  differ on exactly the geometric edges (pixel diff verified). This also
+  retroactively explains the tiny x2-vs-off perf delta.
+- **Alpha case (open):** alpha-tested edges (trees/fences/foliage) still
+  stair-step at any MSAA level, and leaves look thinner under MSAA (resolve
+  fade). Fix direction: alpha-to-coverage or manual alpha supersampling in
+  the shader.
+- **Status:** geometry fixed; alpha case open (low priority).
+
+## Driving
+
+### DRV-1 Poor steering at speed
+- **Symptom:** the car barely turns at high speed ("поворачиваемость говно").
+- **Suspect (user hypothesis):** steering help blends the steering angle and
+  hurts turning at speed — but with it disabled the car is genuinely hard to
+  control, so a plain removal is not the fix. Need to reread the stock
+  steering-help/steer-lock logic (Java script side) and reproduce its exact
+  behaviour instead of guessing.
+- **Status:** open.
+
+### DRV-2 Bench drive has no route
+- **Symptom:** `--bench-drive` holds full throttle straight; the car crashes
+  into a tree minutes into the run, so long runs are not reproducible.
+- **Fix direction:** follow traffic splines (Navigator plotRoute paths) or
+  let a human drive while a passive logger records.
+- **Status:** open. (M3/M4.)
+
+### DRV-3 Handbrake barely locks the wheels
+- **Symptom:** the handbrake has minimal effect; wheels keep rolling.
+- **Suspect:** handbrake brake-torque blend in the wheel model, or the
+  handbrake input not reaching the rear wheels.
+- **Status:** open.
+
+### DRV-4 Wheel rotation changes on part attach/detach; sky shifts
+- **Symptom:** removing or attaching any part in the garage rotates the
+  wheels (from straight) and visibly shifts the sky position. Reproducible
+  on both attach and detach.
+- **Suspect:** the attach/detach path runs a physics reset/step with a stale
+  chassis transform (or rebuilds the vehicle body and re-derives the wheel
+  steer angle from a dirty state).
+- **Status:** open.
+
+### DRV-5 Wheel rotation changes on clutch toggle in test mode
+- **Symptom:** switching the clutch on/off in the garage test mode also
+  rotates the wheels. Likely the same root cause as DRV-4.
+- **Status:** open.
+
+### DRV-6 Camera does not auto-return while driving
+- **Symptom:** after rotating the camera with the mouse while driving in the
+  city, the camera stays where the user left it. In the original game it
+  drifts back behind the car after ~2 s.
+- **Suspect:** the auto-return (centering) logic in the chase-camera path
+  was not carried over from stock; look for a "return to car" timer/blend in
+  the stock camera script.
+- **Status:** open.
+
+## UI
+
+### UI-3 Part condition icons change all at once
+- **Symptom:** all part-condition icons change together even when a single
+  part is damaged. Icons for missing parts must turn black but don't.
+- **Status:** open.
+
+### UI-4 Purchased parts don't land in the inventory (resolved)
+- **Symptom:** parts bought in the shop didn't appear in the inventory.
+- **Resolved state:** user confirmed parts DO arrive when buying in career;
+  the only miss was the rare quick-start spawn (`--spawn-car`) path, which is
+  not a shop/career flow. Removed from the tracker.
+
+## Fixed
+
+- PERF-1 dad51aa, PERF-5 f986f51 (+ --fps-cap 6695999), PERF-6 00f4c6c/a2de730,
+  GFX-1 e353131, GFX-3 geometry 26f8fb1.

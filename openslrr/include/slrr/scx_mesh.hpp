@@ -1,0 +1,78 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace slrr {
+
+// INVO SCX — layout from nonamesex/io_invo_scx (imhex/scx.hexpat)
+// + SLRR_rev/docs/formats/scx.md.
+struct ScxMeshInfo {
+  bool ok = false;
+  uint32_t version = 0;
+  int32_t groups = 0;
+  int32_t vertices = 0;
+  int32_t triangles = 0;
+  float bbox_min[3] = {0, 0, 0};
+  float bbox_max[3] = {0, 0, 0};
+  std::string path;
+  std::string error;
+};
+
+struct ScxTextureMap {
+  uint32_t channel = 0, tiling = 0;
+  float scale_u = 1, scale_v = 1, offset_u = 0, offset_v = 0;
+};
+struct ScxGroup {
+  uint32_t index_start = 0;
+  uint32_t index_count = 0;
+  uint16_t texture_index = 0xffff;
+  uint16_t mix_index = 0xffff, reflection_index = 0xffff;
+  // Baked light (v4 property 0x06000007) and legacy illumination.
+  uint16_t lightmap_index = 0xffff, illumination_index = 0xffff;
+  bool mix_vertex_color = false;
+  uint32_t material_type = 0;
+  float reflection_strength = .5f;
+  ScxTextureMap base_map, mix_map, reflection_map, lightmap_map, illumination_map;
+  uint32_t material_flags = 0;  // bit0 = alphaOpacity (scx.md)
+  uint8_t alpha_reference = 0x38;
+  float diffuse[4] = {0.6f, 0.65f, 0.7f, 1.f};
+  // v4 color 1 and 0x01000000. Paint and chrome use a tight power (~21),
+  // rubber a wide one (~2.7). Zero specular adds nothing.
+  float specular[3] = {0.f, 0.f, 0.f};
+  float shininess = 1.f;
+  std::string name;
+};
+
+// CPU mesh for GPU upload. Positions/normals/uv in original SCX units
+// (CFG world uses ×0.01 → meters — apply at draw).
+struct ScxGeometry {
+  ScxMeshInfo info;
+  bool ground_polygons = false;
+  std::vector<float> positions;  // xyz * N
+  std::vector<float> normals;    // xyz * N
+  std::vector<float> uvs;        // uv * N (UV1)
+  std::vector<float> uv2, uv3;
+  std::vector<uint32_t> vertex_colors; // RPK POLY A8R8G8B8
+  std::vector<uint32_t> indices; // triangles * 3
+  // Four influences per vertex, parallel to positions / 3. Empty when the
+  // mesh has no bone palette. Bone ids are indices into the skeleton the
+  // render descriptor names. A zero weight leaves that influence unused.
+  std::vector<uint16_t> skin_bones;
+  std::vector<float> skin_weights;
+  std::vector<ScxGroup> groups;
+  // RPK `texture` property order (or .tex). Index == ScxGroup::texture_index.
+  std::vector<std::string> textures;
+  // SCX positions are centimetres. POLY / script positions are already metres.
+  float position_scale = 0.01f;
+  // Bumped when skinned positions change so the GPU buffer can be replaced
+  // without treating the mesh as a new object.
+  uint32_t revision = 0;
+};
+
+ScxMeshInfo parse_scx_file(const std::string& path);
+ScxGeometry load_scx_geometry(const std::string& path);
+void scx_resolve_baked_lightmaps(ScxGeometry& geometry);
+
+}  // namespace slrr
