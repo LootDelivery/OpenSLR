@@ -2265,7 +2265,7 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
       bgfx::setViewClear(kPreviewClear, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x00000000, 0.f);
       bgfx::touch(kPreviewClear);
     }
-    for(const auto&p:previews_) {
+    for(auto&p:previews_) {
       if(id>=64)break;
       int x=std::clamp(static_cast<int>(p.viewport.vp_x*width_),0,width_-1),y=std::clamp(static_cast<int>(p.viewport.vp_y*height_),0,height_-1);
       int w=std::clamp(static_cast<int>(p.viewport.vp_w*width_),1,width_-x),h=std::clamp(static_cast<int>(p.viewport.vp_h*height_),1,height_-y);
@@ -2309,15 +2309,32 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         // Just a pivot spin for now, no orbit and no drag.
         const bool hover = mouse_x_ >= x && mouse_x_ < x + w &&
                            mouse_y_ >= y && mouse_y_ < y + h;
-        if (hover) preview_spin_ += 0.008f;
+        if (hover) p.spin += 0.008f;
+        // Rotate about the slot's own centre, not the world origin. A part on
+        // its own sits near the origin and looked right, but a car in assembly
+        // came apart, each part swinging around the world.
+        float pivot[3] = {0.f, 0.f, 0.f};
+        for (const auto& i : p.instances) {
+          pivot[0] += i.transform[12];
+          pivot[1] += i.transform[13];
+          pivot[2] += i.transform[14];
+        }
+        if (!p.instances.empty()) {
+          const float inv = 1.f / static_cast<float>(p.instances.size());
+          pivot[0] *= inv; pivot[1] *= inv; pivot[2] *= inv;
+        }
         for(const auto&i:p.instances){
-          if (!hover || preview_spin_ == 0.f) {
+          if (p.spin == 0.f) {
             draw_instance(id,i,i.transform.data(),true,pass,p.full_materials);
             continue;
           }
-          float rot[16], m[16];
-          bx::mtxRotateY(rot, preview_spin_);
-          bx::mtxMul(m, rot, i.transform.data());
+          float to_pivot[16], spin[16], back[16], about[16], m[16];
+          bx::mtxTranslate(to_pivot, -pivot[0], -pivot[1], -pivot[2]);
+          bx::mtxRotateY(spin, p.spin);
+          bx::mtxTranslate(back, pivot[0], pivot[1], pivot[2]);
+          bx::mtxMul(about, to_pivot, spin);
+          bx::mtxMul(about, about, back);
+          bx::mtxMul(m, about, i.transform.data());
           SceneInstance spun = i;
           std::memcpy(spun.transform.data(), m, sizeof(float) * 16);
           draw_instance(id,spun,spun.transform.data(),true,pass,p.full_materials);

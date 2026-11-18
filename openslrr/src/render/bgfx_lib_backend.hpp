@@ -156,7 +156,11 @@ class LibBgfxBackend final : public IRenderBackend {
     // Inset previews use a deliberately simplified material (no lights, no
     // glass, trimmed settings) because they are tiny. The catalogue shows a
     // part large enough to judge, so it asks for the full material instead.
-    bool full_materials = false; };
+    bool full_materials = false;
+    // Accumulated pivot spin for this slot. Kept per preview so it survives the
+    // cursor leaving, and applied to the whole slot (a car in assembly turns as
+    // one, not part by part).
+    float spin = 0.f; };
   // Projection depends on scene geometry, never on the viewing camera.
   // Keep parked cars out of the per-vertex floor queries on subsequent frames.
   struct ProjectedShadow {
