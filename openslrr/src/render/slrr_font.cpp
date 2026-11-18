@@ -753,6 +753,12 @@ float slrr_font_measure_px(void* key, const char* text) {
         w += g->adv_px;
       else if (cp == ' ')
         w += static_cast<float>(font->px_height) * 0.35f;
+      else
+        // A glyph that has not been rasterized yet contributes nothing, so the
+        // first measurement of a string comes out too narrow and the tooltip
+        // plate is built the wrong size -- wrong only on that first showing.
+        // Fall back to a conservative estimate instead of measuring zero.
+        w += static_cast<float>(font->px_height) * 0.6f;
     }
     return w;
   }
