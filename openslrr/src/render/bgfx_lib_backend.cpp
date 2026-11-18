@@ -2332,8 +2332,8 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         // Rotate about the slot's own centre, not the world origin.
         float pivot[3] = {0.f, 0.f, 0.f};
         float spin = preview_spins_[p.camera.key];
-        if (hover) spin += 0.008f;
-        preview_spins_[p.camera.key] = spin;
+        if (hover && pass == 0) spin += 0.008f;
+        if (pass == 0) preview_spins_[p.camera.key] = spin;
         {
           auto& stored = preview_pivots_[p.camera.key];
           // An explicit "computed" flag, not a test for zero: a car parked near
@@ -2366,7 +2366,10 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
           bx::mtxMul(about, to_pivot, spin_mtx);
           bx::mtxMul(about, about, back);
           bx::mtxMul(turned, view, about);
-          std::memcpy(view, turned, sizeof(view));
+          // setViewTransform was already called with the unturned view, so
+          // re-apply it here. Do not write back into view: the second pass
+          // would turn it twice.
+          bgfx::setViewTransform(id, turned, proj);
         }
         for(const auto&i:p.instances)
           draw_instance(id,i,i.transform.data(),true,pass,p.full_materials);
