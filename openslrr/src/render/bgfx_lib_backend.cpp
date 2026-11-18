@@ -1209,6 +1209,11 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     bgfx::setViewFrameBuffer(kWorldView, scene_rt_active_ ? scene_fb_ : no_fb);
     bgfx::setViewFrameBuffer(kFmvLayer, scene_rt_active_ ? scene_fb_ : no_fb);
     bgfx::setViewFrameBuffer(kOsdUnder, scene_rt_active_ ? scene_fb_ : no_fb);
+    // The catalogue plate is display-referred interface, not scene. Drawing it
+    // into the HDR target put it through exposure and ACES, so the UI changed
+    // brightness with the scene. It goes straight to the window now, before the
+    // preview composite and under the rest of the 2D UI.
+    bgfx::setViewFrameBuffer(kPlateView, no_fb);
     if (fmv_bg) {
       bgfx::setViewRect(kWorldView, 0, 0, ww, hh);
       bgfx::setViewClear(kWorldView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,

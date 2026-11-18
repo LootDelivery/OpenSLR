@@ -774,6 +774,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       bgfx::touch(view);
     };
     setup_osd(kOsdUnder);
+    setup_osd(kPlateView);
     setup_osd(kOsdView);
     osd_view_ = kOsdUnder;
 
@@ -898,11 +899,15 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
           continue;
         // A modal dialog (BUY PART) overlaps the catalog previews. Sending
         // that plate to view 2 put it under the parts and under their names.
-        osd_view_ = (!osd_owner_modal(w.owner) &&
-                     (w.background || layer == front_window_layer ||
-                      plate_behind_preview(w)))
-                        ? kOsdUnder
-                        : kOsdView;
+        // A plate that sits behind a part preview is display-referred
+        // interface and goes to the window, not through the HDR scene.
+        osd_view_ = osd_owner_modal(w.owner)
+                        ? kOsdView
+                        : plate_behind_preview(w)
+                              ? kPlateView
+                              : (w.background || layer == front_window_layer)
+                                    ? kOsdUnder
+                                    : kOsdView;
         draw_osd_quad(w);
       }
       osd_view_ = kOsdView;
