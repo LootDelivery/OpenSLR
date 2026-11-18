@@ -246,7 +246,7 @@ class LibBgfxBackend final : public IRenderBackend {
 #ifdef _WIN32
   static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
-  bgfx::TextureHandle tex_for_osd_icon(const std::string& path);
+  bgfx::TextureHandle tex_for_osd_icon(const std::string& path, bool srgb = false);
 
 
   void draw_osd_quad(const OsdWidget& w, float cr = 1.f, float cg = 1.f,

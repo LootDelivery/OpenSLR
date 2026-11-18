@@ -27,7 +27,7 @@
 namespace slrr {
 
 #ifdef _WIN32
-  bgfx::TextureHandle LibBgfxBackend::tex_for_osd_icon(const std::string& path)
+  bgfx::TextureHandle LibBgfxBackend::tex_for_osd_icon(const std::string& path, bool srgb)
 {
     if (path.empty()) return white_tex_;
     auto it = osd_tex_.find(path);
@@ -50,13 +50,11 @@ namespace slrr {
         th = bgfx::createTexture2D(
             static_cast<uint16_t>(img.width),
             static_cast<uint16_t>(img.height), false, 1, fmt,
-            // These are colour images: the catalogue plate, menu art, icons.
-            // They are gamma-encoded on disk, so without the sRGB flag they
-            // arrive as if linear and the sRGB backbuffer then encodes them a
-            // second time -- which is why the catalogue read washed out and
-            // paler than the original. Masks and glyphs are not loaded here
-            // (tex_for_font handles those) and must stay linear.
-            BGFX_TEXTURE_SRGB |
+            // Only UI callers ask for sRGB. This loader is shared with the
+            // scene (flares, paint, material textures), and those are already
+            // decoded elsewhere -- so a blanket flag here would double-decode
+            // them.
+            (srgb ? BGFX_TEXTURE_SRGB : 0) |
             BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, mem);
       }
     }
@@ -112,7 +110,7 @@ namespace slrr {
     bgfx::setTransform(mtx);
     bgfx::setVertexBuffer(0, &tvb);
     bgfx::setIndexBuffer(&tib);
-    bgfx::setTexture(0, s_tex_, tex_for_osd_icon(w.icon_path));
+    bgfx::setTexture(0, s_tex_, tex_for_osd_icon(w.icon_path, true));
     bind_baked_light(nullptr, nullptr);
     // Icons: cutout low-alpha (kills green JPEG plate).
     // OpeningPic.ptx is a JPEG with no alpha. Blending with tex.a hides it
