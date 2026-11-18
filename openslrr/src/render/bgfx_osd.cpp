@@ -899,7 +899,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         // A modal dialog (BUY PART) overlaps the catalog previews. Sending
         // that plate to view 2 put it under the parts and under their names.
         osd_view_ = (!osd_owner_modal(w.owner) &&
-                     (layer == front_window_layer || plate_behind_preview(w)))
+                     (w.background || layer == front_window_layer ||
+                      plate_behind_preview(w)))
                         ? kOsdUnder
                         : kOsdView;
         {

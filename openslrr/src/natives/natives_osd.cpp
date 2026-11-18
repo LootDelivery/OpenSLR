@@ -603,7 +603,9 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         const float px = slrr_font_measure_px(
             font, slrr_loc_translate(str ? str->str.c_str() : ""));
         const float screen = video_axis("video_x", osd_framebuffer_width(), 800);
-        return Value::make_float(2.f * px / (screen * vp_span(vp, "vp_w")));
+        // Normalise by the framebuffer, not by the viewport, same as getHeight.
+        (void)vp;
+        return Value::make_float(2.f * px / screen);
       });
   jvm.natives().register_method(
       "java.render.Text", "getHeight",
