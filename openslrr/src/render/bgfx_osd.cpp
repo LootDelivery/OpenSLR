@@ -908,7 +908,12 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         // extent it will cover the part previews. Log the first plates seen so
         // first and second showing can be compared.
         static int seen = 0;
-        if (seen < 24) {
+        // The garage paints a full-screen plate and a bottom bar every frame,
+        // which drowned the log before the tooltip ever appeared. Skip those
+        // two known shapes and log everything else.
+        const bool known = (w.half_w >= 0.99f && w.half_h >= 0.99f) ||
+                           (w.half_w >= 0.99f && w.half_h <= 0.06f);
+        if (!known && seen < 60) {
           ++seen;
           // The launcher detaches the console, so stdout is lost. Write to a
           // file the way the run actually happens.
