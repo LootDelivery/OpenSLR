@@ -239,7 +239,12 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
             host_enhanced_graphics().dynamic_reflections && !lens &&
             (generated || painted || chrome || bare_cap || glass || color_mix_env ||
              group.reflection_index != 0xffff);
-        const bool live_env = enhanced_env && reflection_ready_;
+        // reflection_ready_ is false wherever no capture is currently running,
+        // the catalogue included -- update_reflections clears it every frame
+        // there. So the environment dropped to its fallback and chrome and
+        // glass showed none. What matters here is that a completed capture is
+        // available, which is exactly reflection_env_valid_.
+        const bool live_env = enhanced_env && reflection_env_valid_;
         const float kind = glass ? 3.f : color_mix_env ? 5.f : color_mix ? 4.f
                                 : (chrome || bare_cap) ? 2.f : painted ? 1.f : 0.f;
         const bool has_reflection = enhanced_env || env.idx != white_tex_.idx;
