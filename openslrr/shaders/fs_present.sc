@@ -39,5 +39,7 @@ void main()
 	// composite). The world present writes the window backbuffer, whose alpha
 	// the desktop compositor uses, so it must stay opaque or the whole image
 	// reads slightly darker.
-	gl_FragColor = vec4(color, u_presentParams.z > 0.5 ? src.a : 1.0);
+	gl_FragColor = u_presentParams.w > 0.5
+		? vec4(src.a, src.a, src.a, 1.0)
+		: vec4(color, u_presentParams.z > 0.5 ? src.a : 1.0);
 }

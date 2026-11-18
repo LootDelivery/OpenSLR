@@ -1205,7 +1205,10 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       return e && e[0] == '1';
     }();
     scene_rt_active_ = !no_hdr && ensure_scene_target(ww, hh);
-    const bgfx::FrameBufferHandle no_fb{};
+    // BGFX_INVALID_HANDLE, not a default-constructed handle: {} zeroes the
+    // index, which is framebuffer 0 rather than the window. Binding that sent
+    // kPlateView's output into another target entirely and the plate vanished.
+    const bgfx::FrameBufferHandle no_fb = BGFX_INVALID_HANDLE;
     bgfx::setViewFrameBuffer(kWorldView, scene_rt_active_ ? scene_fb_ : no_fb);
     bgfx::setViewFrameBuffer(kFmvLayer, scene_rt_active_ ? scene_fb_ : no_fb);
     bgfx::setViewFrameBuffer(kOsdUnder, scene_rt_active_ ? scene_fb_ : no_fb);
@@ -1368,7 +1371,11 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       {
         // .z = 1: this pass blends by alpha, so it must pass the source alpha
         // through. The world present keeps .z = 0 and writes an opaque window.
-        const float pparams[4] = {debug_overlay_.render_options().exposure, 1.f, 1.f, 0.f};
+        // SLRR_SHOW_ALPHA=1 draws the preview composite's own alpha instead of
+        // its colour: white where the composite claims a pixel, black where it
+        // leaves the scene alone.
+        static const float show_alpha = std::getenv("SLRR_SHOW_ALPHA") ? 1.f : 0.f;
+        const float pparams[4] = {debug_overlay_.render_options().exposure, 1.f, 1.f, show_alpha};
         if (bgfx::isValid(u_present_params_)) bgfx::setUniform(u_present_params_, pparams);
       }
       draw_fullscreen(kPreviewPresent, present_program_, bgfx::getTexture(preview_fb_, 0), nullptr,
