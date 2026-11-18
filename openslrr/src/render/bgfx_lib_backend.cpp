@@ -2365,7 +2365,11 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
           bx::mtxTranslate(back, pivot[0], pivot[1], pivot[2]);
           bx::mtxMul(about, to_pivot, spin_mtx);
           bx::mtxMul(about, about, back);
-          bx::mtxMul(turned, view, about);
+          // bx vertices are row vectors: v * A * B applies A first. The slot
+          // has to turn in world space, before the view, so it is about * view.
+          // The other order (view * about) turned in camera space -- the camera
+          // spun about its own axis and the part did not.
+          bx::mtxMul(turned, about, view);
           // setViewTransform was already called with the unturned view, so
           // re-apply it here. Do not write back into view: the second pass
           // would turn it twice.
