@@ -36,6 +36,19 @@ namespace slrr {
     DdsImage img = load_texture_file(path);
     bgfx::TextureHandle th = BGFX_INVALID_HANDLE;
     if (img.ok) {
+      // The OSD blends premultiplied (ONE / INV_SRC_ALPHA). PNG and PTX arrive
+      // already multiplied; uncompressed DDS does not, and linear filtering on
+      // straight alpha fringes at every edge -- which is exactly where haloes
+      // come from. Multiply it here so the convention holds for every piece of
+      // interface art, without touching scene textures that share the loader.
+      if (srgb && img.format == DdsFormat::RGBA8) {
+        for (size_t i = 0; i + 3 < img.data.size(); i += 4) {
+          const uint8_t a = img.data[i + 3];
+          img.data[i + 0] = static_cast<uint8_t>((img.data[i + 0] * a + 127) / 255);
+          img.data[i + 1] = static_cast<uint8_t>((img.data[i + 1] * a + 127) / 255);
+          img.data[i + 2] = static_cast<uint8_t>((img.data[i + 2] * a + 127) / 255);
+        }
+      }
       bgfx::TextureFormat::Enum fmt = bgfx::TextureFormat::Unknown;
       if (img.format == DdsFormat::DXT1) fmt = bgfx::TextureFormat::BC1;
       else if (img.format == DdsFormat::DXT3) fmt = bgfx::TextureFormat::BC2;
