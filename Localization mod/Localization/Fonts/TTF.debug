@@ -1,0 +1,401 @@
+PHASE: unhandled-exception address logging installed
+PHASE: executable directory resolved
+PHASE: DrawText hook entered
+DrawText mode=1
+DrawText object=0x01B14B80
+DrawText font pointer=0x0DBB2028
+DrawText scale x1000=1000
+PHASE: mode=1 vertex-stream descriptor captured
+mode1 stream pointer=0x0DBB2028
+mode1 descriptor +00=0x00000000
+mode1 descriptor +10=0x00000004
+mode1 descriptor +14=0x00000000
+mode1 descriptor +18=0x0C669240
+mode1 descriptor +1C=0x0DB80C60
+mode1 descriptor +20=0x0DBD1140
+mode1 descriptor +24=0x01000000
+mode1 descriptor +28=0x56000000
+mode1 stream FVF=0x000003D2
+mode1 stream stride bytes=56
+mode1 stream vertex limit=1024
+mode1 GfxDevice alignment=0x00000001
+mode1 selected TTF pixel height=45
+mode1 glyph width samples=94
+mode1 glyph width class (1=mono,2=proportional,0=unknown)=2
+ROUTE mode1 policy=all
+ROUTE mode1 decision stream=0x0DBB2028 px=45 role=ttf policy=all
+SUMMARY mode1 reason=new-stream
+SUMMARY mode1 stream stream=0x6F706630 px=1952672873 class=809325600 role=ttf draws=1714437458 measures=1818849136
+SUMMARY mode1 stream stream=0x50207463 px=1885745213 class=1668049263 role=pending draws=0 measures=0
+SLRR runtime TTF backend v4.1 (per-stream mode-1 routing) entered
+PHASE: GDI APIs resolved
+PHASE: profile font path resolved
+PHASE: TTF profile registered
+Profile ID=63 6F 6E 73 6F 6C 65 2D 62 6F 6C 64 2D 69 74 61 6C 69 63 
+Profile ID=73 69 6D 70 6C 65 2D 62 6F 6C 64 2D 69 74 61 6C 69 63 
+Profile ID=73 6C 2D 62 6F 6C 64 2D 69 74 61 6C 69 63 
+Profile ID=73 6C 69 69 31 37 
+TTF profile count ready=4
+PHASE: TTF profiles initialized
+Legacy TTF scale fallback=75
+sl14=100
+sl28=60
+slii11=95
+slii24=110
+console5=85
+console10=100
+simple20=105
+simple40=105
+slii17=80
+PHASE: D3D device pointer changed=0x0422C940
+GDI cache profile=0
+GDI cache px=45
+GDI line height=53
+PHASE: TTF.metrics written
+PHASE: measure() entered
+measure text pointer=0x11933B08
+measure scale x1000=0x00000257
+GLYPH stage: GetGlyphOutline entry codepoint=0x0000041E
+GLYPH stage: selected HDC=0x06010D53
+GLYPH stage: outline query result=0x00000330
+GLYPH stage: black box width=24
+GLYPH stage: black box height=34
+GLYPH stage: bitmap buffer bytes=816
+GLYPH stage: bitmap fetch bytes=816
+PHASE: creating 1024x1024 glyph atlas
+D3D device=0x0422C940
+PHASE: glyph atlas created and initialized
+GLYPH stage: before atlas LockRect
+GLYPH codepoint=0x0000041E
+Glyph width=24
+Glyph height=34
+Glyph advance=27
+GLYPH stage: GetGlyphOutline entry codepoint=0x00000411
+GLYPH stage: outline query result=0x0000039C
+GLYPH stage: black box width=28
+GLYPH stage: black box height=33
+GLYPH stage: bitmap buffer bytes=924
+GLYPH stage: bitmap fetch bytes=924
+GLYPH codepoint=0x00000411
+Glyph width=28
+Glyph height=33
+GLYPH stage: GetGlyphOutline entry codepoint=0x00000420
+GLYPH stage: black box width=26
+GLYPH codepoint=0x00000420
+Glyph width=26
+GLYPH stage: GetGlyphOutline entry codepoint=0x00000410
+GLYPH codepoint=0x00000410
+GLYPH stage: GetGlyphOutline entry codepoint=0x00000422
+GLYPH stage: outline query result=0x00000318
+GLYPH stage: bitmap buffer bytes=792
+GLYPH stage: bitmap fetch bytes=792
+GLYPH codepoint=0x00000422
+GLYPH stage: GetGlyphOutline entry codepoint=0x0000041D
+GLYPH stage: black box width=27
+GLYPH codepoint=0x0000041D
+Glyph width=27
+GLYPH stage: GetGlyphOutline entry codepoint=0x00000020
+GLYPH stage: whitespace metrics path (no bitmap request)
+GLYPH codepoint=0x00000020
+Glyph width=0
+Glyph height=0
+GLYPH stage: GetGlyphOutline entry codepoint=0x00000412
+GLYPH codepoint=0x00000412
+GLYPH stage: GetGlyphOutline entry codepoint=0x00000413
+GLYPH codepoint=0x00000413
+GLYPH stage: outline query result=0x000004A4
+GLYPH stage: black box width=33
+GLYPH stage: bitmap buffer bytes=1188
+GLYPH stage: bitmap fetch bytes=1188
+GLYPH codepoint=0x00000416
+Glyph width=33
+measure completed width x100=24299
+PHASE: D3D render entry; state capture starting
+D3D device vtable=0x0422F89C
+PHASE: all D3D state captured
+Original FVF=0x00000112
+Original vertex declaration=0x0C9479C0
+Original vertex shader=0x00000000
+Original pixel shader=0x00000000
+Original stream 0=0x0D15A860
+Original stream 0 stride=32
+PHASE: TTF D3D state configured; glyph loop starting
+DRAW stage: before DrawPrimitiveUP glyph=0x0000041E
+DRAW stage: DrawPrimitiveUP HRESULT=0x00000000
+DRAW stage: before DrawPrimitiveUP glyph=0x00000411
+DRAW stage: before DrawPrimitiveUP glyph=0x00000420
+DRAW stage: before DrawPrimitiveUP glyph=0x00000410
+DRAW stage: before DrawPrimitiveUP glyph=0x00000422
+DRAW stage: before DrawPrimitiveUP glyph=0x0000041D
+DRAW stage: before DrawPrimitiveUP glyph=0x00000412
+DRAW stage: before DrawPrimitiveUP glyph=0x00000413
+PHASE: glyph loop completed
+Glyphs processed=15
+PHASE: restoring D3D state
+PHASE: D3D state restore complete
+measure text pointer=0x11933B80
+GLYPH stage: outline query result=0x00000420
+GLYPH stage: black box width=30
+GLYPH stage: bitmap buffer bytes=1056
+GLYPH stage: bitmap fetch bytes=1056
+GLYPH codepoint=0x00000423
+Glyph width=30
+GLYPH codepoint=0x00000421
+GLYPH codepoint=0x0000041A
+GLYPH codepoint=0x00000418
+Glyph width=29
+GLYPH stage: bitmap buffer bytes=1344
+GLYPH stage: bitmap fetch bytes=1344
+GLYPH codepoint=0x00000419
+Glyph height=42
+measure completed width x100=11339
+Glyphs processed=7
+measure text pointer=0x11933A60
+GLYPH codepoint=0x0000042F
+Glyph width=31
+GLYPH stage: bitmap buffer bytes=952
+GLYPH stage: bitmap fetch bytes=952
+measure completed width x100=6479
+Glyphs processed=4
+measure text pointer=0x11933988
+GLYPH stage: bitmap buffer bytes=1312
+GLYPH stage: bitmap fetch bytes=1312
+measure completed width x100=8099
+Glyphs processed=5
+measure text pointer=0x11933910
+measure completed width x100=16199
+measure text pointer=0x119339A0
+measure completed width x100=14579
+measure text pointer=0x172BF638
+measure completed width x100=25919
+measure text pointer=0x172BFBD8
+measure completed width x100=27540
+measure completed width x100=21059
+GLYPH stage: bitmap buffer bytes=1120
+GLYPH stage: bitmap fetch bytes=1120
+ROUTE mode1 decision stream=0x12211FE0 px=34 role=ttf policy=all
+FALLBACK: non-frontend stock font px=34
+FALLBACK: non-frontend measure font px=34
+SUMMARY mode1 stream stream=0x50207463 px=544359229 class=1668049263 role=pending draws=0 measures=0
+ROUTE mode1 decision stream=0x0DBB2028 px=45 role=ttf policy=first
+SUMMARY mode1 reason=periodic
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714438727 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714437664 measures=1818849342
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714441799 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714438176 measures=1818849854
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714444871 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714438688 measures=1818850366
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714447943 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714439200 measures=1818850878
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714451015 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714439712 measures=1818851390
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714454087 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714440224 measures=1818851902
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714457159 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714440736 measures=1818852414
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714460231 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714441248 measures=1818852926
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714463303 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714441760 measures=1818853438
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714466375 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714442272 measures=1818853950
+GDI cache profile=3
+GDI cache px=34
+GDI line height=46
+GLYPH stage: bitmap buffer bytes=540
+GLYPH stage: bitmap fetch bytes=540
+GLYPH stage: bitmap buffer bytes=192
+GLYPH stage: bitmap fetch bytes=192
+GLYPH stage: bitmap buffer bytes=152
+GLYPH stage: bitmap fetch bytes=152
+GLYPH stage: bitmap buffer bytes=320
+GLYPH stage: bitmap fetch bytes=320
+GLYPH stage: bitmap buffer bytes=400
+GLYPH stage: bitmap fetch bytes=400
+GLYPH stage: bitmap buffer bytes=432
+GLYPH stage: bitmap fetch bytes=432
+GLYPH stage: bitmap buffer bytes=100
+GLYPH stage: bitmap fetch bytes=100
+GLYPH stage: bitmap buffer bytes=500
+GLYPH stage: bitmap fetch bytes=500
+GLYPH stage: bitmap buffer bytes=304
+GLYPH stage: bitmap fetch bytes=304
+GLYPH stage: bitmap buffer bytes=72
+GLYPH stage: bitmap fetch bytes=72
+GLYPH stage: bitmap buffer bytes=416
+GLYPH stage: bitmap fetch bytes=416
+GLYPH stage: bitmap buffer bytes=32
+GLYPH stage: bitmap fetch bytes=32
+measure completed width x100=43519
+GLYPH stage: bitmap buffer bytes=288
+GLYPH stage: bitmap fetch bytes=288
+GLYPH stage: bitmap buffer bytes=384
+GLYPH stage: bitmap fetch bytes=384
+GLYPH stage: bitmap buffer bytes=16
+GLYPH stage: bitmap fetch bytes=16
+GLYPH stage: bitmap buffer bytes=700
+GLYPH stage: bitmap fetch bytes=700
+GLYPH stage: bitmap buffer bytes=256
+GLYPH stage: bitmap fetch bytes=256
+measure completed width x100=24640
+GLYPH stage: bitmap buffer bytes=624
+GLYPH stage: bitmap fetch bytes=624
+GLYPH stage: bitmap buffer bytes=680
+GLYPH stage: bitmap fetch bytes=680
+measure completed width x100=9719
+measure completed width x100=17819
+GLYPH stage: bitmap buffer bytes=888
+GLYPH stage: bitmap fetch bytes=888
+GLYPH stage: bitmap buffer bytes=728
+GLYPH stage: bitmap fetch bytes=728
+GLYPH stage: bitmap buffer bytes=368
+GLYPH stage: bitmap fetch bytes=368
+GLYPH stage: bitmap buffer bytes=96
+GLYPH stage: bitmap fetch bytes=96
+measure completed width x100=4860
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714469773 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714442724 measures=1818854196
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714473479 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714443114 measures=1818854196
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714477185 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714443504 measures=1818854196
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714480891 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714443894 measures=1818854196
+GLYPH stage: bitmap buffer bytes=496
+GLYPH stage: bitmap fetch bytes=496
+GLYPH stage: bitmap buffer bytes=456
+GLYPH stage: bitmap fetch bytes=456
+measure completed width x100=6000
+measure completed width x100=5279
+GLYPH stage: bitmap buffer bytes=324
+GLYPH stage: bitmap fetch bytes=324
+measure completed width x100=1279
+SUMMARY mode1 stream stream=0x0DBB2028 px=45 class=2 role=ttf draws=1714483638 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714445243 measures=1818854196
+measure completed width x100=1840
+measure completed width x100=639
+measure completed width x100=11920
+measure completed width x100=3759
+GLYPH stage: bitmap buffer bytes=984
+GLYPH stage: bitmap fetch bytes=984
+measure completed width x100=12959
+measure completed width x100=19439
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714446553 measures=1818854200
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714440240 measures=1818849136
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714444336 measures=1818849136
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714448432 measures=1818849136
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714452528 measures=1818849136
+GLYPH stage: bitmap buffer bytes=980
+GLYPH stage: bitmap fetch bytes=980
+GLYPH stage: bitmap buffer bytes=768
+GLYPH stage: bitmap fetch bytes=768
+GLYPH stage: bitmap buffer bytes=1088
+GLYPH stage: bitmap fetch bytes=1088
+GLYPH stage: bitmap buffer bytes=600
+GLYPH stage: bitmap fetch bytes=600
+measure completed width x100=32400
+measure completed width x100=6399
+measure completed width x100=7679
+GLYPH stage: bitmap buffer bytes=360
+GLYPH stage: bitmap fetch bytes=360
+GLYPH stage: bitmap buffer bytes=200
+GLYPH stage: bitmap fetch bytes=200
+measure completed width x100=37759
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714447257 measures=1818854203
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714455917 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714448625 measures=1818854203
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714458645 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714449992 measures=1818854203
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714461374 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714451353 measures=1818854203
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714464109 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714452721 measures=1818854203
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714466837 measures=1818849136
+measure completed width x100=1519
+measure completed width x100=5119
+GLYPH stage: bitmap buffer bytes=216
+GLYPH stage: bitmap fetch bytes=216
+GLYPH stage: bitmap buffer bytes=352
+GLYPH stage: bitmap fetch bytes=352
+measure completed width x100=4560
+measure completed width x100=4799
+measure completed width x100=10880
+measure completed width x100=1119
+measure completed width x100=10399
+GLYPH stage: bitmap buffer bytes=480
+GLYPH stage: bitmap fetch bytes=480
+measure completed width x100=9360
+measure completed width x100=8720
+measure completed width x100=12159
+measure completed width x100=9520
+measure completed width x100=7199
+measure completed width x100=6320
+measure completed width x100=4479
+measure completed width x100=11039
+measure completed width x100=9759
+measure completed width x100=3839
+measure completed width x100=13439
+measure completed width x100=6879
+measure completed width x100=10959
+GLYPH stage: bitmap buffer bytes=36
+GLYPH stage: bitmap fetch bytes=36
+measure completed width x100=13920
+measure completed width x100=14560
+measure completed width x100=10080
+measure completed width x100=8800
+measure completed width x100=13520
+measure completed width x100=7039
+measure completed width x100=9839
+measure completed width x100=13679
+measure completed width x100=3600
+measure completed width x100=17440
+measure completed width x100=11520
+measure completed width x100=7999
+measure completed width x100=22679
+measure completed width x100=52239
+measure completed width x100=53199
+measure completed width x100=47519
+measure completed width x100=44639
+measure completed width x100=47679
+measure completed width x100=20160
+measure completed width x100=53839
+measure completed width x100=53999
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714454178 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714469431 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714456158 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714471547 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714458139 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714473662 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714460123 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714475774 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714462107 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714477886 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714464091 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714479998 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714466073 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714482112 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714468053 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714484228 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714470033 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714486344 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714472013 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714488460 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714473995 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714490574 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714475979 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714492686 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714477963 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714494798 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714479947 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714496910 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714481928 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714499025 measures=1818849136
+SUMMARY mode1 stream stream=0x12211FE0 px=34 class=2 role=ttf draws=1714483908 measures=1818854248
+SUMMARY mode1 stream stream=0x18074D88 px=45 class=2 role=ttf draws=1714501141 measures=1818849136
+
+=== TTF BACKEND UNHANDLED EXCEPTION ===
+FATAL exception code=0xC0000005
+FATAL exception address=0x0041DD2B
+FATAL context EIP=0x0041DD2B
+FATAL context ESP=0x001AF55C
+FATAL context EBP=0x001AF988

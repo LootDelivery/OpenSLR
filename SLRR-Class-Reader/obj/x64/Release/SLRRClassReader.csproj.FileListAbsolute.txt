@@ -1,0 +1,8 @@
+C:\Users\stres\OneDrive\Рабочий стол\Decomp\SLRR-Class-Reader-WinForms\bin\Release\SLRR Class Reader.exe
+C:\Users\stres\OneDrive\Рабочий стол\Decomp\SLRR-Class-Reader-WinForms\obj\x64\Release\SLRRClassReader.csproj.AssemblyReference.cache
+C:\Users\stres\OneDrive\Рабочий стол\Decomp\SLRR-Class-Reader-WinForms\obj\x64\Release\SLRRClassReader.csproj.CoreCompileInputs.cache
+C:\Users\stres\OneDrive\Рабочий стол\Decomp\SLRR-Class-Reader-WinForms\obj\x64\Release\SLRR Class Reader.exe
+E:\OpenSLR\SLRR-Class-Reader\bin\Release\SLRR Class Reader.exe
+E:\OpenSLR\SLRR-Class-Reader\obj\x64\Release\SLRRClassReader.csproj.AssemblyReference.cache
+E:\OpenSLR\SLRR-Class-Reader\obj\x64\Release\SLRRClassReader.csproj.CoreCompileInputs.cache
+E:\OpenSLR\SLRR-Class-Reader\obj\x64\Release\SLRR Class Reader.exe
