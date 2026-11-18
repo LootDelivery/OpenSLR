@@ -2298,8 +2298,25 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
       bgfx::setViewRect(id,x,y,w,h);bgfx::setViewClear(id, id==kPreview0 ? (BGFX_CLEAR_COLOR|BGFX_CLEAR_DEPTH) : BGFX_CLEAR_DEPTH, id==kPreview0 ? 0x00000000 : 0, 0.f);bgfx::setViewMode(id,bgfx::ViewMode::Sequential);bgfx::setViewTransform(id,view,proj);
       if (bgfx::isValid(preview_fb_)) bgfx::setViewFrameBuffer(id, preview_fb_);
       else if (scene_rt_active_) bgfx::setViewFrameBuffer(id, scene_fb_);
-      for (int pass = 0; pass < 2; ++pass)
-        for(const auto&i:p.instances)draw_instance(id,i,i.transform.data(),true,pass,p.full_materials);
+      for (int pass = 0; pass < 2; ++pass) {
+        // Turn the part about its pivot while the cursor is over its slot.
+        // Just a pivot spin for now, no orbit and no drag.
+        const bool hover = mouse_x_ >= x && mouse_x_ < x + w &&
+                           mouse_y_ >= y && mouse_y_ < y + h;
+        if (hover) preview_spin_ += 0.008f;
+        for(const auto&i:p.instances){
+          if (!hover || preview_spin_ == 0.f) {
+            draw_instance(id,i,i.transform.data(),true,pass,p.full_materials);
+            continue;
+          }
+          float rot[16], m[16];
+          bx::mtxRotateY(rot, preview_spin_);
+          bx::mtxMul(m, rot, i.transform.data());
+          SceneInstance spun = i;
+          std::memcpy(spun.transform.data(), m, sizeof(float) * 16);
+          draw_instance(id,spun,spun.transform.data(),true,pass,p.full_materials);
+        }
+      }
       ++id;
     }
   }

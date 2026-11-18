@@ -287,6 +287,7 @@ class LibBgfxBackend final : public IRenderBackend {
   HWND hwnd_ = nullptr;
   bool shown_ = false;
   int mouse_x_ = 0;
+  float preview_spin_ = 0.f;
   int mouse_y_ = 0;
   int32_t tip_hover_ = -2;
   float tip_since_ = 0.f;
