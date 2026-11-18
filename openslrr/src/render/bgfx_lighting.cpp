@@ -174,8 +174,12 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
     if (bgfx::isValid(u_fog_range_)) bgfx::setUniform(u_fog_range_, fog_range);
     if (bgfx::isValid(u_fog_eye_)) bgfx::setUniform(u_fog_eye_, fog_eye);
   }
-  void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass)
+  void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials)
 {
+    // preview alone means "an inset render", which uses a trimmed material.
+    // A preview that asks for the full material keeps the real lights, glass
+    // and settings so a part can actually be judged.
+    const bool simple = preview && !full_materials;
     const auto& part=instance_meshes_.at(instance.geometry.get());
     if(!bgfx::isValid(part.vbh)||!bgfx::isValid(part.ibh))return;
     const auto texture = [&](uint16_t slot) {
@@ -285,7 +289,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         bgfx::setUniform(u_sun_spec_, sun_s);
         bgfx::setUniform(u_sun_dir_, sun_r);
         const float no_light[4]{};
-        bgfx::setUniform(u_local_light_, preview ? no_light : local_light_.data());
+        bgfx::setUniform(u_local_light_, simple ? no_light : local_light_.data());
         bgfx::setUniform(u_diffuse_,diffuse);
         const float spec[4] = {group.specular[0], group.specular[1], group.specular[2],
                                group.shininess > 0.f ? group.shininess : 1.f};
@@ -349,7 +353,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       // the opaque tiles. Their JPEG/PNG alpha is already premultiplied.
       // SCX4 glass requests texture alpha in the material word. The
       // transparent function bit alone also appears on opaque rail frames.
-      const bool glass = group && !preview && part.geo.info.version == 4 &&
+      const bool glass = group && !simple && part.geo.info.version == 4 &&
           (flags & 0x40000000u) && (group->material_type & 0x04u);
       const bool blend = !instance.sky && (glass ||
           (part.geo.info.version == 3 && (flags & 0x101u) == 0x101u));
@@ -360,7 +364,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       const bool material_mix = group && instance.cull_backfaces &&
           part.geo.info.version == 4 && group->material_type == 0x03u;
       const bool authored_alpha = instance.cull_backfaces && part.geo.info.version == 4;
-      const bool cut = !material_mix && !blend && !preview && !instance.sky &&
+      const bool cut = !material_mix && !blend && !simple && !instance.sky &&
           (authored_alpha ? (flags & 0x20000000u) != 0
                           : part.geo.info.version != 3 || (flags & 1));
       // V4 map foliage specifies GREATER with an 8-bit reference (default 0x38).
@@ -370,11 +374,11 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
           (reset_flags_ & BGFX_RESET_MSAA_MASK) &&
           part.geo.info.path.find("fa_tibi") != std::string::npos;
       const bool vertex_mix = group && group->mix_vertex_color;
-      const float settings[4] = {alpha_test, instance.sky || blend || vertex_mix ? 1.f : preview ? .5f : 0.f,
+      const float settings[4] = {alpha_test, instance.sky || blend || vertex_mix ? 1.f : simple ? .5f : 0.f,
                                  foliage_coverage ? 2.f : blend ? 1.f : 0.f, material_mix ? -2.f : vertex_mix ? -1.f :
                                  outdoor_lighting_ && !preview && part.geo.ground_polygons ? -3.f :
-                                 !blend && preview && tex.idx != white_tex_.idx ? 1.f : 0.f};
-      const uint32_t color = preview || instance.cull_backfaces ? instance.color : 0xffffffu;
+                                 !blend && simple && tex.idx != white_tex_.idx ? 1.f : 0.f};
+      const uint32_t color = simple || instance.cull_backfaces ? instance.color : 0xffffffu;
       float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
       if (material_mix)
         for (int i = 0; i < 3; ++i) tint[i] *= group->diffuse[i];

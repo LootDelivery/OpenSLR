@@ -152,7 +152,11 @@ class LibBgfxBackend final : public IRenderBackend {
     size_t users;
   };
   std::unordered_map<std::string, SharedMapTexture> map_textures_;
-  struct Preview { GameRefState camera; GameRefState viewport; std::vector<SceneInstance> instances; };
+  struct Preview { GameRefState camera; GameRefState viewport; std::vector<SceneInstance> instances;
+    // Inset previews use a deliberately simplified material (no lights, no
+    // glass, trimmed settings) because they are tiny. The catalogue shows a
+    // part large enough to judge, so it asks for the full material instead.
+    bool full_materials = false; };
   // Projection depends on scene geometry, never on the viewing camera.
   // Keep parked cars out of the per-vertex floor queries on subsequent frames.
   struct ProjectedShadow {
@@ -192,7 +196,7 @@ class LibBgfxBackend final : public IRenderBackend {
                         bool receive_static_shadow = false, const SceneSun* sun = nullptr, const float* sky = nullptr);
 
 
-  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass);
+  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials = false);
   void draw_prop_batches(uint16_t view_id, const std::vector<SceneBatch>& batches,
                          bool shadow, bool conservative = false);
   void refresh_distance_fog(const float render_eye[3]);

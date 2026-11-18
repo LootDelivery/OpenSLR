@@ -1644,7 +1644,7 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
         if(auto* look=gameref_find_live(camera->look_id))
           objects=scene_instances_collect_root(look->key);
       }
-      if(!objects.empty())previews_.push_back({*camera,*vp,std::move(objects)});
+      if(!objects.empty())previews_.push_back({*camera,*vp,std::move(objects),true});
     }
     std::sort(previews_.begin(),previews_.end(),[](const Preview&a,const Preview&b){return a.viewport.vp_pri!=b.viewport.vp_pri?a.viewport.vp_pri<b.viewport.vp_pri:a.viewport.vp_x<b.viewport.vp_x;});
     std::unordered_map<const ScxGeometry*,bool> used;
@@ -2292,7 +2292,7 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
       if (bgfx::isValid(preview_fb_)) bgfx::setViewFrameBuffer(id, preview_fb_);
       else if (scene_rt_active_) bgfx::setViewFrameBuffer(id, scene_fb_);
       for (int pass = 0; pass < 2; ++pass)
-        for(const auto&i:p.instances)draw_instance(id,i,i.transform.data(),true,pass);
+        for(const auto&i:p.instances)draw_instance(id,i,i.transform.data(),true,pass,p.full_materials);
       ++id;
     }
   }
