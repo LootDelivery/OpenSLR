@@ -2272,7 +2272,10 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         // holds. If a car in assembly is one slot per part, every part spins
         // about its own centre and the car reads as disassembled.
         static int seen = 0;
-        if (seen < 400) {
+        // Always log a slot that is not one of the eight two-part catalogue
+        // slots: the car in assembly is the one that comes apart.
+        const bool interesting = p.instances.size() != 2;
+        if ((interesting && seen < 400) || seen < 24) {
           ++seen;
           if (FILE* f = std::fopen("E:/OpenSLR/osd_plates.log", "a")) {
             std::fprintf(f, "preview #%d total=%d instances=%d cam=%p x=%.3f y=%.3f w=%.3f h=%.3f\n",

@@ -919,8 +919,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
           // The launcher detaches the console, so stdout is lost. Write to a
           // file the way the run actually happens.
           if (FILE* f = std::fopen("E:/OpenSLR/osd_plates.log", "a")) {
-            std::fprintf(f, "plate #%d layer=%d x=%.3f y=%.3f hw=%.3f hh=%.3f hidden=%d bg=%d\n",
-                         seen, w.layer, w.x, w.y, w.half_w, w.half_h,
+            std::fprintf(f, "plate #%d layer=%d view=%d x=%.3f y=%.3f hw=%.3f hh=%.3f hidden=%d bg=%d\n",
+                         seen, w.layer, int(osd_view_), w.x, w.y, w.half_w, w.half_h,
                          w.hidden ? 1 : 0, w.background ? 1 : 0);
             std::fclose(f);
           }
