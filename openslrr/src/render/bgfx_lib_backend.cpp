@@ -1360,6 +1360,12 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       bgfx::setViewRect(kPreviewPresent, 0, 0, ww, hh);
       bgfx::setViewClear(kPreviewPresent, BGFX_CLEAR_NONE, 0, 0.f, 0);
       bgfx::setViewFrameBuffer(kPreviewPresent, BGFX_INVALID_HANDLE);
+      {
+        // .z = 1: this pass blends by alpha, so it must pass the source alpha
+        // through. The world present keeps .z = 0 and writes an opaque window.
+        const float pparams[4] = {debug_overlay_.render_options().exposure, 1.f, 1.f, 0.f};
+        if (bgfx::isValid(u_present_params_)) bgfx::setUniform(u_present_params_, pparams);
+      }
       draw_fullscreen(kPreviewPresent, present_program_, bgfx::getTexture(preview_fb_, 0), nullptr,
           BGFX_INVALID_HANDLE,
           BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |

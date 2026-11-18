@@ -35,8 +35,9 @@ void main()
 		// (BGFX_RESET_SRGB_BACKBUFFER) and the hardware converts linear to sRGB on
 		// write. Encoding in the shader as well would be a double gamma.
 	}
-	// Keep the source alpha. The preview composite blends by alpha so that the
-	// empty parts of its target leave the scene underneath alone; forcing 1.0
-	// here made that pass paint over the whole window.
-	gl_FragColor = vec4(color, src.a);
+	// Keep the source alpha only where a pass blends by alpha (the preview
+	// composite). The world present writes the window backbuffer, whose alpha
+	// the desktop compositor uses, so it must stay opaque or the whole image
+	// reads slightly darker.
+	gl_FragColor = vec4(color, u_presentParams.z > 0.5 ? src.a : 1.0);
 }
