@@ -816,6 +816,22 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     }
     if (have_hud) note_layer(18);
     std::sort(layers.begin(), layers.end());
+    // The front layer for window routing is decided by windows only. Tooltip
+    // texts sit on a lower-numbered layer, so a tooltip appearing for the first
+    // time used to become layers.front() and push the catalogue windows out of
+    // kOsdUnder -- where they belong -- into kOsdView, which draws over the
+    // part previews and hides them.
+    int32_t front_window_layer = layers.front();
+    {
+      bool have_window_layer = false;
+      for (const OsdWidget& w : widgets) {
+        if (w.hidden) continue;
+        if (!have_window_layer || w.layer < front_window_layer) {
+          front_window_layer = w.layer;
+          have_window_layer = true;
+        }
+      }
+    }
 
     // Openingpic (frontend:0x0005) is the splash still, drawn opaque on the
     // OSD view, which sits above the movie. Once the menu plate or a real
@@ -878,7 +894,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         // A modal dialog (BUY PART) overlaps the catalog previews. Sending
         // that plate to view 2 put it under the parts and under their names.
         osd_view_ = (!osd_owner_modal(w.owner) &&
-                     (layer == layers.front() || plate_behind_preview(w)))
+                     (layer == front_window_layer || plate_behind_preview(w)))
                         ? kOsdUnder
                         : kOsdView;
         draw_osd_quad(w);
