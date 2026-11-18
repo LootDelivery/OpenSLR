@@ -29,6 +29,7 @@ namespace slrr {
 #ifdef _WIN32
   bgfx::TextureHandle LibBgfxBackend::tex_for_osd_icon(const std::string& path, bool srgb)
 {
+    (void)srgb;
     if (path.empty()) return white_tex_;
     auto it = osd_tex_.find(path);
     if (it != osd_tex_.end()) return it->second;
@@ -54,7 +55,10 @@ namespace slrr {
             // scene (flares, paint, material textures), and those are already
             // decoded elsewhere -- so a blanket flag here would double-decode
             // them.
-            (srgb ? BGFX_TEXTURE_SRGB : 0) |
+            // Not sRGB: the OSD path is gamma data passed straight through,
+            // and the flag made it decode and re-encode, which read darker than
+            // the original art.
+            0u |
             BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, mem);
       }
     }
