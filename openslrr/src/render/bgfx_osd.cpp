@@ -864,12 +864,11 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     // a preview slot stays under that camera. A fullscreen plate still covers
     // the preview, so a dialog does not open a hole onto the car.
     auto plate_behind_preview = [&](const OsdWidget& w) {
-      // Any background plate is behind the part previews whenever there are
-      // previews -- the catalogue's section backdrops, whatever their size.
-      // Keeping them out of the HDR scene is what stops them changing
-      // brightness with the exposure dial. Without previews nothing changes,
-      // so the garage's own veil stays where it was.
-      if (w.background) return !previews_.empty();
+      // A background plate is interface, not scene, wherever it appears --
+      // with previews or without. Tying it to the presence of previews left the
+      // backdrops of the pages that have none inside the HDR scene, and they
+      // still changed brightness with the exposure dial.
+      if (w.background) return true;
       if (w.half_w > 0.9f && w.half_h > 0.9f) return !previews_.empty();
       const float left = (w.x - w.half_w + 1.f) * 0.5f;
       const float top = (w.y - w.half_h + 1.f) * 0.5f;
