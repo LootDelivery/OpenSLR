@@ -906,13 +906,18 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         // that plate to view 2 put it under the parts and under their names.
         // A plate that sits behind a part preview is display-referred
         // interface and goes to the window, not through the HDR scene.
+        // Nothing belongs in the HDR scene. kOsdUnder drew interface into the
+        // scene target, where the exposure dial and ACES tonemapping acted on
+        // it -- the backgrounds came out uniformly darker than the original.
+        // Interface draws to the window instead: plates before the preview
+        // composite, icons and text after it.
         osd_view_ = osd_owner_modal(w.owner)
                         ? kOsdView
-                        : plate_behind_preview(w)
+                        : (plate_behind_preview(w) ||
+                           w.background ||
+                           layer == front_window_layer)
                               ? kPlateView
-                              : (w.background || layer == front_window_layer)
-                                    ? kOsdUnder
-                                    : kOsdView;
+                              : kOsdView;
         draw_osd_quad(w);
       }
       osd_view_ = kOsdView;
