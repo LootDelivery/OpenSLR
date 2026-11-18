@@ -2309,7 +2309,8 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         // Just a pivot spin for now, no orbit and no drag.
         const bool hover = mouse_x_ >= x && mouse_x_ < x + w &&
                            mouse_y_ >= y && mouse_y_ < y + h;
-        if (hover) p.spin += 0.008f;
+        float& spin = preview_spins_[p.camera.key];
+        if (hover) spin += 0.008f;
         // Rotate about the slot's own centre, not the world origin. A part on
         // its own sits near the origin and looked right, but a car in assembly
         // came apart, each part swinging around the world.
@@ -2324,15 +2325,15 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
           pivot[0] *= inv; pivot[1] *= inv; pivot[2] *= inv;
         }
         for(const auto&i:p.instances){
-          if (p.spin == 0.f) {
+          if (spin == 0.f) {
             draw_instance(id,i,i.transform.data(),true,pass,p.full_materials);
             continue;
           }
-          float to_pivot[16], spin[16], back[16], about[16], m[16];
+          float to_pivot[16], spin_mtx[16], back[16], about[16], m[16];
           bx::mtxTranslate(to_pivot, -pivot[0], -pivot[1], -pivot[2]);
-          bx::mtxRotateY(spin, p.spin);
+          bx::mtxRotateY(spin_mtx, spin);
           bx::mtxTranslate(back, pivot[0], pivot[1], pivot[2]);
-          bx::mtxMul(about, to_pivot, spin);
+          bx::mtxMul(about, to_pivot, spin_mtx);
           bx::mtxMul(about, about, back);
           bx::mtxMul(m, about, i.transform.data());
           SceneInstance spun = i;

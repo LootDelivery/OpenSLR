@@ -291,7 +291,9 @@ class LibBgfxBackend final : public IRenderBackend {
   HWND hwnd_ = nullptr;
   bool shown_ = false;
   int mouse_x_ = 0;
-  float preview_spin_ = 0.f;
+  // previews_ is rebuilt every frame, so a spin stored on it never accumulates.
+  // Keyed by the preview camera instead, which is stable across rebuilds.
+  std::unordered_map<const void*, float> preview_spins_;
   int mouse_y_ = 0;
   int32_t tip_hover_ = -2;
   float tip_since_ = 0.f;
