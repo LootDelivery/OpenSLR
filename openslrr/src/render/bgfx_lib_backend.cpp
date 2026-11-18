@@ -2267,6 +2267,23 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
     }
     for(auto&p:previews_) {
       if(id>=64)break;
+      {
+        // Diagnostic: how many slots a screen makes, and how many parts each
+        // holds. If a car in assembly is one slot per part, every part spins
+        // about its own centre and the car reads as disassembled.
+        static int seen = 0;
+        if (seen < 24) {
+          ++seen;
+          if (FILE* f = std::fopen("E:/OpenSLR/osd_plates.log", "a")) {
+            std::fprintf(f, "preview #%d total=%d instances=%d cam=%p x=%.3f y=%.3f w=%.3f h=%.3f\n",
+                         seen, int(previews_.size()), int(p.instances.size()),
+                         (const void*)p.camera.key,
+                         p.viewport.vp_x, p.viewport.vp_y,
+                         p.viewport.vp_w, p.viewport.vp_h);
+            std::fclose(f);
+          }
+        }
+      }
       int x=std::clamp(static_cast<int>(p.viewport.vp_x*width_),0,width_-1),y=std::clamp(static_cast<int>(p.viewport.vp_y*height_),0,height_-1);
       int w=std::clamp(static_cast<int>(p.viewport.vp_w*width_),1,width_-x),h=std::clamp(static_cast<int>(p.viewport.vp_h*height_),1,height_-y);
       float world[16],view[16],proj[16];if(!scene_instance_transform(p.camera.key,p.camera.parent,world))continue;
