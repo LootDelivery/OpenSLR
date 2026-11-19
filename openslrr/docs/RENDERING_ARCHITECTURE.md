@@ -80,8 +80,9 @@ reflect.
   sampling a fixed LOD range, which is not a prefilter.
 - The cubemap is **RGBA8 / LDR**. HDR reflection capture is a separate task.
 - Box projection applies to interiors only; outdoors is direction-only lookup.
-- `build_reflection_mips()`, `fs_blur.sc`, `reflection_chain_` and `blur_program_`
-  are dead code still present in the tree.
+- `build_reflection_mips()`, `fs_blur.sc`, `reflection_chain_` and
+  `blur_program_` are **live**: the blur runs on the reflection chain but is
+  weaker than intended.
 
 ## 4. Interface, and why it cannot simply join the scene
 

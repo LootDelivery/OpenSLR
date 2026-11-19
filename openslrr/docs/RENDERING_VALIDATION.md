@@ -51,10 +51,10 @@ Code exists; correctness not confirmed.
 | Problem | Status |
 |---|---|
 | Minimap in the city does not expand to full size | open, reported, not investigated |
-| MSAA toggle leaves an artefact in the top-left corner | open; the stale-framebuffer fix that addressed it was reverted because it broke reflections |
-| Camera click-target mismatch (`scene_instances_pointer_ray` vs `SLRR_CAM_*`) | open, deprioritised |
-| `bind_baked_light()` substitutes a white texture and ignores its texture list | open, deliberate for now |
-| Dead blur code still in the tree (`fs_blur.sc`, `reflection_chain_`, `blur_program_`) | open, removal is a separate small commit |
+| Reflection blur is weaker than intended | open, cosmetic: the blur runs, its strength is simply low |
+| Camera click-target mismatch (`scene_instances_pointer_ray` vs `SLRR_CAM_*`) | closed as situational: observed only in specific runs where the camera was changing |
+| MSAA toggle artefact | closed: not reproducible now |
+| `bind_baked_light()` binds `white_tex_` and discards its texture list | **deliberate**, not a defect -- the code notes the stock lightmap already contains the sun and its shadows, so using it would double-count the light |
 
 ## 5. Limitations of the reflection system
 

@@ -22,11 +22,12 @@ here is inferred from commit titles.
 ## Authorship
 
 - **All rendering code and shader changes listed below were made by us.**
-- **SCX car models: changed by the project owner, not in Git at all.** Normal
-  and shading fixes on some vehicle meshes, correcting duplicated normals at
-  hard creases. This is a content-side fix; the renderer deliberately does not
-  compensate for it. Details are not recorded anywhere and need to be captured
-  separately.
+- **SCX car models: changed by the project owner, not in Git at all.**
+  - `Focer.rpk` — almost every mesh re-exported with corrected normals.
+    Known bug: textures are not assigned on the doors and wings.
+  - `Baiern` — known bug: the exported left door was not at zero coordinates.
+  This is content-side work. The renderer deliberately does not compensate for
+  hard-crease normals.
 
 ---
 
@@ -93,11 +94,12 @@ Recorded because they explain the current design.
 | `sRGB` flag on all UI textures | Superseded | Scoped back to scene maps only; on interface it double-processed. |
 | `update_local_light` as the garage light | Present | One hardcoded point over `misc.garage:0x001D`, +3.3 in Y, radius 8, intensity 8, plus a x3.0 and warm tint in the shader. |
 
-## 6. Known dead code
+## 6. Reflection blur
 
-`shaders/fs_blur.sc`, `build_reflection_mips()`, `reflection_chain_`,
-`blur_program_`, `u_refl_*` — left from an abandoned blur chain. Removing them
-is a separate small commit and has not been done.
+`shaders/fs_blur.sc`, `build_reflection_mips()`, `reflection_chain_` and
+`blur_program_` are **live, not dead**: the blur runs on the reflection chain.
+It is simply weak. Earlier notes in this repository called this dead code;
+that was wrong.
 
 ## 7. Not present here, present upstream
 
