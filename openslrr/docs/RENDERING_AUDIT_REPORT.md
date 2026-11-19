@@ -69,8 +69,8 @@ capture into two cubedmaps that swap on publication, with sampling gated by
 | `UI_HDR_SEPARATION.md` | non-modal UI tone-mapped in `kOsdUnder` | that was the problem state; routing has changed, kept as history |
 | `AUTOMOTIVE_RENDERING.md` | "pipeline is gamma end to end" | true when audited, since fixed; marked as history |
 | `AUTOMOTIVE_RENDERING.md` | stage 6 covered lighting | split: 6 tone mapping, 6b light system |
-| our own notes | reflection blur "dead code" | live and working, just weak |
-| our own notes | `bind_baked_light` white texture a defect | deliberate: the stock lightmap already holds the sun |
+| our own notes | reflection blur "dead code" | two things had been conflated. The visible reflection blur **works in game** and is weak; it comes from the automatic cubemap mip chain plus the level selection and blending in `envPrefilter()`. A separate `fs_blur.sc` / `build_reflection_mips()` pipeline exists but is **never called** from the runtime. GGX prefiltering is not implemented. |
+| our own notes | `bind_baked_light` white texture a defect | deliberate: `bind_baked_light()` intentionally passes `white_tex_`, and the source comment explains it as avoiding double-counted lighting. **What the stock lightmap actually contains is unverified** -- the comment is not evidence about game resource contents |
 | our own notes | camera click mismatch open | situational, closed |
 | our own notes | MSAA artefact open | not reproducible, closed |
 

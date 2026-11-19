@@ -13,6 +13,9 @@ mapping, in display space, and must not be affected by exposure or HDR
 processing. The world keeps its HDR treatment.
 
 ## Audit — where the UI draws today
+> **Historical record.** The separation has since been implemented; this
+> describes the state found before it and is kept for the reasons behind the
+> design. It is not a plan to execute.
 
 Draw entry points found (`bgfx_osd.cpp`): every UI batch submits to a single
 `osd_view_`, which is switched per widget.
@@ -52,6 +55,9 @@ scene; a speedometer painted over the game is LDR UI. This settles the
 catalogue/carinfo question: look at the layer, not at the object.
 
 ## Decisions to fix before moving code
+> **Historical record.** The separation has since been implemented; this
+> describes the state found before it and is kept for the reasons behind the
+> design. It is not a plan to execute.
 
 **Final output encoding.** Settled: hardware, `BGFX_RESET_SRGB_BACKBUFFER`.
 The manual `pow(1/2.2)` is removed from `fs_present`. Checked against the
@@ -64,6 +70,28 @@ destination to linear, blends and encodes on write. No manual linear
 blending is needed.
 
 ## Alpha and premultiplied alpha audit
+
+> **SUPERSEDED.** The proposal below -- that colour UI textures should be
+> decoded with `BGFX_TEXTURE_SRGB` -- was an earlier diagnosis and is
+> **rejected**. What was actually implemented: interface textures deliberately
+> carry **no** sRGB flag, because the OSD path is gamma straight through to the
+> window and matches the source art; adding the flag made them read darker.
+> Scene colour maps do use the flag, and the two are correct independently.
+> Interface textures were checked in game: colour matches the source images and
+> there are no visible haloes or blending problems. Do not re-enable sRGB for
+> UI. The notes below are kept as history.
+
+### Current state (implemented)
+
+- Interface textures: **no** `BGFX_TEXTURE_SRGB`.
+- Scene colour textures: `BGFX_TEXTURE_SRGB`.
+- Premultiplication is enforced at the UI loading point
+  (`tex_for_osd_icon`) for uncompressed DDS; PNG/PTX are already
+  premultiplied. Masks and glyphs are not given colour treatment.
+- Both alpha schemes used by the loader are described below and still match
+  the code.
+
+### Superseded analysis
 
 The interface blends **premultiplied**:
 
@@ -99,6 +127,9 @@ Still to classify before that fix:
 - textures where RGB and alpha mean different things.
 
 ## Planned sequence, one commit each
+> **Historical record.** The separation has since been implemented; this
+> describes the state found before it and is kept for the reasons behind the
+> design. It is not a plan to execute.
 
 1. Audit — this file. Complete the entry point list above.
 2. Decide the final output encoding, documented. **Done: hardware sRGB.**
@@ -107,6 +138,9 @@ Still to classify before that fix:
    compatibility and the single final encode.
 
 ## Step 3, corrected — isolate both halves
+> **Historical record.** The separation has since been implemented; this
+> describes the state found before it and is kept for the reasons behind the
+> design. It is not a plan to execute.
 
 The first attempt failed by moving `kOsdUnder` wholesale. It carries **two**
 different things:

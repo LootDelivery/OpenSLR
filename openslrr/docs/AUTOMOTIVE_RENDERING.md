@@ -207,7 +207,19 @@ applied independently at the camera (`-world_eye[2]`), the capture origin
 (`-eye[2]`, on an eye that already had `-camera[14]` applied), distance
 culling (`-i.transform[14]`), local lights (`-matrix[14]`), mesh centres
 (`part_centre`) and the box corners. It needs one documented rule before
-anyone extends it, because two of those sites already disagree.
+anyone extends it, because the convention is applied in many places
+  independently and is **not fully audited**.
+
+> **Status.** The claim that "two of those sites already disagree" is an
+> earlier diagnosis and is **not re-confirmed here**. What *was* checked for
+> this pass: the parallax box bounds are built from `parts_` geometry with Z
+> negated at construction (`axis == 2`), matching the Z flip `upload_part`
+> applies when building vertex buffers, and the ground fallback does the same;
+> and `fs_vehicle.sc` normalises `worldRay` after the correction. That is
+> consistency of the box path by construction. The full Z-negation convention
+> across camera, capture origin, distance culling, local lights, mesh centres
+> and box corners has **not** been traced end to end, so neither agreement nor
+> disagreement is asserted for the other sites.
 
 **9. Two reflection sources with different behaviour.** The spheremap path
 compensates for camera yaw in its UVs, which makes it inherently
@@ -378,7 +390,7 @@ Against the checklist this stage was supposed to cover:
 | how often the six faces update | done -- 6 per frame by default (`debug_overlay.hpp:27`) |
 | reflection probe position | done |
 | reflection probe orientation | done -- verified, correct |
-| box projection | done -- verified, wrong space |
+| box projection | **unverified** -- position and bounds are consistent by code construction and `worldRay` is normalised, but no visual check has been done. Not confirmed fixed, not confirmed broken |
 | reflection direction transforms | done |
 | normals in vertex and fragment shaders | done |
 | how the reflection coefficient is computed | done -- five unrelated formulas |

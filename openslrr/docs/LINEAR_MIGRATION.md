@@ -218,3 +218,72 @@ single place where colour maps are currently marked as raw data.
 
 The wrong reflections on the right-hand body panels. Their diagnosis continues
 separately and is not to be folded into these commits.
+
+---
+
+## 3. Current state and remaining work
+
+State at source revision `42d795e`. This is what the renderer does, as opposed
+to what the plan proposed.
+
+**Textures and colour**
+
+- Scene colour maps (albedo / emissive) are uploaded with `BGFX_TEXTURE_SRGB`
+  and decoded on sample.
+- Data maps (normal / roughness / metallic / masks) carry no sRGB flag and are
+  used as linear values.
+- Interface colour textures deliberately do **not** use `BGFX_TEXTURE_SRGB`.
+  The OSD path is gamma straight through to the window and matches the source
+  art; adding the flag made them read darker. Scene and interface are correct
+  independently and must not be unified.
+
+**Scene and output**
+
+- The scene target is `RGBA16F` with a D32F depth buffer.
+- The present pass does exposure and ACES. The manual `pow(x, 2.2)` decode and
+  `pow(x, 1/2.2)` encode of the old present pass are gone.
+- The final encode is hardware sRGB via `BGFX_RESET_SRGB_BACKBUFFER`, so there
+  is exactly one decode and one encode in the chain.
+
+**Reflections**
+
+- The cubemap is still `RGBA8` / LDR. Bright sources clip.
+- The mip chain is generated automatically (`BGFX_ATTACHMENT_AUTO_GEN_MIPS`).
+- `envPrefilter()` in `fs_vehicle.sc` selects a mip level with `textureCubeLod`
+  and blends two neighbouring levels. That is the reflection blur seen in game;
+  it is weak by nature, since level selection over a downsampled chain is a
+  lookup and not a convolution.
+- GGX prefiltering is **not implemented**.
+
+**Status claim, stated precisely:** the scene is rendered and tone mapped
+through an HDR target and the texture inputs are decoded correctly, but the
+pipeline as a whole is not "fully linear" -- the reflection cubemap is LDR,
+`envPrefilter()` is an approximation, and parts of the legacy lighting model in
+`fs_mesh.sc` remain unchanged. `RGBA16F` alone does not make every stage
+linear.
+
+**Remaining work**
+
+- HDR reflection capture.
+- GGX prefiltering (real convolution, not mip generation).
+- DFG LUT and base Cook-Torrance integration.
+- Further PBR integration, including layered automotive paint.
+- Compatibility check for legacy SCX materials against the new material path.
+- Comment debt: `shaders/fs_present.sc` still documents a `pow(x, 2.2)` gamma
+  decode that the pass no longer performs. Fix separately.
+
+## Stage status
+
+Stages 0-5 above are kept as the record of the migration. Their status:
+
+| Stage | Status |
+|---|---|
+| 0 audit | historical audit, complete |
+| 1 sRGB decode on colour maps | **implemented** |
+| 2 ? | see the stage text |
+| 3 remove gamma from the present pass | **implemented** |
+| 4 | see the stage text |
+| 5 | see the stage text |
+
+Only stages 1 and 3 were carried out as part of this migration; the remaining
+stages are planning material and are not implemented.
