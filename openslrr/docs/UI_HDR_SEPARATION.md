@@ -1,5 +1,13 @@
 # Separating the HDR scene from the LDR interface
 
+> **Status: step 3 is complete.** The routing described in the table below was
+> the *problem* state that motivated this document. It has since changed:
+> interface now draws to the window, plates at `kPlateView` (69) before the
+> preview composite and icons/text at `kOsdView` (71) after it. Nothing reaches
+> `scene_fb_`. The table is kept because it records what was wrong and why the
+> naive fix failed -- see `RENDERING_ARCHITECTURE.md` section 4 for the current
+> state and `RENDERING_HISTORY.md` section 5 for the reverted attempts.
+
 Goal: the ordinary screen UI must be drawn after scene post-processing and tone
 mapping, in display space, and must not be affected by exposure or HDR
 processing. The world keeps its HDR treatment.

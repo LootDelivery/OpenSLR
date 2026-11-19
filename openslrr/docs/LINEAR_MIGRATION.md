@@ -11,7 +11,8 @@ Ground rules taken from the decision:
 - `RGBA16F` alone does not make data linear. Every shader writing into a new
   linear render target must be verified to actually emit linear values.
 - Texture semantics are explicit: albedo / diffuse / emissive are sRGB, normal
-  / roughness / metallic / masks are linear. `BGFX_TEXTURE_SRGB` is not applied
+  / roughness / metallic / masks are linear. `BGFX_TEXTURE_SRGB` **is** applied
+  now to scene colour maps (stage 1+3 landed); data maps stay unflagged.
   to everything.
 - No double gamma encode/decode at any point.
 - In the linear architecture `Present` performs tone mapping and the single
@@ -29,7 +30,7 @@ Ground rules taken from the decision:
 
 | Thing | State |
 |---|---|
-| `BGFX_TEXTURE_SRGB` | used nowhere in the project |
+| `BGFX_TEXTURE_SRGB` | **superseded statement**: this document was written before the change landed. It is applied now to scene colour maps in `upload_part` (`bgfx_lib_backend.cpp`). Interface art deliberately does **not** use it -- see `RENDERING_ARCHITECTURE.md` section 4. |
 | Texture formats created | `RGBA8`, `D32F` (plus the scene colour target) |
 | Scene colour target | `RGBA16F` |
 | Present | `pow(x, 2.2)` → exposure → ACES → `pow(x, 1/2.2)` |
@@ -49,7 +50,7 @@ gamma-encoded values is wrong, and `RGBA8` also clips the highlights.
 | `fs_white.sc` | constant | |
 | `fs_present.sc` | `pow(x, 2.2)` → exposure → ACES → `pow(x, 1/2.2)` | **the only place gamma appears** |
 | `fs_hiz.sc`, `fs_blur.sc` | passes | |
-| colour textures (albedo/emissive) | stored gamma-encoded, sampled raw | `RGBA8`, no `BGFX_TEXTURE_SRGB` |
+| colour textures (albedo/emissive) | decoded on sample via `BGFX_TEXTURE_SRGB` (stage 1+3 landed) | `RGBA8` + `BGFX_TEXTURE_SRGB` |
 | normal / rough / mask textures | linear, sampled raw | `RGBA8`, no flag |
 | scene colour target | `RGBA16F` | format float, contents gamma-leaning |
 
@@ -186,7 +187,7 @@ own.
 | Stage | Function / site | Change |
 |---|---|---|
 | 0 | — | none, audit only |
-| 1 | `bgfx_lib_backend.cpp:2611`, `part.tex[i] = bgfx::createTexture2D(...)` — the SCX material texture loader (formats `BGRA8` for `.dds`, `RGBA8` otherwise, flags `0`, cached in `map_textures_`) | add `BGFX_TEXTURE_SRGB` on albedo/emissive only |
+| 1 | `bgfx_lib_backend.cpp:2611`, `part.tex[i] = bgfx::createTexture2D(...)` — the SCX material texture loader (formats `BGRA8` for `.dds`, `RGBA8` otherwise, cached in `map_textures_`) | **done**: `BGFX_TEXTURE_SRGB` on colour maps |
 | 1 | `bgfx_lighting.cpp`, the sampler binding block around lines 105–146 (`setTexture` for `s_tex_`, `s_lightmap_`, `s_mesh_mix_`, `s_static_shadow_`) | no change expected; it binds whatever the cache hands it |
 | 2 | `LibBgfxBackend::draw_instance` (`bgfx_lighting.cpp:177`) | shading already yields linear once the input is; verify rather than rewrite |
 | 2 | `bgfx_lib_backend.cpp:597–615`, the scene colour / depth target creation | keep `RGBA16F`, contents become linear |

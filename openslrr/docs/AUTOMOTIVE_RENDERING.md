@@ -313,6 +313,13 @@ matter far more.
 
 ## Problem 12: the pipeline is gamma-space end to end
 
+> **Status: fixed.** This records the state found by the audit at the time and
+> is kept as history. Since then stage 1+3 landed: scene colour maps carry
+> `BGFX_TEXTURE_SRGB`, and `fs_present.sc` no longer does any software gamma
+> conversion -- the window is an sRGB backbuffer and the encode is in hardware.
+> Interface art deliberately does **not** use the flag. See
+> `RENDERING_ARCHITECTURE.md` sections 2 and 4.
+
 This was listed as a prerequisite in `PBR_PLAN.md` but had not actually been
 audited. It has been now, and it is wrong in a way that will poison Stage 3.
 
