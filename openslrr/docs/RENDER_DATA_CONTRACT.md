@@ -86,6 +86,20 @@ resources and repaint mechanism first. If a suitable structure already exists,
 extend it preferentially. Do not mix the PaintDefinition library with SCX
 geometry.
 
+**5.3. Slot count.** The number of Paint slots is defined by the specific car
+model. The architecture must support an arbitrary count.
+
+- No hard-coded `PrimaryPaint` / `SecondaryPaint` fields.
+- Multiple slots are not required on every car.
+- One slot may be bound to several geometry groups.
+- Different slots may reference the same `PaintDefinition`.
+- Each slot has an independent `MaterialAssignment`.
+
+**One slot is enough for the first implementation.** Supporting an arbitrary
+count is architecture, not a promise that two-tone paint ships now. SCX carries
+stable slot ids and geometry bindings; vehicle state persists the assignment for
+every slot in use.
+
 ## 6. Core entities
 
 | Entity | Meaning |
@@ -191,6 +205,31 @@ associated colour. It is exactly the mechanism section 2 says must not survive
 into the new material model, because swapping a texture ID cannot carry
 clearcoat, roughness or layer parameters.
 
+### Repaint mechanisms — keep them apart
+
+Five different things exist today and must not be conflated:
+
+| Mechanism | What it does | Where |
+|---|---|---|
+| `PartConfig::texture` | the part's original texture ID | `part_config.cpp` |
+| `InstalledPart::texture` / `Record::state.texture` | the part's current texture ID | `part_runtime.cpp` |
+| `Part.setTexture()` / `getTexture()` | per-Part texture swap, exposed to scripts | `part_runtime.cpp:4977-4991` |
+| `paint_tree()` | one texture ID applied to a whole part tree, capped at 512 nodes | `part_runtime.cpp:1316` |
+| `PartRender::colors` | a list of RGB variants per render node | `part_config.cpp:323` |
+
+**Additional audit, confirmed facts:**
+
+- The create string's **seventh field** is `colour_index`, an index into each
+  render's `colors` list, gated by a `colour_set` flag
+  (`part_runtime.cpp:106`). `paint_of()` returns `0xffffff` when the flag is
+  unset or the list is empty, otherwise `colors[pick]`.
+- `state.texture` **is persisted per part**: it is written from the state field
+  named `"color"` (`part_runtime.cpp:570`) and defaults to
+  `PartConfig::texture` (`part_runtime.cpp:1192`). So a per-part texture
+  survives a save and reload.
+- `render.variants` chooses a *resource* variant by seed; `render.colors`
+  chooses a *colour* variant by seed. These are separate mechanisms.
+
 **Not established by this audit** (needs its own pass over the game resources):
 
 - where the original game stores the available paint variants;
@@ -199,7 +238,18 @@ clearcoat, roughness or layer parameters.
 - whether more than one paint slot type exists;
 - how the chosen paint is persisted per vehicle;
 - what exactly changes on repaint beyond the texture;
-- repaint behaviour in garage, preview and saved-car load.
+- repaint behaviour in garage, preview and saved-car load;
+- whether the original logic ever calls `setTexture()` per body panel, or
+  always applies one colour to the whole body;
+- whether original resources or scripts carry the concept of several
+  independent body colour groups;
+- how `PartRender::colors` is actually used in real content;
+- whether two different textures on two body panels is a supported mechanic or
+  a side effect of the API.
+
+**Do not conclude that two-tone paint is supported merely because `setTexture()`
+can be called on individual parts.** That is API capability, not evidence of a
+game mechanic.
 
 Until those are answered, the shape of `PaintDefinition` and its storage home
 stay open. Do not infer the original game's internals from the architecture we
@@ -213,9 +263,35 @@ would like to have.
    scale needed to convert them?
 4. How do `attH_texture` / `attV_texture` behave, and do they need to reach the
    reflection capture as well?
-5. Does the extended SCX need to store light definitions at all, given §1 says
-   Point/Spot do not belong there?
+5. How do exported lights get attached to a game object? See §14.
 6. What is the fallback behaviour when a game-managed slot has no assigned
    material — a default paint, or the SCX fallback?
 7. Should `ResolvedMaterial` be per-draw or cached per slot? Affects the frame
    assembly path but not the contract.
+
+## 14. Light definitions and SCX — decision
+
+Fixed:
+
+- SCX does **not** store Point/Spot/Directional definitions.
+- Lights stay part of the game resource system and the object hierarchy.
+- The Runtime Light System receives them through the resource loader and the
+  scene graph.
+- The future SCX Exporter must **not** write light definitions into SCX.
+
+A future 3D editor must still be able to author and place lights. The export
+would be several related artefacts: SCX for geometry and materials, separate
+game light resources, and the links binding them to the object and resource
+tree nodes.
+
+Do **not** add light attachment fields to SCX. First find out how existing RPK
+resources connect lights to objects. If that genuinely needs a locator, propose
+a separate format or binding mechanism.
+
+**Open question:** how are exported lights attached to an object? Existing RPK
+resource linking has not been examined yet, and no locator format is proposed
+here.
+
+**Not decided:** the storage home of the paint library. Design decision taken:
+paint definitions are game content. The concrete location is still open and
+depends on the RPK / script / catalogue audit in §3.
