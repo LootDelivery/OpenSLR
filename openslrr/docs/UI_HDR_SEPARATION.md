@@ -19,8 +19,12 @@ Draw entry points found (`bgfx_osd.cpp`): every UI batch submits to a single
 
 | Widget class | View | Target | Correct? |
 |---|---|---|---|
-| modal windows (`osd_owner_modal`) | `kOsdView` = 70 | backbuffer | yes |
-| non-modal — HUD, catalogue, car cards, tooltips, cursor | `kOsdUnder` = 7 | `scene_fb_` | **no: tone mapped** |
+| modal windows (`osd_owner_modal`) | `kOsdUnder` = 7 (then) | `scene_fb_` | **historical** |
+| non-modal — HUD, catalogue, car cards, tooltips, cursor | `kOsdUnder` = 7 | `scene_fb_` | **historical** |
+
+**Current routing (authoritative):** `kPlateView` = 69 for plates, preview
+composite = 70, `kOsdView` = 71 for icons and text. Nothing draws into
+`scene_fb_`. See `RENDERING_ARCHITECTURE.md` section 4.
 
 The switch is at `bgfx_osd.cpp:880-886`. Everything routed to `kOsdUnder` is
 composited into the HDR target and then tone mapped and encoded along with the
@@ -33,7 +37,7 @@ View layout as measured:
 |---|---|---|
 | 5 `kWorldView` | 3D scene | `scene_fb_` (HDR) |
 | 6 `kFmvLayer` | video layer | `scene_fb_` |
-| 7 `kOsdUnder` | non-modal UI | `scene_fb_` |
+| 7 `kOsdUnder` | **historical**: non-modal UI | `scene_fb_` |
 | 8–63 `kPreview0`+ | inset previews | `scene_fb_` |
 | 68 `kPresentView` | tone mapping | backbuffer |
 | 70 `kOsdView` | modal UI | backbuffer |
@@ -124,8 +128,11 @@ mapping:
 
 Which means:
 
-- the plate renders to an **SDR UI target**, composited first;
-- the 3D preview renders to **its own HDR target**, tone mapped separately;
+- the plate draws **display-referred through `kPlateView` to the window**,
+  composited first. There is no separate SDR UI render target -- that was an
+  earlier proposal, and it is not what was built;
+- the 3D preview renders to **its own HDR target** (`preview_fb_`, RGBA16F +
+  D32F), tone mapped separately;
 - both are composited in order, and the remaining 2D UI draws afterwards.
 
 The preview keeps its depth buffer, which it needs and which the window does

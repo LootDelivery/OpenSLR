@@ -106,12 +106,12 @@ Read from `LibBgfxBackend::update_reflections`:
 |---|---|
 | resolution | **512** per face by default (`reflection_face_size()`, clamped 64-2048, `SLRR_REFL_RES` overrides) |
 | format | RGBA8 — LDR |
-| mip levels | 1 |
+| mip levels | automatic mip chain via `BGFX_ATTACHMENT_AUTO_GEN_MIPS` (plain downsampling, **not** GGX prefiltering) |
 | faces per frame | budget from the "Reflection faces per frame" slider |
 | probe position | `eye + (0, 0.8, 0)`, Z negated |
 | probe tracking | car, or the camera in a showroom |
 | the car itself | excluded from the capture |
-| spatial correction | box projection, garage only, from the ground bbox |
+| spatial correction | box projection, garage only. Bounds come from the garage shell geometry, whose Z is already flipped at `upload_part`, so they land in the shader space; **fallback** to the ground corners when no shell is loaded |
 
 ## Problems found
 
@@ -137,13 +137,19 @@ the HDR present pass has nothing left to recover. A proper IBL needs an HDR
 capture; otherwise the specular energy of the environment is destroyed
 before the material ever sees it.
 
-**3. One mip level.** Roughness has nowhere to go. Anything the material
-calls "rough" can only be achieved by smearing, which is what made the
-previous PBR look like mush.
+**3. One mip level. -- SUPERSEDED.** The cubemap now carries an automatic mip
+chain (`AUTO_GEN_MIPS`), and `envPrefilter()` selects a level with
+`textureCubeLod`, mixing two neighbouring levels. Roughness therefore has
+somewhere to go, which is the reflection blur seen in game. It remains an
+approximation: downsampling is not a GGX convolution, so wide roughness is
+still modelled by a level choice rather than by a prefilter. GGX prefiltering
+is unimplemented.
 
-**4. The six faces are captured over several frames.** The cube lags the
-camera, so reflections drift behind it. The budget slider makes this worse
-at lower settings.
+**4. The cube lags the camera. -- PARTLY SUPERSEDED.** The default budget is
+`reflection_faces = 6` (`debug_overlay.hpp:27`), so the full cube is captured
+in a single frame and the lag described here applies only when the slider is
+lowered. Publication still happens once per frame, and `SLRR_REFL_INTERVAL`
+can throttle it further.
 
 **5. The car is excluded from its own capture.** Bumpers, mirrors, chrome
 and panel transitions cannot reflect the car at all.
@@ -158,7 +164,17 @@ survive into the PBR stage.
 for any material using the baked lightmap, which is most of them. That alone
 makes the paint read matte.
 
-**8. VERIFIED BUG: the box projection runs across two spaces.**
+**8. Box projection across two spaces. -- HISTORICAL DIAGNOSIS, current status below.**
+
+> The mismatch described here was established against an earlier revision and
+> is kept as history. The current code computes `position = mul(u_invView,
+> v_viewPos).xyz` in world space before the box test, and the bounds are built
+> from the garage shell whose Z is flipped when `upload_part` builds the
+> vertex buffers, which is stated in the source to put them in the same space
+> as the shader. That is consistency **by construction**; it has not been
+> confirmed on screen. Neither "fixed" nor "still broken" is claimed here.
+
+Original diagnosis:
 
 Two places compute a world point from the same geometry bounds and the same
 instance transform, and they disagree by a sign:
@@ -180,8 +196,11 @@ exactly the shape of "reflections do not run across panels". This is the
 strongest live suspect in the whole audit and belongs at the top of Stage 2.
 
 Independently of the space bug, the computed direction
-`worldRay = position + worldRay * distance - u_reflectionProbe.xyz` is
-never normalised.
+`worldRay = position + worldRay * distance - u_reflectionProbe.xyz` was
+reported as never normalised. **That is no longer true**: the current
+`fs_vehicle.sc` wraps the expression in `normalize()` and carries a comment
+explaining that the result feeds `saturate(worldRay.y)` and the prefilter
+tangent basis, both of which need a unit direction. Corrected.
 
 **8b. The whole engine carries an undocumented Z-negation convention,**
 applied independently at the camera (`-world_eye[2]`), the capture origin
@@ -205,15 +224,16 @@ format has no slots for them.
 
 ## Closed during this revision
 
-- **Box space.** Closed: it is wrong. See problem (8). No debug draw is
-  needed to establish the mismatch, though drawing the box is still the
-  cheapest way to confirm the fix afterwards.
+- **Box space. -- Reopened as unverified.** The original diagnosis (problem 8)
+  was against an earlier revision; the current path is self-consistent by
+  construction but not confirmed in game. Draw the box before calling it
+  fixed.
 - **`position_scale`.** Closed: one uniform scalar, not per-axis.
 - **Non-uniform scale in content.** Closed: `PartPose` has no scale at all,
   so part transforms are rigid and the normal transform is safe today.
 - **Reflection face budget.** Closed: `reflection_faces` defaults to **6**
-  (`debug_overlay.hpp:24`), so a full cube takes two frames and half of it
-  is one frame stale even at the default. Lowering the slider makes it
+  (`debug_overlay.hpp:27`), so a full cube is captured **within one frame** at
+  the default. Lowering the slider makes it
   worse; there is no setting that captures a whole cube per frame.
 
 ## Open questions before Stage 2

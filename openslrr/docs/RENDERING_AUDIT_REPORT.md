@@ -98,7 +98,7 @@ revision listed it as created; that was wrong).
 | Separate blur pipeline (`fs_blur.sc`, `build_reflection_mips()`) | compiled, `blur_program_` created, but **never called**; not in the runtime path. |
 | `fs_present.sc` comment | stale: it still describes a gamma decode with `pow(x, 2.2)` that the pass no longer does. Comment-only; fix in a separate change. |
 | Minimap in the city | does not expand to full size. |
-| `bind_baked_light` | binds `white_tex_`; the lightmap list is discarded, deliberately. |
+| `bind_baked_light` | binds `white_tex_` and discards the texture list. Deliberate: the source comment says this avoids double-counting the sun. **What the stock lightmap actually contains is unverified** -- a code comment is not evidence about game resource contents. |
 | `fs_mesh.sc` vs `fs_vehicle.sc` | two different lighting models, not unified. |
 | Point/Spot lights | authored in game data, unused by the backend. |
 | Multi-light shadows | not supported; shadow passes are built for one sun frustum. |

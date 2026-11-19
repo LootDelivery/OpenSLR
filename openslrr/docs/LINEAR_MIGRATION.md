@@ -4,7 +4,14 @@ Target architecture chosen: **option A, a genuinely linear pipeline**, migrated
 in stages with separate commits. Nothing here changes the rendering behaviour
 in one step.
 
-This document is the plan. It deliberately does not implement anything.
+This document records the migration plan and its outcome. It is split into
+three parts so history is not read as current state:
+
+1. **Historical baseline** -- what the audit found before any change.
+2. **The implemented migration** -- what actually landed.
+3. **Current state and remaining work**.
+
+Only part 3 describes the renderer as it is.
 
 Ground rules taken from the decision:
 
@@ -26,20 +33,25 @@ Ground rules taken from the decision:
 - The wrong reflections on the right-hand body panels are a separate matter and
   are not mixed into this work.
 
-## Current state, measured
+## 1. Historical baseline (measured before the migration)
+
+> Everything in this section is the **pre-migration** state and is kept as
+> history. It does not describe the renderer today.
 
 | Thing | State |
 |---|---|
 | `BGFX_TEXTURE_SRGB` | **superseded statement**: this document was written before the change landed. It is applied now to scene colour maps in `upload_part` (`bgfx_lib_backend.cpp`). Interface art deliberately does **not** use it -- see `RENDERING_ARCHITECTURE.md` section 4. |
 | Texture formats created | `RGBA8`, `D32F` (plus the scene colour target) |
 | Scene colour target | `RGBA16F` |
-| Present | `pow(x, 2.2)` → exposure → ACES → `pow(x, 1/2.2)` |
-| Consequence | the pipeline is gamma-space end to end; the cubemap holds gamma-encoded values |
+| Present (then) | `pow(x, 2.2)` → exposure → ACES → `pow(x, 1/2.2)` |
+| Consequence (then) | the pipeline was gamma-space end to end; the cubemap held gamma-encoded values |
 
 The last row is why a GGX convolution must not start yet: convolution over
 gamma-encoded values is wrong, and `RGBA8` also clips the highlights.
 
-## Stage 0 — audit, no behaviour change
+## 2. The implemented migration
+
+## Stage 0 — audit, no behaviour change (historical)
 
 **Done.** Result, by reading the arithmetic:
 
@@ -48,7 +60,7 @@ gamma-encoded values is wrong, and `RGBA8` also clips the highlights.
 | `fs_mesh.sc` | `albedo × light` | no gamma op anywhere in the file |
 | `fs_vehicle.sc` | `lit`, `shaded`, `shine` | no gamma op; `pow()` calls are Phong/Fresnel exponents, not gamma |
 | `fs_white.sc` | constant | |
-| `fs_present.sc` | `pow(x, 2.2)` → exposure → ACES → `pow(x, 1/2.2)` | **the only place gamma appears** |
+| `fs_present.sc` (then) | `pow(x, 2.2)` → exposure → ACES → `pow(x, 1/2.2)` | was **the only place gamma appeared**; stage 3 removed both `pow` calls |
 | `fs_hiz.sc`, `fs_blur.sc` | passes | |
 | colour textures (albedo/emissive) | decoded on sample via `BGFX_TEXTURE_SRGB` (stage 1+3 landed) | `RGBA8` + `BGFX_TEXTURE_SRGB` |
 | normal / rough / mask textures | linear, sampled raw | `RGBA8`, no flag |
@@ -191,7 +203,7 @@ own.
 | 1 | `bgfx_lighting.cpp`, the sampler binding block around lines 105–146 (`setTexture` for `s_tex_`, `s_lightmap_`, `s_mesh_mix_`, `s_static_shadow_`) | no change expected; it binds whatever the cache hands it |
 | 2 | `LibBgfxBackend::draw_instance` (`bgfx_lighting.cpp:177`) | shading already yields linear once the input is; verify rather than rewrite |
 | 2 | `bgfx_lib_backend.cpp:597–615`, the scene colour / depth target creation | keep `RGBA16F`, contents become linear |
-| 3 | `shaders/fs_present.sc`, `main()` | drop the `pow(x, 2.2)` decode; keep exposure + ACES; drop the encode if the swap chain is sRGB |
+| 3 | `shaders/fs_present.sc`, `main()` | **done**: the `pow(x, 2.2)` decode is gone, exposure + ACES remain, and the encode is hardware sRGB. Note: a stale comment in `fs_present.sc` still describes the old `pow` path -- comment debt, fix separately |
 | 3 | `LibBgfxBackend` present draw (`draw_fullscreen` at the `present_program_` call) | unchanged |
 | 4 | `LibBgfxBackend::update_reflections` — cube creation near the `createTextureCube` call, and the face capture loop | two separate `RGBA16F` linear resources |
 | 4 | `LibBgfxBackend::destroy_reflections` | release both |

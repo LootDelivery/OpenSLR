@@ -55,7 +55,7 @@ Code exists; correctness not confirmed.
 | Reflection blur is weaker than intended | open, cosmetic. **The blur works in game** and is visible; it is produced by the cubemap mip chain plus `envPrefilter()` level selection, not by the separate blur pipeline. GGX prefiltering is not implemented. |
 | Camera click-target mismatch (`scene_instances_pointer_ray` vs `SLRR_CAM_*`) | closed as situational: observed only in specific runs where the camera was changing |
 | MSAA toggle artefact | closed: not reproducible now |
-| `bind_baked_light()` binds `white_tex_` and discards its texture list | **deliberate**, not a defect -- the code notes the stock lightmap already contains the sun and its shadows, so using it would double-count the light |
+| `bind_baked_light()` binds `white_tex_` and discards its texture list | **deliberate**, not a defect -- the source comment says this avoids double-counting the sun and its shadows. What the stock lightmap actually contains is unverified -- a code comment is not evidence about game resource contents |
 
 ## 5. Limitations of the reflection system
 
