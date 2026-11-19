@@ -38,7 +38,7 @@ here is inferred from commit titles.
 | `shaders/fs_present.sc` | Verified | New. Tone mapping pass: exposure, `aces()`, no software gamma encode. `u_presentParams.z` passes source alpha through for the preview composite; `.w` is a debug alpha view. |
 | `shaders/fs_cubeview.sc` | Verified | New. On-screen cubemap face viewer, sampling the cube directly. |
 | `shaders/fs_hiz.sc` | Build-verified | New. HiZ reduction. |
-| `shaders/fs_blur.sc` | **Dead code** | New but unused. Left by an abandoned blur chain. |
+| `shaders/fs_blur.sc` | **Built, not called** | Compiled, embedded and `blur_program_` is created from it, but the only consumer, `build_reflection_mips()`, is never invoked anywhere in the runtime. See section 6. |
 | `shaders/fs_white.sc` | Build-verified | New. |
 | `shaders/fs_shadow_recv.sc`, `vs_shadow_cast.sc`, `vs_shadow_recv.sc` | Build-verified | New shadow passes. |
 | `shaders/fs_mesh.sc` | Verified | World material path. No environment lookup. |
@@ -94,12 +94,28 @@ Recorded because they explain the current design.
 | `sRGB` flag on all UI textures | Superseded | Scoped back to scene maps only; on interface it double-processed. |
 | `update_local_light` as the garage light | Present | One hardcoded point over `misc.garage:0x001D`, +3.3 in Y, radius 8, intensity 8, plus a x3.0 and warm tint in the shader. |
 
-## 6. Reflection blur
+## 6. Reflection blur — three separate mechanisms
 
-`shaders/fs_blur.sc`, `build_reflection_mips()`, `reflection_chain_` and
-`blur_program_` are **live, not dead**: the blur runs on the reflection chain.
-It is simply weak. Earlier notes in this repository called this dead code;
-that was wrong.
+These are distinct and were previously conflated. Established by tracing the
+call graph at `9b9513f`.
+
+1. **Runtime blur: works in game, effect is weak.** The cubemap carries an
+   automatically generated mip chain (`BGFX_ATTACHMENT_AUTO_GEN_MIPS` on the
+   last face), and `envPrefilter()` in `shaders/fs_vehicle.sc` selects a level
+   with `textureCubeLod`, mixing two neighbouring levels. That level selection
+   over a downsampled chain is what produces the visible softening. This is
+   **not** a convolution and not GGX prefiltering.
+2. **Extra blur pipeline: built, never run.** `build_reflection_mips()` is
+   defined at `bgfx_lib_backend.cpp:2124` and declared in the header, but a
+   call-graph search finds no invocation. `fs_blur.sc` is embedded and
+   `blur_program_` is created and destroyed, so the code is live in the build
+   sense and inert in the runtime sense. Its own comment calls it "Stage 2.2:
+   turn the six faces sitting in mip 0 into a prefilter chain".
+3. **GGX prefiltering: not implemented.** Neither of the above is it.
+
+The absence of a call to `build_reflection_mips()` does not mean reflections
+are unblurred, and the presence of `fs_blur.sc` does not mean it is the
+mechanism in use. Both statements stand at once.
 
 ## 7. Not present here, present upstream
 
@@ -107,3 +123,52 @@ Vehicle dynamics, race runtime, road routes, wheel mounts, mass properties,
 job system, texture batch OSD, various `assets/validation` suites. These are
 upstream work after our snapshot and are listed so they are not mistaken for
 things we removed.
+
+## 8. Index of significant commits
+
+Full history in this repository: **41 commits** between the import snapshot
+`3371388` and `42d795e` (no merge commits; `git rev-list --count` and
+`--first-parent` agree). This is the entire verifiable record. Graphics work
+that predates the import has **no** commit objects here and is not listed.
+
+| SHA | Date | Subject | Subsystem |
+|---|---|---|---|
+| 4f3ce67 | 2026-11-18 | Reflection: separate capture from sampling | reflections |
+| e4a9497 | 2026-11-18 | HDR: keep the source alpha in the present pass | HDR |
+| 43dc413 | 2026-11-18 | Catalogue previews use the full material | catalogue |
+| 488144a | 2026-11-18 | Invalidate the environment on world change | reflections |
+| 24b6295 | 2026-11-18 | Tooltip no longer pushes previews out of view | UI |
+| 74db47c | 2026-11-18 | Colour UI textures decode as sRGB | colour |
+| aaa05e7 | 2026-11-18 | Scope the sRGB flag to UI only | colour |
+| f3dfdbc | 2026-11-18 | Spin a part about its pivot | catalogue |
+| 051ca74 | 2026-11-18 | Only the preview composite passes alpha | HDR |
+| 2be1596 | 2026-11-18 | A car turns as one | catalogue |
+| d2e2df9 | 2026-11-18 | Chrome and glass sample the environment | reflections |
+| 446b86e | 2026-11-18 | The pivot spin accumulates across frames | catalogue |
+| 667a044 | 2026-11-18 | Font measure no longer collapses on unrasterized glyphs | fonts |
+| 7871a2c | 2026-11-18 | Spin pivot fixed per slot | catalogue |
+| ba19966..6da2b23 | 2026-11-18 | Plate and slot diagnostics | diagnostics |
+| 9fc1138 | 2026-11-18 | Text.getHeight normalises by framebuffer | UI |
+| 763b6b2 | 2026-11-18 | Background plates draw behind the previews | UI |
+| bbabd8c | 2026-11-18 | A pivot of about zero no longer looks unset | catalogue |
+| 35a15f2 | 2026-11-18 | Turn the slot, not its parts | catalogue |
+| ba526e5 | 2026-11-18 | Drop the plate logging | diagnostics |
+| d657c9f | 2026-11-18 | The turned view is applied once | catalogue |
+| cf869e8 | 2026-11-18 | Turn the slot in world space | catalogue |
+| 93f09e3 | 2026-11-18 | Drop the preview slot logging | diagnostics |
+| a9fbd69 | 2026-11-18 | The catalogue plate leaves the HDR scene | HDR/UI |
+| 4f13ca3 | 2026-11-18 | Backdrop stops reacting to exposure | HDR/UI |
+| 749dee2 | 2026-11-18 | **Revert** the backdrop change | reverted |
+| 94d80f0 | 2026-11-18 | kPlateView draws to the window | HDR/UI |
+| ced317f | 2026-11-18 | Every backdrop leaves the HDR scene | HDR/UI |
+| 557e80b | 2026-11-18 | Every background plate is display-referred | HDR/UI |
+| 69ee417 | 2026-11-18 | No interface draws into the scene target | HDR/UI |
+| ceb32ae | 2026-11-18 | Interface textures pass through as gamma | colour |
+| 994b13e | 2026-11-18 | Interface art is premultiplied | alpha |
+| ae256ae | 2026-11-19 | Lighting audit: point lights dropped in code | lighting |
+| b6ab2a2 | 2026-11-19 | Lighting audit: game data carries point and spot | lighting |
+| 42d795e | 2026-11-19 | Roadmap: tone mapping separate from the light system | roadmap |
+
+Two commits (`ae0d199`, `4a8e21a`) have the subject "." and carry no
+indication of their purpose; they are listed as unclassified rather than
+attributed.

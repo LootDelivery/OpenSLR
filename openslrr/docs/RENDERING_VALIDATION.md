@@ -11,6 +11,7 @@ actually exercised on screen; everything else is marked down accordingly.
 | Interface routing | catalogue, garage, menus, city HUD | backgrounds no longer react to exposure; previews stay visible above the plates |
 | Preview composite | catalogue | slots reset every frame; plate behind, previews above, 2D UI on top |
 | Reflections | garage | body, chrome and glass show the garage environment |
+| Reflection blur | garage, catalogue | visible softening of reflections; weak |
 | Reflections | catalogue, part tabs | body parts, exhaust tips and glass all sample the environment |
 | Reflections | inspection mode | works; the driver is excluded from the capture |
 | Reflection capture lifecycle | garage -> catalogue -> garage | the captured environment survives the catalogue and is invalidated on world change |
@@ -18,7 +19,7 @@ actually exercised on screen; everything else is marked down accordingly.
 | Pivot rotation | single part | turns and holds its angle |
 | Pivot rotation | car in assembly | turns as one rigid body |
 | UI text measurement | first tooltip | plate is sized correctly on first showing |
-| Textures | catalogue | colour matches the source art after removing the sRGB flag |
+| Textures | catalogue | **interface** textures match the source art after removing the sRGB flag from them. Scene colour maps keep the flag; the two are correct independently |
 | Alpha / haloes | catalogue, menus | no fringing; premultiplication enforced at load |
 | City HUD | minimap, speedometer | textures do not react to exposure |
 
@@ -51,7 +52,7 @@ Code exists; correctness not confirmed.
 | Problem | Status |
 |---|---|
 | Minimap in the city does not expand to full size | open, reported, not investigated |
-| Reflection blur is weaker than intended | open, cosmetic: the blur runs, its strength is simply low |
+| Reflection blur is weaker than intended | open, cosmetic. **The blur works in game** and is visible; it is produced by the cubemap mip chain plus `envPrefilter()` level selection, not by the separate blur pipeline. GGX prefiltering is not implemented. |
 | Camera click-target mismatch (`scene_instances_pointer_ray` vs `SLRR_CAM_*`) | closed as situational: observed only in specific runs where the camera was changing |
 | MSAA toggle artefact | closed: not reproducible now |
 | `bind_baked_light()` binds `white_tex_` and discards its texture list | **deliberate**, not a defect -- the code notes the stock lightmap already contains the sun and its shadows, so using it would double-count the light |
@@ -61,8 +62,14 @@ Code exists; correctness not confirmed.
 Stated because the system is often described as done and it is not.
 
 - The mip chain is `AUTO_GEN_MIPS`, plain downsampling. **Not GGX
-  prefiltering.** `envPrefilter()` in `fs_vehicle.sc` approximates roughness
-  with a fixed LOD range; that is an approximation, not a prefilter.
+  prefiltering.** `envPrefilter()` in `fs_vehicle.sc` picks a mip level with
+  `textureCubeLod` and mixes two neighbouring levels. That is the working
+  reflection blur; it is weak because level selection over a downsampled chain
+  is not a convolution.
+- A separate blur pipeline (`fs_blur.sc`, `blur_program_`,
+  `build_reflection_mips()`) is compiled but has no call site and does not run.
+  Its absence does not make reflections sharp, and its presence is not the blur
+  you see.
 - The cubemap is **RGBA8 / LDR**. Bright sources clip. HDR capture is a
   separate task.
 - Box projection covers interiors only. Outdoors is direction-only.

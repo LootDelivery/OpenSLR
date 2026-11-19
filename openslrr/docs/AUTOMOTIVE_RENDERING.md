@@ -104,7 +104,7 @@ Read from `LibBgfxBackend::update_reflections`:
 
 | aspect | current |
 |---|---|
-| resolution | 256 per face |
+| resolution | **512** per face by default (`reflection_face_size()`, clamped 64-2048, `SLRR_REFL_RES` overrides) |
 | format | RGBA8 — LDR |
 | mip levels | 1 |
 | faces per frame | budget from the "Reflection faces per frame" slider |
@@ -211,7 +211,7 @@ format has no slots for them.
 - **`position_scale`.** Closed: one uniform scalar, not per-axis.
 - **Non-uniform scale in content.** Closed: `PartPose` has no scale at all,
   so part transforms are rigid and the normal transform is safe today.
-- **Reflection face budget.** Closed: `reflection_faces` defaults to 3
+- **Reflection face budget.** Closed: `reflection_faces` defaults to **6**
   (`debug_overlay.hpp:24`), so a full cube takes two frames and half of it
   is one frame stale even at the default. Lowering the slider makes it
   worse; there is no setting that captures a whole cube per frame.
@@ -219,7 +219,7 @@ format has no slots for them.
 ## Open questions before Stage 2
 
 - Does the 0.15 near plane in the capture clip anything meaningful inside a
-  garage? The capture FOV is 90 degrees at 256 per face.
+  garage? The capture FOV is 90 degrees at 512 per face.
 - Do any stock or modded materials depend on the spheremap path
   (`s_vehicleEnv` with camera-yaw compensation), and can it be retired in
   favour of the cubemap, or must both stay?
@@ -355,7 +355,7 @@ Against the checklist this stage was supposed to cover:
 | item | state |
 |---|---|
 | algorithm behind the dynamic cubemap | done |
-| how often the six faces update | done -- 3 per frame, default |
+| how often the six faces update | done -- 6 per frame by default (`debug_overlay.hpp:27`) |
 | reflection probe position | done |
 | reflection probe orientation | done -- verified, correct |
 | box projection | done -- verified, wrong space |

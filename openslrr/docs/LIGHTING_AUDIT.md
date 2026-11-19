@@ -1,3 +1,9 @@
+# LIGHTING AUDIT
+
+> **Revision note.** This document predates the rendering audit (`9b9513f`) and
+> was re-checked against **HEAD `42d795e`**. The statements below were verified
+> against source at that revision. Where a claim rests on a code comment rather
+> than on observed resource contents, that is now marked explicitly.
 # Lighting audit — current state
 
 Read-only audit, part 1 of the lighting design. No code was changed.

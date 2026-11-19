@@ -13,7 +13,7 @@ Ground rules taken from the decision:
 - Texture semantics are explicit: albedo / diffuse / emissive are sRGB, normal
   / roughness / metallic / masks are linear. `BGFX_TEXTURE_SRGB` **is** applied
   now to scene colour maps (stage 1+3 landed); data maps stay unflagged.
-  to everything.
+  Gamma handling is therefore no longer the constraint on these formulas.
 - No double gamma encode/decode at any point.
 - In the linear architecture `Present` performs tone mapping and the single
   conversion needed to reach the display. If the backbuffer is sRGB, no

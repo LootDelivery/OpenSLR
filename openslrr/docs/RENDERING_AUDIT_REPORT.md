@@ -45,7 +45,12 @@ and from the code, not from commit archaeology.
 8. **Lighting audit and roadmap** — game data scanned, Point/Spot found
    authored and unused.
 
-In this repository, all 40 post-import commits are documented and verifiable.
+In this repository there are **41 commits** between the import snapshot `3371388`
+and `42d795e`, with no merge commits (`git rev-list --count` and
+`--first-parent` agree). An index of the significant graphics commits is in
+`RENDERING_HISTORY.md` section 8. Two of those commits have the subject "."
+and cannot be attributed from the history alone. Graphics work predating the
+import has no commit objects here and is not presented as recovered history.
 
 ## 3. Architecture
 
@@ -71,11 +76,14 @@ capture into two cubedmaps that swap on publication, with sampling gated by
 
 ## 5. Markdown files
 
-**Created:** `RENDERING_ARCHITECTURE.md`, `RENDERING_HISTORY.md`,
-`RENDERING_VALIDATION.md`, `LIGHTING_AUDIT.md`.
+**Created by `9b9513f`:** `RENDERING_ARCHITECTURE.md`, `RENDERING_HISTORY.md`,
+`RENDERING_VALIDATION.md`, `RENDERING_AUDIT_REPORT.md`.
 
-**Changed:** `LINEAR_MIGRATION.md`, `UI_HDR_SEPARATION.md`,
+**Changed by `9b9513f`:** `LINEAR_MIGRATION.md`, `UI_HDR_SEPARATION.md`,
 `AUTOMOTIVE_RENDERING.md`.
+
+**Pre-existing, not created by `9b9513f`:** `LIGHTING_AUDIT.md` (an earlier
+revision listed it as created; that was wrong).
 
 **Studied, unchanged:** `AGENTS.md`, `ENGINE_CONTRACT.md`, `PBR_PLAN.md`,
 `BACKLOG.md`, `KNOWLEDGE_BASE.md`, `MILESTONES.md`, `NATIVE_AUDIT.md`.
@@ -84,9 +92,11 @@ capture into two cubedmaps that swap on publication, with sampling gated by
 
 | Item | State |
 |---|---|
-| GGX prefilter | **not implemented.** The mip chain is `AUTO_GEN_MIPS`, i.e. downsampling. `envPrefilter()` approximates roughness with a fixed LOD range. |
+| GGX prefilter | **not implemented.** The mip chain is `AUTO_GEN_MIPS`, i.e. downsampling. `envPrefilter()` picks a mip level with `textureCubeLod`. |
 | HDR reflection capture | not implemented; the cubemap is RGBA8/LDR and bright sources clip. |
-| Reflection blur | runs, weaker than intended. |
+| Reflection blur | **works in game**, visibly softening reflections, but weak. Produced by the mip chain plus `envPrefilter()` level selection. |
+| Separate blur pipeline (`fs_blur.sc`, `build_reflection_mips()`) | compiled, `blur_program_` created, but **never called**; not in the runtime path. |
+| `fs_present.sc` comment | stale: it still describes a gamma decode with `pow(x, 2.2)` that the pass no longer does. Comment-only; fix in a separate change. |
 | Minimap in the city | does not expand to full size. |
 | `bind_baked_light` | binds `white_tex_`; the lightmap list is discarded, deliberately. |
 | `fs_mesh.sc` vs `fs_vehicle.sc` | two different lighting models, not unified. |

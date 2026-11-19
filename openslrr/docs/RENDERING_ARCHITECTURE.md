@@ -75,14 +75,28 @@ reflect.
 
 **Limitations, stated because they matter:**
 
+- Face size is 512 by default (`reflection_face_size()`, clamped 64-2048,
+  overridable by `SLRR_REFL_RES`). Faces per frame: `reflection_faces = 6` by
+  default (`debug_overlay.hpp:27`).
 - The mip chain is `AUTO_GEN_MIPS`, i.e. plain downsampling. This is **not**
-  GGX prefiltering. `fs_vehicle.sc` `envPrefilter()` approximates roughness by
-  sampling a fixed LOD range, which is not a prefilter.
-- The cubemap is **RGBA8 / LDR**. HDR reflection capture is a separate task.
+  GGX prefiltering. `fs_vehicle.sc` `envPrefilter()` selects a mip level with
+  `textureCubeLod`, mixing two neighbouring levels; that level selection over
+  a downsampled chain is what visibly softens the reflection. It is a lookup,
+  not a convolution.
+- **Reflection blur in game works**, through that mip chain and level
+  selection; the effect is weak. A separate blur pipeline (`fs_blur.sc`,
+  `blur_program_`, `build_reflection_mips()`) is compiled and created but
+  **never invoked** -- no call site exists -- so it plays no part in what is on
+  screen.
+- The cubemap is **RGBA8 / LDR**. Bright sources clip. HDR reflection capture
+  is a separate task.
 - Box projection applies to interiors only; outdoors is direction-only lookup.
-- `build_reflection_mips()`, `fs_blur.sc`, `reflection_chain_` and
-  `blur_program_` are **live**: the blur runs on the reflection chain but is
-  weaker than intended.
+  The bounds come from the garage shell geometry with a Z transform and a
+  fallback when the shell is absent -- not from the ground bbox alone. The
+  reflected direction **is** normalised after the correction (`fs_vehicle.sc`),
+  contrary to an earlier note.
+- The scene target is RGBA16F, but the cubemap is not: reflections are not end
+  to end HDR.
 
 ## 4. Interface, and why it cannot simply join the scene
 
