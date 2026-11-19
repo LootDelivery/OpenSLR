@@ -292,6 +292,49 @@ a separate format or binding mechanism.
 resource linking has not been examined yet, and no locator format is proposed
 here.
 
-**Not decided:** the storage home of the paint library. Design decision taken:
-paint definitions are game content. The concrete location is still open and
-depends on the RPK / script / catalogue audit in §3.
+## 15. Paint library audit
+
+Read-only, source revision `42d795e`.
+
+**Confirmed facts**
+
+- `java.game.GameLogic.CARCOLORS` is the only paint source referenced from the
+  native side (`part_runtime.cpp:4531`). It is a static holding an array of
+  **integer texture IDs**, nothing more.
+- `vehicle_spawn_stock()` reads it only as a fallback: when no texture is
+  supplied it takes the **first non-zero** int from `CARCOLORS` and uses that
+  (`part_runtime.cpp:4532-4539`).
+- The value then travels as `Descriptor.fields["color"]`
+  (`part_runtime.cpp:4545`), and lands in `Record::state.texture` via
+  `field("color", 0)` (`part_runtime.cpp:570`).
+- `Part.setTexture()/getTexture()` read and write the same `state.texture`.
+- The part creation signature carries a `java.game.parts.Descriptor`
+  (`part_runtime.cpp:4999`), and that descriptor is where the colour is
+  attached at install time.
+
+**Conclusion from those facts:** in the data the game uses today, "paint" **is**
+a texture ID. `CARCOLORS` carries no material parameters -- no clearcoat,
+roughness, reflectance, layers or flake. There is no existing paint library to
+extend, because there is no material definition behind the colour at all.
+
+**Design decision stands:** paint definitions are game content. But the storage
+home has to be **created**, not found. Extending `CARCOLORS` in place would
+inherit the same texture-only shape and cannot carry a layered paint model.
+
+Candidate directions, not decided:
+
+1. A new game-side structure alongside `CARCOLORS`, with `CARCOLORS` kept as the
+   legacy texture fallback so old content keeps working.
+2. A new resource type in the game resource system, referenced by id from
+   `CARCOLORS`'s successor.
+3. A sidecar during development, migrated once the material model stabilises.
+
+**Not established**
+
+- Whether the game scripts (`java.game.*`) hold richer paint data the native
+  side simply never reads. Only the native call site was examined.
+- Whether any RPK resource carries material parameters beyond texture and
+  colour. The resource files were not opened in this pass.
+- How the game's own catalogue of variants is presented to the player.
+- How a repaint is persisted in a saved vehicle beyond the per-part
+  `state.texture` already described in §12.
