@@ -400,3 +400,114 @@ Against the checklist this stage was supposed to cover:
 Nothing else outstanding for this stage. What is *not* covered here and
 belongs to later stages: shadow map setup, the present pass beyond its
 tonemap, the HiZ path, and anything to do with physics or the OSD.
+
+---
+
+# Roadmap, agreed
+
+Agreed at source revision `42d795e`. This replaces the informal ordering
+earlier in the document where they disagree.
+
+## The shared data contract
+
+Written **before** any branch starts. Fixed contract between the game resource
+system, SCX and its parser, the internal material model, the renderer,
+reflection capture and the SCX Exporter.
+
+The hard requirement: **a light must reach the cubemap capture as well as the
+main render**, or reflections and lighting disagree and no later tuning can
+fix it.
+
+## Branch A — materials and IBL
+
+- paint descriptor
+- basecoat / clearcoat, energy-conserving layer interaction
+- BRDF
+- GGX prefilter
+- DFG LUT
+- then generic PBR for static geometry
+
+Paint kinds required: Gloss, Candy, Metallic, Matte, Satin, Chrome. The model
+is the one in `PBR_PLAN.md`; `mix(color, environment, k)` does not come back.
+
+GGX prefilter and the DFG LUT are **separate, explicitly named tasks**. They
+are not implemented and must not be described as if they were.
+
+The paint descriptor and BRDF do not have to wait for the whole IBL system.
+Develop them in parallel on a reproducible test scene; judge the final
+reflections only once a correct prefilter exists.
+
+## Branch B — lighting
+
+Reframe: **restore and extend the existing SLRR light model**, not invent one.
+
+Game resources already carry Point and Spot lights whose parameters the backend
+drops. The old resource format stays compatible; the new renderer takes a
+common light structure through an adapter.
+
+Required types: Point, Spot, Directional. Parameters to keep and use: position,
+direction, diffuse/ambient/specular where applicable, range, attenuation,
+theta/phi, attH_texture/attH/attV_texture, lit_dynamic.
+
+Scope of the first cut: correct direct lighting, attenuation, cones and on/off
+states. Projection textures and flare/glow are separate follow-ups.
+
+- common light registry
+- restore Point/Spot
+- Directional
+- lamp states
+- shadows (spot from headlights first, CSM second)
+- identical lights in the main render and reflection capture
+
+## Shared late stage — SCX data pipeline
+
+Fix the material schema, then extend SCX, the parser and the SCX Exporter, then
+verify compatibility and round-trip. Specification and acceptance criteria:
+`SCX_MATERIAL_FORMAT.md`. Separate checkable steps, never mixed into Branch A or
+B commits.
+
+## Units and calibration
+
+Point / Spot in cd, Directional in lx, Area in cd/m^2 (future).
+
+Old D3D9 values must **not** be assumed to already be in those units. First
+establish their actual semantics, distance units and world scale; then design a
+documented conversion into the photometric system. No per-light arbitrary
+factors. Ctrl+F12 stays the single global exposure control.
+
+## Vehicle headlights
+
+The main scenario. Bind the existing vehicle lamp state to a real Spot light
+rather than inventing independent headlight logic.
+
+To check: the link between `part_lamp_lit()` and `lit_dynamic`; low vs high
+beam if the game data distinguishes them; brake lights and indicators;
+projection textures for the beam; updating the light source when the light
+switches or the vehicle state changes.
+
+Emissive lamps, direct road lighting and bloom stay three separate things.
+
+## Reflection capture
+
+Unchanged hard requirement: dynamic lights and their states are accounted for
+identically in the main render and the reflection capture.
+
+## Roadmap stages, restated
+
+Stage 6 of the older roadmap is tone mapping / colour. **Stage 6b is the light
+system.** Stage 6 is not a dynamic lighting system and must not be read as one.
+
+## Order of work
+
+1. Update documentation and show the diff.
+2. Fix the internal material model and the interfaces between subsystems.
+3. Agree the updated roadmap.
+4. Branch A: paint descriptor and the base material model, IBL prepared in
+   parallel.
+5. Branch B separately: light registry, then restored Point/Spot.
+6. Once the material model is checked and stable, freeze the SCX spec.
+7. Implement SCX, parser and exporter extensions as separate verifiable steps.
+8. Finish with testing of old and new models and a full round-trip.
+
+No mass implementation before the documents, contracts and per-stage acceptance
+criteria are agreed.

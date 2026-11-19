@@ -234,3 +234,56 @@ waiting.
 
 The lens-flare block is a separate feature and should not be on the critical
 path for lighting.
+
+---
+
+## Framing of the work this audit supports
+
+Agreed at source revision `42d795e`.
+
+The task is **restore and extend the existing SLRR light model**, not build a
+new one from nothing. The game data already carries Point and Spot lights with
+full parameters; the backend drops them. The old resource format stays
+compatible and the new renderer takes a common light structure through an
+adapter.
+
+Required types: Point, Spot, Directional. Parameters to preserve and use:
+position, direction, diffuse/ambient/specular where applicable, range,
+attenuation, theta/phi, attH_texture/attV_texture, lit_dynamic.
+
+First cut is direct lighting, attenuation, cones and on/off states. Projection
+textures and flare/glow are separate follow-ups and are not in scope initially.
+
+### Vehicle headlights
+
+The primary scenario. Bind the existing vehicle lamp state to a real Spot
+light; do not create independent headlight logic when the game states already
+exist.
+
+Check explicitly:
+
+- the link between `part_lamp_lit()` and `lit_dynamic`;
+- low vs high beam, if the game data distinguishes them;
+- brake lights and indicators;
+- projection textures for the beam;
+- updating the source when the light switches or vehicle state changes.
+
+Emissive lamps, direct road lighting and bloom are three separate things.
+
+### Units
+
+Point / Spot in cd, Directional in lx, Area in cd/m^2. Old D3D9 values must not
+be assumed to be in those units: establish their actual semantics, distance
+units and world scale first, then define a documented conversion. No per-light
+arbitrary multipliers. Ctrl+F12 remains the single global exposure control.
+
+### Reflection capture
+
+Dynamic lights and their states must be accounted for identically in the main
+render and in the reflection capture.
+
+### Storage of the new materials
+
+Material storage, parser and exporter requirements are in
+`SCX_MATERIAL_FORMAT.md`. Note that Point/Spot also need somewhere to live in
+the extended SCX; that is part of the same format work and is not settled yet.
