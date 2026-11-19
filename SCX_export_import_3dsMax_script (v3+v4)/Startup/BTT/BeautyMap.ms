@@ -1,0 +1,94 @@
+------------------------------------------------------------
+-- BEAUTY MAP 
+------------------------------------------------------------
+plugin CommonBakeMap CommonMap_Beauty
+classID: #(0x4ff37350L, 0x6fa72149L)
+name: ~BEAUTY_NAME~
+toolTip: ~BEAUTY_TOOLTIP~
+useGamma: true
+(
+)
+
+plugin CommonBakeMapOperator ArnoldBeautyMap
+classID: #(0x55ee7bdeL, 0x1077c8aL)
+commonMapClassID: CommonMap_Beauty.classid
+rendererClassID: #(2980329694L, 2688902778L) --arnold.classid
+bakeElementClassID: #(1236154164L, 1693992786L) --Arnold_RGBA.classid
+(
+	on requireSceneChange do
+	(
+		return false
+	)
+)
+
+plugin CommonBakeMapOperator ScanlineBeautyMap
+classID: #(0x2bd34718L, 0x5de33aa4L)
+commonMapClassID: CommonMap_Beauty.classid
+rendererClassID: #(1, 0)
+bakeElementClassID: #(65537L, 0L) --CompleteMap.classid
+(
+	on requireSceneChange do
+	(
+		return false
+	)
+	on preBake bakeElem do
+	(
+		--Turn shadows on
+		bakeElem.setParamValue 1 true
+	)
+)
+
+
+-------BEGIN-SIGNATURE-----
+-- cgkAADCCCW4GCSqGSIb3DQEHAqCCCV8wgglbAgEBMQ8wDQYJKoZIhvcNAQELBQAw
+-- CwYJKoZIhvcNAQcBoIIHCjCCBwYwggTuoAMCAQICEAPoXQ8zvyfgRZ+u8YJGR4Uw
+-- DQYJKoZIhvcNAQELBQAwaTELMAkGA1UEBhMCVVMxFzAVBgNVBAoTDkRpZ2lDZXJ0
+-- LCBJbmMuMUEwPwYDVQQDEzhEaWdpQ2VydCBUcnVzdGVkIEc0IENvZGUgU2lnbmlu
+-- ZyBSU0E0MDk2IFNIQTM4NCAyMDIxIENBMTAeFw0yMjA3MjcwMDAwMDBaFw0yMzA4
+-- MTkyMzU5NTlaMIGKMQswCQYDVQQGEwJVUzETMBEGA1UECBMKQ2FsaWZvcm5pYTET
+-- MBEGA1UEBxMKU2FuIFJhZmFlbDEXMBUGA1UEChMOQXV0b2Rlc2ssIEluYy4xHzAd
+-- BgNVBAsTFkRlc2lnbiBTb2x1dGlvbnMgR3JvdXAxFzAVBgNVBAMTDkF1dG9kZXNr
+-- LCBJbmMuMIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwDa9P4A2kzCY
+-- kkQvhanUbJJF3K3fWIBjDvAcs/TqTAzYxqHbIW9Oi57R+NLNnB0m+GKwL7Vya0wb
+-- UhZvEC8VN5Nw8ZjEDcevdrcv399QQeh5OQaVURgr5JsaSP8u2mdCfvrcnIDBntrf
+-- hqGcQT2nioZ1H/PqUUcbOfEXlYMJa+SKm3yWvHkQwihiGWSP13RDDgSJlU+DebsT
+-- zv+C9IpPLad8nSpuSA1vCywhzgzok+hDF9H/WJAl3Fv6WQvmj/vH6/8Nb+v5IE/K
+-- JvAn+Er5un7fdAXhB+GXHH/bp4jXzq7wUxSxbamDDvpfS3OEN4BFoWgQ5t9eILSp
+-- LecHsx9cFyLSbRP1kHBpsUib0lSItjgOAK3tFoE94DBnCWsfUsn8kYqWfcSlAV3l
+-- G/T3OhPzHvPGAR2a84Mz71ywuP1j47RsPq2YndMlrxDZV+bGHefT717hDNc1lG+p
+-- /Xnr1tdiqw+FHFI7aWIozEJ1zJB6wiXx7mgrQdB1LtNJk7pPOpYdAgMBAAGjggIG
+-- MIICAjAfBgNVHSMEGDAWgBRoN+Drtjv4XxGG+/5hewiIZfROQjAdBgNVHQ4EFgQU
+-- EF/sqJMBw1FZMj7ZWWrfrXY80GYwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoG
+-- CCsGAQUFBwMDMIG1BgNVHR8Ega0wgaowU6BRoE+GTWh0dHA6Ly9jcmwzLmRpZ2lj
+-- ZXJ0LmNvbS9EaWdpQ2VydFRydXN0ZWRHNENvZGVTaWduaW5nUlNBNDA5NlNIQTM4
+-- NDIwMjFDQTEuY3JsMFOgUaBPhk1odHRwOi8vY3JsNC5kaWdpY2VydC5jb20vRGln
+-- aUNlcnRUcnVzdGVkRzRDb2RlU2lnbmluZ1JTQTQwOTZTSEEzODQyMDIxQ0ExLmNy
+-- bDA+BgNVHSAENzA1MDMGBmeBDAEEATApMCcGCCsGAQUFBwIBFhtodHRwOi8vd3d3
+-- LmRpZ2ljZXJ0LmNvbS9DUFMwgZQGCCsGAQUFBwEBBIGHMIGEMCQGCCsGAQUFBzAB
+-- hhhodHRwOi8vb2NzcC5kaWdpY2VydC5jb20wXAYIKwYBBQUHMAKGUGh0dHA6Ly9j
+-- YWNlcnRzLmRpZ2ljZXJ0LmNvbS9EaWdpQ2VydFRydXN0ZWRHNENvZGVTaWduaW5n
+-- UlNBNDA5NlNIQTM4NDIwMjFDQTEuY3J0MAwGA1UdEwEB/wQCMAAwDQYJKoZIhvcN
+-- AQELBQADggIBALEgKMMNJ9H5FKWijL5VSvloTQT20Cnln2tk7X3Q8o9b/Ba4qHBf
+-- TAPfbF/OaW7k4SZNjHYKnZ3LnBCJFBZTegWigmRsKYwBD92Ot/x/nh2ZgZdwkI0k
+-- UbONNkMx3Fo2OR/nxfM8eaevKj+P+QQEtabtDUXAD5e3tspdvCrZWdUk019N8D1c
+-- /vLqKIXlPAM8a+1NfKNksZBgr9b3HRr9issohBniAJdE97OgF+2xBnGp72WEe9Uj
+-- ZGiGOkGczbCDACjPcBrJqlWrOqJzSFgIzBjcTwBozRsKmGGme5lZ9I8LShBfyz3b
+-- XMWL6lo0V5KAZilCLUiFYO3fFcElWLwL8csSD5oZn1zJZs4ZeFzuv1NiS/q7/UlP
+-- W4KgAFrnJfRZYJ6OfTAhh4WNmgRXV88L8Fn54huczOnndBePsBE+IkVBT+pe5QwI
+-- Dlt0K3EHlsYTE9YBcdXk7+JpWMm3q8etEICpI8UYGUbxhlbWpvb7kIAOyPXj62xG
+-- uXSznSL/CSaN/3LoAOWeFnPdRiT1pHx6TXf66XnAtldtAfiW2MjRVhd8QGMYddoA
+-- zFPOznYjiijwo+Dnckt0imDhziF6UlpLsY9qn/ZiHihWlJs/FfjWln3iCpG8UJzc
+-- ALUxiX1dd/EIj5TuREOmVS4yvHrFhdJnOrsboWb54ZCzFu/23FK43IN1MYICKDCC
+-- AiQCAQEwfTBpMQswCQYDVQQGEwJVUzEXMBUGA1UEChMORGlnaUNlcnQsIEluYy4x
+-- QTA/BgNVBAMTOERpZ2lDZXJ0IFRydXN0ZWQgRzQgQ29kZSBTaWduaW5nIFJTQTQw
+-- OTYgU0hBMzg0IDIwMjEgQ0ExAhAD6F0PM78n4EWfrvGCRkeFMA0GCSqGSIb3DQEB
+-- CwUAMA0GCSqGSIb3DQEBAQUABIIBgD94a6V58BxSevs/n1m0lajv977K4G8piVRC
+-- r2dPr030fJrul8MLwsITPyV6lEzlxNYDAvjvQF+wS2SNAYtDE79kRWuycpSLwWlk
+-- TKrAE/26eUTV115SEerSjmsU3OqudliLr9JJ9UA7JDBcG0u4KNxxY4B93cnTdkeB
+-- 73kBj1NB2rnIMcm5EsKr3RI10dXzA5YBzvt8hkUIDB1buTACXzhqSvIGIojsv1QQ
+-- Zc2AaWXx9fc3tKFQ6wI8uj897/9JkAShf5gPoWzTl+v7HdskAmzUWUvMhe1DbQsN
+-- cGl9OXZYeb9HmMDoT60kuy0CVYC2oAdGL3UdpaGvB8qw/zGIfyPsDjuVi6c/gBFx
+-- Pt+N0Ixn2je0nbK2m7NacA/obrsnXhfaLugynltsyMX6CeChauqV0bC2uH5DnBtJ
+-- fP7RKq6y4h5gHvK8o6ktmygGgMEuteg7B+7yVz5UzwvChwoj6wQIwf0sf0XjL5TW
+-- lrL1ncHCcUQpfxqsEUx7t1YkcUgM7Q==
+-- -----END-SIGNATURE-----
