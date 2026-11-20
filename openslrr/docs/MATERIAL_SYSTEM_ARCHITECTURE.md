@@ -168,7 +168,7 @@ per-slot слоя), **одна декаль ≠ несколько декале�
 | общие скаляры | `normal_scale`, `basecolor_factor`, `alpha_mode` (opaque / cutout / blend), `opacity` | все |
 | PBR | `metallic`, `roughness`, `emissive_strength` | `shading_model = PBR_Generic` |
 | automotive | `basecoat{color, metallic, roughness, normal, flake}`, `clearcoat{roughness, reflectance/ior, intensity, normal}`, `finish_type` (gloss/candy/metallic/matte/satin/chrome) | `shading_model = AutomotivePaint` |
-| legacy | `legacy_texture_ref`, `legacy_shading{shininess, specular}` — две независимые составляющие, см. §2 и §5.4 | `shading_model = LegacyBlinn` |
+| legacy | `legacy_shading{shininess, specular}` — legacy-отклик поверхности; `Legacy Texture Ref` и `Legacy Tint` **в определение не входят** (см. ниже и §5.4) | `shading_model = LegacyBlinn` |
 
 Требования:
 
@@ -176,9 +176,20 @@ per-slot слоя), **одна декаль ≠ несколько декале�
   automotive-полей не делает материал краской `[Т]`.
 - Поле `provenance` обязательно для диагностики: рендер не должен выяснять
   происхождение материала `[Ф]` (`RENDER_DATA_CONTRACT.md` §6).
-- Определение иммутабельно. Всё изменяемое живёт в Assignment / Layer Stack.
-  Это прямое следствие legacy-вывода: перекраска не должна уничтожать
-  roughness/clearcoat `[Ф]` (`SCX_MATERIAL_FORMAT.md` §3).
+- Определение иммутабельно: это неизменяемое описание материала. Изменяемое
+  состояние — назначение краски и пользовательские слои — принадлежит
+  Assignment / Layer Stack. Это прямое следствие legacy-вывода: перекраска не
+  должна уничтожать roughness/clearcoat `[Ф]` (`SCX_MATERIAL_FORMAT.md` §3).
+  Вычисляемые runtime-значения, принадлежащие экземпляру или render-узлу
+  (например, `Legacy Tint`), не обязаны входить в Assignment / Layer Stack
+  (A6, §5.4, §11.2) `[Т]`.
+- `Legacy Texture Ref` **не является** полем Material Definition, но и не
+  переносится в Assignment: его владелец — **состояние экземпляра детали**
+  (`Record::state.texture`, §11.2, §5.4). При этом различаются три разные
+  текстуры: текстура модели (`PartConfig::texture` / авторский `albedo`),
+  выбранный текстурный ресурс экземпляра (`state.texture`) и пользовательская
+  legacy-подстановка (`paint_texture`, §11.2, `RENDER_DATA_CONTRACT.md` §12).
+  Ни одна из трёх не становится полем определения `[Т]`.
 - `Legacy Tint` **не входит** в Material Definition: это вычисляемый
   runtime-атрибут render-узла (палитра render-слота + индекс экземпляра/seed),
   а не свойство материала (A6, §5.4, §11.2). Поля tint в определении нет и не
@@ -363,12 +374,15 @@ Material Assignment — состояние экземпляра, в SCX не х�
 | ResolvedMaterial | рендер | нет (кэш кадра) |
 
 `Assignment` содержит: `slot_id` (ссылка на слот модели), постоянную ссылку
-на библиотечный `Paint Definition` **или** одну из legacy-форм:
-`legacy_texture_ref` либо ссылку на
+на библиотечный `Paint Definition` **или** legacy-форму — ссылку на
 `LegacyFlattenedSurface` (§11.2); плюс `layer_stack_id`. Постоянная ссылка — не
 runtime ID (§11.1); её окончательное кодирование не выбрано. Legacy-формы и
 `Paint Definition` взаимоисключающие для одного слота. `Assignment` адресует
 слот, а не группу геометрии, и **не является частью SCX**.
+
+`Legacy Texture Ref` в `Assignment` **не входит**: его владелец — состояние
+экземпляра детали (`Record::state.texture`, §11.2), а не назначение краски
+слота. Для одного и того же слота это два разных уровня данных `[Т]`.
 
 `Legacy Tint` в `Assignment` **не входит** и его полем не является: tint —
 вычисляемый runtime-атрибут render-узла из палитры render-слота и индекса
