@@ -3,7 +3,9 @@
 Status: **architecture proposal**. No code, no binary layout, no final C++
 types. Field lists are conceptual and are frozen only after the material model
 and BRDF are validated. Where materials are concerned, this contract follows the
-accepted decisions A1–A3 in `MATERIAL_SYSTEM_ARCHITECTURE.md`.
+accepted decisions A1–A4 in `MATERIAL_SYSTEM_ARCHITECTURE.md`. A decal is an
+instance-scoped logical entity (`Decal Instance`) that may cover several parts
+and slots; it is not a per-slot material feature (A4, §6).
 
 Scope: the internal material model and the interfaces between the resource
 system, SCX and its parser, the Material System, the renderer, reflection
@@ -16,7 +18,7 @@ capture and the SCX Exporter.
 | **SCX v5** | geometry, Material Slots (`slot_id`, `role`, `material_ref`), Material Binding (group → `slot_id`), **author model-owned Material Definitions** |
 | **RPK / OpenSLRR resources** | the typed **Paint Definition library** (own OpenSLRR resource type, not SCX, not `CARCOLORS`) |
 | **Game resource system** (RPK / RenderRef) | light definitions and their placement in the object hierarchy |
-| **Vehicle state** | optional Material Assignment (`slot_id` → Paint Definition), Layer Stack (paintjob, decals) |
+| **Vehicle state** | optional Material Assignment (`slot_id` → Paint Definition), slot-scoped Paintjob layers, and **Decal Instances** (instance-scoped, possibly covering several parts and slots) with their derived surface contributions |
 | **Runtime Light System** | active light instances with world transforms and live state |
 | **Renderer** | receives geometry, resolved materials and lighting as independent data |
 
@@ -90,6 +92,14 @@ the mere presence of a PBR map set, does not make a surface paintable.
 Allow several independent paint slots if real content needs them (primary and
 secondary coating). Do not assume every car has the same slot set.
 
+**Decals are not slot-owned.** A `Decal Instance` belongs to the vehicle
+instance and may contribute to several slots, several parts and several
+materials at once; a surface does **not** need `role = Paint` (and no Paint Slot)
+to receive a decal. Application is governed by a separate eligibility policy,
+not by the slot role. `permitted_layers` may only restrict which contributions a
+slot accepts. Slot identity, `slot_id` and the authored `material_ref` are
+unchanged by decals.
+
 ## 4. Ordinary materials in SCX
 
 Generic PBR plus a legacy fallback. Preliminary fields: material id, shading
@@ -157,13 +167,26 @@ persists an independent assignment for every slot in use.
 | `MaterialDefinition` | a material description. Source: SCX v5 (model-owned, including the authored material of a Paint Slot), typed RPK resource (Paint Definition library), sidecar (development only) |
 | `MaterialSlot` | the model-owned target of a binding: `slot_id`, `role`, mandatory `material_ref` to the model's own material |
 | `MaterialBinding` | geometry group → `slot_id`; the **sole source of truth** for the group↔slot link |
-| `MaterialAssignment` | instance state: `slot_id` → Paint Definition (permanent reference) plus its layers. Optional, only for Paint Slots; it never replaces `material_ref` |
+| `MaterialAssignment` | instance state: `slot_id` → Paint Definition (permanent reference) plus its slot-scoped Paintjob layers. Optional, only for Paint Slots; it never replaces `material_ref`. Does not own decals |
+| `DecalInstance` | instance-scoped logical decal: own identity, image reference, one placement transform (position, orientation/projection direction, scale, rotation), projection parameters, order, opacity, visibility, provenance. Not bound to a single slot |
+| `DecalSurfaceContribution` | derived mapping of one `DecalInstance` onto one target surface (part + `slot_id`/groups): mapping, mask, clip bounds. Not a separate user decal and not a separate editable entity |
 | `ResolvedMaterial` | the CPU-side result handed to the shader |
 
 `MaterialDefinition`, `MaterialSlot` and `MaterialBinding` are model content:
-immutable for a given model revision. `MaterialAssignment` and the Layer Stack
-are dynamic instance state. The two must not be mixed in storage or in the
-entity model.
+immutable for a given model revision. `MaterialAssignment`, the slot-scoped
+Paintjob layers and the instance-scoped `DecalInstance` list are dynamic
+instance state. The two must not be mixed in storage or in the entity model.
+
+Two different ownership levels inside instance state, kept apart:
+
+- **slot-scoped**: the chosen paint (`MaterialAssignment`) and paintjob layers —
+  they belong to one `slot_id`;
+- **instance-scoped**: `DecalInstance` — one logical decal, one transform, any
+  number of affected surfaces. Its `DecalSurfaceContribution`s are derived,
+  never independently authored or persisted as user data.
+
+A decal must not be split into several independent user decals just because it
+touches several parts or slots.
 
 `ResolvedMaterial` must keep the source, id and original material kind for
 diagnostics. The renderer must not have to work out where a material came from.
@@ -173,7 +196,8 @@ diagnostics. The renderer must not have to work out where a material came from.
 `legacy SCX → legacy material`;
 `SCX v5 → model-owned Material Definitions + Material Slots + Material Binding`;
 `RPK typed resource → Paint Definition library`;
-`vehicle state → MaterialAssignment + Layer Stack`;
+`vehicle state → MaterialAssignment + Paintjob layers (slot-scoped)`;
+`vehicle state → DecalInstance list (instance-scoped) → derived surface contributions`;
 `sidecar → temporary development definitions`.
 All resolve through one Material System.
 
@@ -192,6 +216,10 @@ SCX v5 stores the model-owned side of the contract:
 
 It must **not** store copies of Paint Definition variants. The library is shared
 by many models, so a copy per SCX would duplicate it and drift.
+
+It also must not store decals: a decal is instance state, not model content. A
+model does not need a Paint Slot (or any slot) to be a valid decal target; the
+eligibility policy decides that, not SCX.
 
 The exporter recognises the reserved material name `SLRR_Paint_<SlotName>` at
 authoring/export time and writes an explicit role into SCX v5. Runtime reads
@@ -239,14 +267,16 @@ Data flows:
 
 1. SCX parser → geometry, model-owned `MaterialDefinition`, `MaterialSlot`, Material Binding
 2. Paint library loader (typed RPK resource) → `PaintDefinition`
-3. Vehicle / game state → `MaterialAssignment`
-4. Sidecar loader → test definitions into the same Material System
-5. Material System → `ResolvedMaterial`
-6. `ResolvedMaterial` + geometry → draw submission
-7. RPK / resource loader → `LightDefinition`
-8. Scene graph / RenderRef → transforms and `LightInstance` state
-9. LightRegistry → main render **and** Reflection Capture
-10. Future SCX parser / exporter → read and write model-owned materials, slots and bindings
+3. Vehicle / game state → `MaterialAssignment` (slot-scoped paint choice)
+4. Vehicle / game state → `DecalInstance` list (instance-scoped, may cover several parts and slots)
+5. Decal System → derived `DecalSurfaceContribution` per affected surface
+6. Sidecar loader → test definitions into the same Material System
+7. Material System → `ResolvedMaterial`
+8. `ResolvedMaterial` + geometry → draw submission
+9. RPK / resource loader → `LightDefinition`
+10. Scene graph / RenderRef → transforms and `LightInstance` state
+11. LightRegistry → main render **and** Reflection Capture
+12. Future SCX parser / exporter → read and write model-owned materials, slots and bindings
 
 The **same** `LightInstance` feeds the main render and the reflection capture.
 Two independent lighting implementations are not allowed.
@@ -341,6 +371,9 @@ internals from the architecture we would like to have.
    a default paint from the library, or the authored SCX material as-is?
 6. Should `ResolvedMaterial` be per-draw or cached per slot? Affects the frame
    assembly path but not the contract.
+7. What exactly is the decal target-surface eligibility policy (beyond the
+   decided rule that a Paint Slot and `role = Paint` are **not** required)? A4
+   fixes the requirement and the multi-surface model, not the policy details.
 
 ## 14. Light definitions and SCX — decision
 
