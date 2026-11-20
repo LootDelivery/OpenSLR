@@ -2,7 +2,8 @@
 
 Status: **architecture proposal**. No code, no binary layout, no final C++
 types. Field lists are conceptual and are frozen only after the material model
-and BRDF are validated.
+and BRDF are validated. Where materials are concerned, this contract follows the
+accepted decisions A1–A3 in `MATERIAL_SYSTEM_ARCHITECTURE.md`.
 
 Scope: the internal material model and the interfaces between the resource
 system, SCX and its parser, the Material System, the renderer, reflection
@@ -12,12 +13,16 @@ capture and the SCX Exporter.
 
 | Owner | Holds |
 |---|---|
-| **SCX** | geometry, material slots, geometry→slot bindings, ordinary surface materials |
-| **Game material system** | paint material definitions |
-| **Vehicle state** | the chosen paint and its assignment to the paint slot |
+| **SCX v5** | geometry, Material Slots (`slot_id`, `role`, `material_ref`), Material Binding (group → `slot_id`), **author model-owned Material Definitions** |
+| **RPK / OpenSLRR resources** | the typed **Paint Definition library** (own OpenSLRR resource type, not SCX, not `CARCOLORS`) |
 | **Game resource system** (RPK / RenderRef) | light definitions and their placement in the object hierarchy |
+| **Vehicle state** | optional Material Assignment (`slot_id` → Paint Definition), Layer Stack (paintjob, decals) |
 | **Runtime Light System** | active light instances with world transforms and live state |
 | **Renderer** | receives geometry, resolved materials and lighting as independent data |
+
+The paint library and a model's own materials have different owners: a model
+never carries a copy of the library, and the library never carries a copy of a
+model's surface material.
 
 Point/Spot are **not** added to SCX for the sake of material extension. A future
 light export from a 3D editor is a resource-system or placement-format task, not
@@ -25,35 +30,62 @@ part of SCX material slots.
 
 ## 2. Combined material system
 
-Two storage scenarios, deliberately different.
+Three different things, deliberately kept apart.
 
-**Ordinary materials belong to the model and live in SCX.** Plastic, seat
-leather, rubber, glass, plain metal, other surfaces.
+**A model's own materials live in SCX v5.** Plastic, seat leather, rubber,
+glass, plain metal — and also the authored surface material of a Paint Slot.
+Each is a complete model-owned Material Definition: an arbitrary author name and
+its own PBR parameters and maps. It does not have to exist in the game library,
+and it is never auto-linked to it by material name, texture name, map set, RPK
+id or matching parameters.
 
-**Automotive paint is a separate game entity.** It is a specialised material
-that exists independently of any one car model and is assigned to a special
-Paint slot. Gloss, Candy, Metallic, Matte, Satin, Chrome-as-paint.
+**Automotive paint is a library entity.** A Paint Definition is a Material
+Definition with `shading_model = AutomotivePaint` (Gloss, Candy, Metallic, Matte,
+Satin, Chrome-as-paint). It exists independently of any one car and is stored as
+a typed OpenSLRR resource inside RPK, so it can be reused by many models and
+slots and extended by mods.
 
-Selecting a paint is **not** a texture or colour swap. It assigns a different
-full material with its own shading model, parameters, textures and layers.
+**Choosing a paint is an instance assignment, not a material replacement.** The
+user picks a Paint Definition for a Paint Slot; the choice is stored in vehicle
+state as a Material Assignment addressed by `slot_id` and held as a permanent
+reference, not a runtime id. It does **not** overwrite, delete or replace the
+slot's authored `material_ref`.
+
+Both the authored surface material and the assigned paint remain available to
+the Material System. How a user paint is combined with the author material when
+`ResolvedMaterial` is produced is a rendering question and is **not defined**
+here; this contract only fixes storage, ownership and identity.
 
 A single internal representation for the renderer does **not** mean every
 material has the same storage home.
 
 ## 3. MaterialSlot
 
-Declared by the model, bound to one or more geometry groups. It defines what
-the surface is and how its material is obtained.
+A Material Slot is declared by the model in SCX v5 and bound to one or more
+geometry groups. Every slot, including `role = Paint`, carries:
 
-**SCX-owned slot** — the material is defined in SCX. SCX carries slot/material
-id, purpose, geometry group bindings, ordinary material properties, texture
-references.
+- a stable own `slot_id` — not a group index, not a texture index, not derived
+  from `role` or from the material id; it survives group reordering and
+  geometry edits;
+- a semantic `role` (`Ordinary`, `Paint`, `Glass`, `Emissive`, `Trim`, ...);
+- a mandatory `material_ref` to the **model's own** Material Definition.
 
-**Game-managed slot** — SCX declares the slot, the material definition comes
-from a separate game system. The main case is `Paint`. SCX carries a stable slot
-id, the semantic role `Paint`, geometry bindings, the permitted material model,
-and an optional fallback. SCX does **not** carry a copy of the paint library or
-of each variant's parameters.
+Material Binding connects a geometry group to a `slot_id` and is the **sole
+source of truth** for that link; the list of groups of a slot is derived from
+binding and is not an independently stored field. A group belongs to exactly one
+slot; several groups may belong to the same slot.
+
+For `role = Paint` an optional Material Assignment from the RPK paint library is
+additionally allowed (section 5). There is no second, material-less slot kind: a
+Paint Slot keeps its authored material and gains an optional assignment on top
+of it.
+
+The author marks a paintable surface in 3ds Max with the reserved material name
+`SLRR_Paint_<SlotName>`. The exporter recognises the reserved `SLRR_Paint_`
+prefix and writes an explicit `role = Paint` into SCX v5; `<SlotName>` is an
+arbitrary author name — not an enum entry, not a registration, not a `slot_id` —
+and runtime does not parse the original string. An ordinary material name, or
+the mere presence of a PBR map set, does not make a surface paintable.
 
 Allow several independent paint slots if real content needs them (primary and
 secondary coating). Do not assume every car has the same slot set.
@@ -71,20 +103,36 @@ No global library per plastic/rubber/leather variant — these are defined in th
 model. The architecture must not forbid external material reuse later, but a
 universal external library is not to be built without a demonstrated need.
 
+The authored Material Definition of a `role = Paint` slot is also a full
+model-owned PBR material, not a placeholder: author PBR materials are not
+limited to Ordinary slots. The paint library is the only shared material library
+in this contract, and it holds AutomotivePaint definitions only — it is not a
+general warehouse for plastic, rubber or leather.
+
 ## 5. Paint material
 
-**5.1. Assignment.** Conceptually `VehicleInstance → PaintSlot → PaintDefinition`,
-e.g. `Mazda3_Instance.Paint = Candy_Red`. Repainting changes the chosen
-PaintDefinition; geometry, SCX and the car's other materials do not change.
+**5.1. Assignment.** Conceptually
 
-Requirements: persisted in vehicle state; restored when a saved car loads;
-independent of any texture ID; reusable across models; does not destroy slot
-properties when the paint changes.
+`VehicleInstance → MaterialAssignment(slot_id) → PaintDefinition (RPK library)`
 
-**5.2. Storage of the paint library. Not fixed yet.** Audit the existing game
-resources and repaint mechanism first. If a suitable structure already exists,
-extend it preferentially. Do not mix the PaintDefinition library with SCX
-geometry.
+e.g. `Mazda3_Instance.MaterialAssignment[body] = Candy_Red`. Repainting changes
+the chosen Paint Definition; geometry, SCX, the slot's authored `material_ref`
+and the car's other materials do not change.
+
+Requirements: addressed by `slot_id`; persisted in vehicle state; restored when
+a saved car loads and resolved against the current resource set; holds a
+permanent reference to the library resource, never a runtime id; independent of
+any texture id; reusable across models; does not destroy slot properties **or**
+the authored material when the paint changes. The serialised form of the
+assignment is not fixed here.
+
+**5.2. Storage of the paint library.** Decided (A1): the reusable Paint
+Definition library lives in **typed OpenSLRR resources inside RPK**, loaded by
+OpenSLRR's own resource system. It is not part of SCX, not `CARCOLORS` and not a
+sidecar. The numeric type id, the binary structure of the resource, the loader
+and the permanent reference format are **not designed yet**; see
+`MATERIAL_SYSTEM_ARCHITECTURE.md` §10.4. Compatibility of the new resource type
+with the original executable is not claimed.
 
 **5.3. Slot count.** The number of Paint slots is defined by the specific car
 model. The architecture must support an arbitrary count.
@@ -94,47 +142,68 @@ model. The architecture must support an arbitrary count.
 - One slot may be bound to several geometry groups.
 - Different slots may reference the same `PaintDefinition`.
 - Each slot has an independent `MaterialAssignment`.
+- Slot identity is the stable `slot_id`, not a group index and not a position in
+  the slot list.
 
 **One slot is enough for the first implementation.** Supporting an arbitrary
 count is architecture, not a promise that two-tone paint ships now. SCX carries
-stable slot ids and geometry bindings; vehicle state persists the assignment for
-every slot in use.
+stable `slot_id`s, roles, authored materials and bindings; vehicle state
+persists an independent assignment for every slot in use.
 
 ## 6. Core entities
 
 | Entity | Meaning |
 |---|---|
-| `MaterialDefinition` | a material description. Source: SCX (ordinary), game library (paint), sidecar (development) |
-| `MaterialBinding` | geometry group → MaterialSlot, or → an SCX-owned material directly |
-| `MaterialAssignment` | dynamic material→slot assignment on a concrete game object. Needed for PaintSlot; not invented artificially for SCX-owned materials the model already fixes |
+| `MaterialDefinition` | a material description. Source: SCX v5 (model-owned, including the authored material of a Paint Slot), typed RPK resource (Paint Definition library), sidecar (development only) |
+| `MaterialSlot` | the model-owned target of a binding: `slot_id`, `role`, mandatory `material_ref` to the model's own material |
+| `MaterialBinding` | geometry group → `slot_id`; the **sole source of truth** for the group↔slot link |
+| `MaterialAssignment` | instance state: `slot_id` → Paint Definition (permanent reference) plus its layers. Optional, only for Paint Slots; it never replaces `material_ref` |
 | `ResolvedMaterial` | the CPU-side result handed to the shader |
+
+`MaterialDefinition`, `MaterialSlot` and `MaterialBinding` are model content:
+immutable for a given model revision. `MaterialAssignment` and the Layer Stack
+are dynamic instance state. The two must not be mixed in storage or in the
+entity model.
 
 `ResolvedMaterial` must keep the source, id and original material kind for
 diagnostics. The renderer must not have to work out where a material came from.
 
 ## 7. Data paths and sidecar
 
-`legacy SCX → legacy material`; `extended SCX → SCX-owned materials + slots`;
-`game library → PaintDefinition`; `vehicle state → MaterialAssignment`;
-`sidecar → test definitions`. All resolve through one Material System.
+`legacy SCX → legacy material`;
+`SCX v5 → model-owned Material Definitions + Material Slots + Material Binding`;
+`RPK typed resource → Paint Definition library`;
+`vehicle state → MaterialAssignment + Layer Stack`;
+`sidecar → temporary development definitions`.
+All resolve through one Material System.
 
-The sidecar is temporary and must not become a rival permanent material library.
+The sidecar is development/test only and must not become a permanent library or
+a second source of truth next to the typed RPK resources.
 
 ## 8. SCX and its extension
 
-SCX must support ordinary materials, MaterialSlot, geometry→material/slot
-bindings, game-managed slots including Paint, optional fallbacks, versioned
-extra data. It must **not** store copies of all PaintDefinition variants.
+SCX v5 stores the model-owned side of the contract:
 
-Old SCX must load without mandatory conversion. The exporter must create and
-edit ordinary materials and slots, bind geometry, assign geometry to the Paint
-slot, and keep ids and links stable. It does not have to author the paint
-library — that belongs to the game material system.
+- authored `MaterialDefinition`s;
+- `MaterialSlot` with `slot_id`, `role` and mandatory `material_ref`;
+- `MaterialBinding` (group → `slot_id`);
+- the model-owned data those need: texture references, UV channels, versioned
+  extra data, optional fallback.
 
-Round-trip must separately verify geometry, UV, SCX-owned materials, slots and
-bindings, game-managed slot references, legacy parameters, alpha and texture
-assignments. The chosen PaintDefinition is saved by the game mechanism and must
-never be silently overwritten by an SCX export.
+It must **not** store copies of Paint Definition variants. The library is shared
+by many models, so a copy per SCX would duplicate it and drift.
+
+The exporter recognises the reserved material name `SLRR_Paint_<SlotName>` at
+authoring/export time and writes an explicit role into SCX v5. Runtime reads
+that role and does not parse the material name. The exporter creates and edits
+authored materials and slots, binds geometry, and keeps ids and links stable. It
+does not author the paint library — that belongs to OpenSLRR's typed RPK
+resources and their tooling.
+
+Old SCX must load without mandatory conversion. Round-trip must separately
+verify geometry, UV, authored materials, `slot_id`s, roles, bindings, legacy
+parameters, alpha and texture assignments. The chosen Paint Definition is saved
+as instance state and must never be silently overwritten by an SCX export.
 
 ## 9. Light system
 
@@ -156,10 +225,10 @@ discarded before their semantics and calibration are established.
 
 ## 10. Emissive vs real lights
 
-Emissive belongs to an SCX-owned material or a PaintDefinition. It is visible
-surface emission; by itself it is **not** a Point or Spot light and does not
-guarantee surrounding objects are lit. The link between glowing geometry and a
-real light is game logic / resource system.
+Emissive belongs to a model-owned material or to a library PaintDefinition. It
+is visible surface emission; by itself it is **not** a Point or Spot light and
+does not guarantee surrounding objects are lit. The link between glowing
+geometry and a real light is game logic / resource system.
 
 For headlights keep three separate things: the emissive lamp surface, the direct
 Spot light, and bloom.
@@ -168,8 +237,8 @@ Spot light, and bloom.
 
 Data flows:
 
-1. SCX parser → geometry, SCX-owned `MaterialDefinition`, `MaterialSlot`, group bindings
-2. Material library loader → `PaintDefinition`
+1. SCX parser → geometry, model-owned `MaterialDefinition`, `MaterialSlot`, Material Binding
+2. Paint library loader (typed RPK resource) → `PaintDefinition`
 3. Vehicle / game state → `MaterialAssignment`
 4. Sidecar loader → test definitions into the same Material System
 5. Material System → `ResolvedMaterial`
@@ -177,7 +246,7 @@ Data flows:
 7. RPK / resource loader → `LightDefinition`
 8. Scene graph / RenderRef → transforms and `LightInstance` state
 9. LightRegistry → main render **and** Reflection Capture
-10. Future SCX parser / exporter → read and write SCX-owned materials and slots
+10. Future SCX parser / exporter → read and write model-owned materials, slots and bindings
 
 The **same** `LightInstance` feeds the main render and the reflection capture.
 Two independent lighting implementations are not allowed.
@@ -201,8 +270,8 @@ Observed in the current code, at `42d795e`.
   defaulting to `0xffffff`.
 
 **Confirmed fact:** repaint is currently a **texture substitution** with an
-associated colour. It is exactly the mechanism section 2 says must not survive
-into the new material model, because swapping a texture ID cannot carry
+associated colour. It is exactly the mechanism section 2 and section 5 exclude
+from the new material model, because swapping a texture ID cannot carry
 clearcoat, roughness or layer parameters.
 
 ### Repaint mechanisms — keep them apart
@@ -230,10 +299,12 @@ Five different things exist today and must not be conflated:
 - `render.variants` chooses a *resource* variant by seed; `render.colors`
   chooses a *colour* variant by seed. These are separate mechanisms.
 
-**Not established by this audit** (needs its own pass over the game resources):
+**Not established by this audit** (at the time of this pass):
 
-- where the original game stores the available paint variants;
-- how paint definitions are represented in the game resources;
+- where the original game stores the available paint variants *(closed later:
+  nowhere — the legacy data has no definitions, §15)*;
+- how paint definitions are represented in the game resources *(closed later:
+  they are not; "paint" is a texture id, §15)*;
 - how the user selects and applies a paint in game;
 - whether more than one paint slot type exists;
 - how the chosen paint is persisted per vehicle;
@@ -251,22 +322,24 @@ Five different things exist today and must not be conflated:
 can be called on individual parts.** That is API capability, not evidence of a
 game mechanic.
 
-Until those are answered, the shape of `PaintDefinition` and its storage home
-stay open. Do not infer the original game's internals from the architecture we
-would like to have.
+The library's **storage home** is now decided (A1, §5.2); this list still
+records what the legacy audit itself did not establish. Follow-up read-only
+research (A1) closed part of it — legacy data contains no material definitions
+and no RPK resource carries paint parameters (§15). The **shape** of
+`PaintDefinition` itself remains future work. Do not infer the original game's
+internals from the architecture we would like to have.
 
 ## 13. Open questions
 
-1. Where does the paint library live? (blocked on the audit in §12)
-2. How many paint slots does real content actually need?
-3. What are the real units of the legacy D3D9 light parameters, and the world
+1. How many paint slots does real content actually need?
+2. What are the real units of the legacy D3D9 light parameters, and the world
    scale needed to convert them?
-4. How do `attH_texture` / `attV_texture` behave, and do they need to reach the
+3. How do `attH_texture` / `attV_texture` behave, and do they need to reach the
    reflection capture as well?
-5. How do exported lights get attached to a game object? See §14.
-6. What is the fallback behaviour when a game-managed slot has no assigned
-   material — a default paint, or the SCX fallback?
-7. Should `ResolvedMaterial` be per-draw or cached per slot? Affects the frame
+4. How do exported lights get attached to a game object? See §14.
+5. What is the fallback behaviour when a Paint Slot has no Material Assignment —
+   a default paint from the library, or the authored SCX material as-is?
+6. Should `ResolvedMaterial` be per-draw or cached per slot? Affects the frame
    assembly path but not the contract.
 
 ## 14. Light definitions and SCX — decision
@@ -317,24 +390,23 @@ a texture ID. `CARCOLORS` carries no material parameters -- no clearcoat,
 roughness, reflectance, layers or flake. There is no existing paint library to
 extend, because there is no material definition behind the colour at all.
 
-**Design decision stands:** paint definitions are game content. But the storage
-home has to be **created**, not found. Extending `CARCOLORS` in place would
-inherit the same texture-only shape and cannot carry a layered paint model.
+**Decision (A1).** The legacy store contains no suitable Paint Definition, so one
+is **created**: the reusable paint library is a typed OpenSLRR resource inside
+RPK, loaded by OpenSLRR's own resource system. Extending `CARCOLORS` in place
+would inherit the texture-only shape and cannot carry a layered paint model.
+The original executable is **not** claimed to be compatible with the new
+resource type. The numeric type id, the payload, the loader and the reference
+format remain future work (`MATERIAL_SYSTEM_ARCHITECTURE.md` §10.4).
 
-Candidate directions, not decided:
+**Closed by later read-only research (A1)**
 
-1. A new game-side structure alongside `CARCOLORS`, with `CARCOLORS` kept as the
-   legacy texture fallback so old content keeps working.
-2. A new resource type in the game resource system, referenced by id from
-   `CARCOLORS`'s successor.
-3. A sidecar during development, migrated once the material model stabilises.
+- The game scripts (`java.game.*`) hold no richer paint data than texture ids
+  and RGB colours; there are no PBR paint fields there.
+- No RPK resource carries material parameters: the packs hold model, part,
+  particle and light descriptors, not material definitions.
 
 **Not established**
 
-- Whether the game scripts (`java.game.*`) hold richer paint data the native
-  side simply never reads. Only the native call site was examined.
-- Whether any RPK resource carries material parameters beyond texture and
-  colour. The resource files were not opened in this pass.
 - How the game's own catalogue of variants is presented to the player.
 - How a repaint is persisted in a saved vehicle beyond the per-part
   `state.texture` already described in §12.
