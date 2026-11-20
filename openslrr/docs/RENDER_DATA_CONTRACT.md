@@ -3,7 +3,7 @@
 Status: **architecture proposal**. No code, no binary layout, no final C++
 types. Field lists are conceptual and are frozen only after the material model
 and BRDF are validated. Where materials are concerned, this contract follows the
-accepted decisions A1–A4 in `MATERIAL_SYSTEM_ARCHITECTURE.md`. A decal is an
+accepted decisions A1–A5 in `MATERIAL_SYSTEM_ARCHITECTURE.md`. A decal is an
 instance-scoped logical entity (`Decal Instance`) that may cover several parts
 and slots; it is not a per-slot material feature (A4, §6).
 
@@ -232,6 +232,23 @@ Old SCX must load without mandatory conversion. Round-trip must separately
 verify geometry, UV, authored materials, `slot_id`s, roles, bindings, legacy
 parameters, alpha and texture assignments. The chosen Paint Definition is saved
 as instance state and must never be silently overwritten by an SCX export.
+
+**Editing path follows the SCX generation of the active car.** The editing
+front end (Painter) is routed per car, not globally: SCX v3/v4 cars use the
+legacy path, SCX v5 cars use the new path. This does not change any data owner
+in this contract:
+
+- the legacy path keeps the legacy model — decals are applied into the part
+  texture and are not stored as independent objects, so a legacy Painter must
+  not present a list of placed decals as if such objects existed;
+- the modern path uses the instance-scoped `DecalInstance` list and its derived
+  `DecalSurfaceContribution`s (section 6); a catalog of new images is a different
+  function from the list of already placed decals;
+- a legacy texture does not become a set of editable `DecalInstance`s, and v5
+  state is never written into v3/v4 files;
+- migrating a legacy car to the modern path is a separate, explicit procedure,
+  not an automatic side effect of opening an editor and not part of this
+  contract.
 
 ## 9. Light system
 
