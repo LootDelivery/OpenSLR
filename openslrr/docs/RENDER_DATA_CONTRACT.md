@@ -3,9 +3,10 @@
 Status: **architecture proposal**. No code, no binary layout, no final C++
 types. Field lists are conceptual and are frozen only after the material model
 and BRDF are validated. Where materials are concerned, this contract follows the
-accepted decisions A1–A5 in `MATERIAL_SYSTEM_ARCHITECTURE.md`. A decal is an
+accepted decisions A1–A6 in `MATERIAL_SYSTEM_ARCHITECTURE.md`. A decal is an
 instance-scoped logical entity (`Decal Instance`) that may cover several parts
-and slots; it is not a per-slot material feature (A4, §6).
+and slots; it is not a per-slot material feature (A4, §6). `Legacy Tint` is a
+legacy-only runtime attribute of a render node, not a material field (A6, §12).
 
 Scope: the internal material model and the interfaces between the resource
 system, SCX and its parser, the Material System, the renderer, reflection
@@ -321,6 +322,13 @@ associated colour. It is exactly the mechanism section 2 and section 5 exclude
 from the new material model, because swapping a texture ID cannot carry
 clearcoat, roughness or layer parameters.
 
+**Tint and substitution are separate, and substitution suppresses tint.** The
+node colour is a runtime value resolved from the render slot's own colour list
+and a per-instance index or placement seed; it is not stored per material. When
+the node is `painted` (the legacy repaint substitution is active), the tint
+block is not applied at all (`bgfx_lighting.cpp:271-278`). This belongs to the
+legacy path only; the new material model does not carry a global tint field.
+
 ### Repaint mechanisms — keep them apart
 
 Five different things exist today and must not be conflated:
@@ -361,9 +369,27 @@ Five different things exist today and must not be conflated:
   always applies one colour to the whole body;
 - whether original resources or scripts carry the concept of several
   independent body colour groups;
-- how `PartRender::colors` is actually used in real content;
 - whether two different textures on two body panels is a supported mechanic or
   a side effect of the API.
+
+**Closed by the A6 content scan (read-only):**
+
+- where `PartRender::colors` is actually used. Colour lists were found in AI /
+  traffic part configurations (`cars/fake_racers/*`, `cars/misc/Police_V3`,
+  `cars/traffic/*`) and in map objects inside `objects.rpk` (type 8); **no**
+  colour lists were found in `cars/racers/` or in the car RPKs;
+- therefore the legacy tint is a **content-variation mechanism** for AI, traffic
+  and map props, not a user paint operation on the player's car; palette size is
+  a number of variants, not a number of paints, slots or materials;
+- `VehicleDescriptor.colorIndex` belongs to a **different** mechanism: it
+  selects a texture from `GameLogic.CARCOLORS` (the `Legacy Texture Ref`), not an
+  RGB tint value. `colour_index` in the create string selects from
+  `PartRender::colors`; the two indices must not be conflated.
+
+Tint has no persistent state of its own: it is resolved at load from the
+render slot's palette plus the instance index or placement seed, and
+`0xffffff` is the "no tint" sentinel. New materials do not receive a colour from
+the legacy palettes.
 
 **Do not conclude that two-tone paint is supported merely because `setTexture()`
 can be called on individual parts.** That is API capability, not evidence of a
