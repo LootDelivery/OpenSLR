@@ -441,12 +441,17 @@ a separate format or binding mechanism.
 resource linking has been examined (`LIGHTING_AUDIT.md` §L1.6.3), and three
 levels must be kept apart:
 
-1. **Confirmed by resources:** object ICFGs contain text references to light
-   resource ids, in two forms:
-   - `light 0x<id> <x> <y> <z>` — once in stock content (`objects.rpk`
-     `trafficlamp`);
-   - `render 0x<id> <x> <y> <z>` followed by `flags 4` — for street lamps
-     (`lamp_base`, `lamp_road`, `kislampa`, `lamp_lane0_hold`).
+1. **Confirmed by resources:** object ICFGs in `objects.rpk` contain text
+   references to light resource ids, in two forms:
+   - `light 0x<id> <x> <y> <z>` — once: `trafficlamp` → `fakespot 0x01c6`;
+   - `render 0x<id> <x> <y> <z>` immediately followed by a `flags 4` line —
+     eight times: `lamp_base`, `lamp_road`, `kislampa`, `lamp_lane0_hold` →
+     `point 0x01c7`; `lamp_a`, `lamp_b`, `lamp_c`, `pozna` →
+     `fake point 0x0016`.
+
+   Nine references in total, all in `objects.rpk`. None of the four Spot
+   resources is referenced by any config; one of the two Point resources
+   (`0x01c7`) is, the other (`0x01cd`) is not.
 2. **Compatible interpretation:** the id names a light resource, the offset is
    local, and the world transform comes from the object placement. Plausible,
    and consistent with every neighbouring line, but not proven.
@@ -460,7 +465,9 @@ that they mean the same thing.
 
 What is still unknown is how a **car part** reaches its light: no packed config
 references any of the car spot resources, so that link is script-side and
-unproven. Do not design a locator format until it is established.
+unproven. The object-side references above do not help here, and they do not
+prove a working runtime mechanism either: the host parser for those lines has
+not been found. Do not design a locator format until this is established.
 
 ## 15. Paint library audit
 
