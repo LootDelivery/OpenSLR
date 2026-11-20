@@ -55,7 +55,7 @@ Code exists; correctness not confirmed.
 | Reflection blur is weaker than intended | open, cosmetic. **The blur works in game** and is visible; it is produced by the cubemap mip chain plus `envPrefilter()` level selection, not by the separate blur pipeline. GGX prefiltering is not implemented. |
 | Camera click-target mismatch (`scene_instances_pointer_ray` vs `SLRR_CAM_*`) | closed as situational: observed only in specific runs where the camera was changing |
 | MSAA toggle artefact | closed: not reproducible now |
-| `bind_baked_light()` binds `white_tex_` and discards its texture list | **deliberate**, not a defect -- the source comment says this avoids double-counting the sun and its shadows. What the stock lightmap actually contains is unverified -- a code comment is not evidence about game resource contents |
+| `bind_baked_light()` binds `white_tex_` and discards its texture list | **deliberate**, not a defect -- the source comment says this avoids double-counting the sun and its shadows. The stock atlases were decoded for L1 and they are not uniform: garage/dealer `*shadow.dds` are dark masks (mean 0.19-0.37, 43-70 % of pixels below 0.10), `misc/garage/g4/t_01_shadow.dds` is a near-white multiply map (mean 0.88, 75 % above 0.97), city `*_lightmap.dds` are dark emissive masks. "The bake already contains the sun" is true for some atlases and false for others, so one verdict cannot cover all of them (`LIGHTING_AUDIT.md` §L1.8) |
 
 ## 5. Limitations of the reflection system
 

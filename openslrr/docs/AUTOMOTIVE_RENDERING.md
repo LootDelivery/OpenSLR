@@ -164,6 +164,14 @@ survive into the PBR stage.
 for any material using the baked lightmap, which is most of them. That alone
 makes the paint read matte.
 
+> **L1 correction (HEAD `ee1ad36`).** `use` is `step(0.5, u_lightmap.x)` and
+> `draw_instance()` writes `0` into that component for every material except a
+> lamp mesh with `light_flags`, because `bind_baked_light()` binds a white
+> texture and `draw_instance()` binds `white_tex_` as the bake. So at HEAD the
+> factor is `1.0` in practice: the kill is **latent**, not active. It becomes
+> real the moment a lightmap is actually bound, which is the design question
+> the last paragraph below is about.
+
 **8. Box projection across two spaces. -- HISTORICAL DIAGNOSIS, current status below.**
 
 > The mismatch described here was established against an earlier revision and
@@ -325,12 +333,17 @@ is self-consistent.
 **The specular kill `(1.0 - use)` is deliberate, not a shortcut.** With a
 lightmap present the shader sets `illum` to white
 (`illum = mix(illum, vec3(1), use)`) and puts all the lighting into `bake`,
-so `color = albedo * bake`. Adding a runtime highlight on top would
-double-count it. The consequence is still real though: a baked highlight is
-static, so it cannot follow the camera or the light, and the paint reads
-matte from most angles. Stage 3 has a decision to make here -- whether the
-lightmap should carry only ambient/AO and leave the specular to the runtime
-BRDF -- and it is a design decision, not a bug fix.
+so `color = albedo * bake`.
+
+> **L1 note:** no lightmap is present today (`use = 0`, see correction 7), so
+> this paragraph describes the branch, not the current image. The decision it
+> frames still has to be taken before that branch is turned on.
+
+Adding a runtime highlight on top would double-count it. The consequence is
+still real though: a baked highlight is static, so it cannot follow the camera
+or the light, and the paint reads matte from most angles. Stage 3 has a decision
+to make here -- whether the lightmap should carry only ambient/AO and leave the
+specular to the runtime BRDF -- and it is a design decision, not a bug fix.
 
 **The spheremap path cannot simply be retired.** `enhanced_env` requires
 `reflection_scene_`, which is false for menus and previews. Those fall back

@@ -438,8 +438,19 @@ resources connect lights to objects. If that genuinely needs a locator, propose
 a separate format or binding mechanism.
 
 **Open question:** how are exported lights attached to an object? Existing RPK
-resource linking has not been examined yet, and no locator format is proposed
-here.
+resource linking has been examined (`LIGHTING_AUDIT.md` §L1.6.3) and there are
+two mechanisms, both text lines in an object ICFG:
+
+- `light 0x<id> <x> <y> <z>` — used once in stock content (`objects.rpk`
+  `trafficlamp`);
+- `render 0x<id> <x> <y> <z>` followed by `flags 4` — used for street lamps
+  (`lamp_base`, `lamp_road`, `kislampa`, `lamp_lane0_hold`).
+
+Both carry a local offset only; the world transform comes from the object
+placement. What is still unknown is how a **car part** reaches its light: no
+packed config references any of the car spot resources, so that link is
+script-side and unproven. Do not design a locator format until it is
+established.
 
 ## 15. Paint library audit
 
