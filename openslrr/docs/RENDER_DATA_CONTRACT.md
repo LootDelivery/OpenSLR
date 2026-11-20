@@ -438,19 +438,29 @@ resources connect lights to objects. If that genuinely needs a locator, propose
 a separate format or binding mechanism.
 
 **Open question:** how are exported lights attached to an object? Existing RPK
-resource linking has been examined (`LIGHTING_AUDIT.md` §L1.6.3) and there are
-two mechanisms, both text lines in an object ICFG:
+resource linking has been examined (`LIGHTING_AUDIT.md` §L1.6.3), and three
+levels must be kept apart:
 
-- `light 0x<id> <x> <y> <z>` — used once in stock content (`objects.rpk`
-  `trafficlamp`);
-- `render 0x<id> <x> <y> <z>` followed by `flags 4` — used for street lamps
-  (`lamp_base`, `lamp_road`, `kislampa`, `lamp_lane0_hold`).
+1. **Confirmed by resources:** object ICFGs contain text references to light
+   resource ids, in two forms:
+   - `light 0x<id> <x> <y> <z>` — once in stock content (`objects.rpk`
+     `trafficlamp`);
+   - `render 0x<id> <x> <y> <z>` followed by `flags 4` — for street lamps
+     (`lamp_base`, `lamp_road`, `kislampa`, `lamp_lane0_hold`).
+2. **Compatible interpretation:** the id names a light resource, the offset is
+   local, and the world transform comes from the object placement. Plausible,
+   and consistent with every neighbouring line, but not proven.
+3. **Not traced:** no host code path was found that parses these ICFG lines,
+   creates a light node and feeds it to the renderer. Do not treat 1+2 as 3.
 
-Both carry a local offset only; the world transform comes from the object
-placement. What is still unknown is how a **car part** reaches its light: no
-packed config references any of the car spot resources, so that link is
-script-side and unproven. Do not design a locator format until it is
-established.
+`flags 4` in an ICFG is **not** the same datum as `PartConfig::renders[].flags`
+(`light_flags`). The value coincides and the "city" reading is plausible, but
+they are parsed by different code for different owners; nothing establishes
+that they mean the same thing.
+
+What is still unknown is how a **car part** reaches its light: no packed config
+references any of the car spot resources, so that link is script-side and
+unproven. Do not design a locator format until it is established.
 
 ## 15. Paint library audit
 
