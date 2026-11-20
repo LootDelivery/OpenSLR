@@ -13,7 +13,7 @@ public class GameLogic extends GameType implements Runnable
 	static final ResourceRef VEHICLETYPE_ROOT = new ResourceRef(cars:0x1000r);
 	static final ResourceRef CHASSIS_ROOT = new ResourceRef(cars:0x101r);
 	static final ResourceRef MAPS_ROOT = new ResourceRef(MW_Mod:0xabcr);
-	static final int INITIAL_PLAYER_MONEY = 20000;
+	static final int INITIAL_PLAYER_MONEY = 2000000;
 	static final float INITIAL_PLAYER_PRESTIGE = 0.3;
 	static final float INITIAL_OPPONENT_PRESTIGE_MIN = 0.3;
 	static final float INITIAL_OPPONENT_PRESTIGE_MAX = 0.90000004;
