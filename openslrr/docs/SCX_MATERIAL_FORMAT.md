@@ -27,15 +27,32 @@ representation, filled from any of:
 
 - old SCX;
 - temporary development descriptors (sidecars) while the BRDF is being built;
-- future extended SCX.
+- future extended SCX;
+- future typed OpenSLRR resources inside RPK (the reusable Paint Definition
+  library).
 
 Old materials convert to a compatible **legacy representation**. New materials
 convert to the full **PBR representation**. This is what lets the BRDF be
 developed and checked before the new SCX format exists.
 
-The sidecars are a development tool. They must not quietly become a rival
-permanent source of truth; the final home for material properties is SCX, and
-the sidecar path is removed once it is.
+The sidecars are a **development tool only** — for prototyping the BRDF, testing
+parameters and preparing content before it is packaged. They are not a permanent
+runtime store and must not become a rival source of truth.
+
+Permanent placement follows one split (A1 in
+`MATERIAL_SYSTEM_ARCHITECTURE.md` §10.4):
+
+- **model-owned Material Definitions** — the material of a particular model —
+  are stored permanently in **SCX v5**;
+- the **reusable Paint Definition library** (automotive paint variants shared by
+  many cars) lives in separate **typed OpenSLRR resources inside RPK**. It is not
+  copied into SCX, and this document does not define the RPK payload.
+
+A paint slot merely offers an optional choice: a model may have none and may not
+depend on the paint library at all. Original content had no such library:
+`CARCOLORS` and `PaintCan` are texture IDs and a colour/capacity pair, not PBR
+paint definitions. The new resource type belongs to OpenSLRR; reading it in the
+original executable is not claimed.
 
 ## 3. Material is not a texture
 
@@ -140,5 +157,6 @@ Do not change SCX or the exporter during early BRDF development.
 - Round-trip preserves geometry, UV, texture bindings, alpha and legacy fields.
 - Material properties survive a repaint.
 - The renderer produces the same result whether the material came from an old
-  SCX, a sidecar, or a new SCX.
-- Reading new SCX in the original game is reported separately, with evidence.
+  SCX, a sidecar, a new SCX, or a typed RPK Paint Definition resource.
+- Reading new SCX — and the new typed RPK paint resource — in the original game
+  is reported separately, with evidence; compatibility is not claimed.
