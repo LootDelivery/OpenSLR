@@ -76,7 +76,14 @@ struct Registration {
        unplaced = true;
   int mode = 0;
   size_t edge = 0;
+  // Edge the car came from, so the pose can fillet a junction instead of
+  // snapping to the new lane's chord direction.
+  size_t entry = 0;
   float along = 0, speed = 0, cruise = 0;
+  // Last published frame, for the discontinuity diagnostic.
+  bool posed = false;
+  size_t posed_edge = 0;
+  float posed_along = 0, posed_road_y = 0, posed_body_y = 0, posed_yaw = 0;
 };
 struct Event {
   Object *target = nullptr;
@@ -91,6 +98,11 @@ std::vector<Event> events;
 SectionMachine *sections = nullptr;
 RpkIndex *resources = nullptr;
 int32_t next_id = 1;
+// Ambient traffic belongs to the city, not to a race scene: while a race/track
+// section is active the runtime neither drives nor refills, and the cars it
+// created are retired. Script-owned cars (police scouts, race bots) are a
+// different mechanism and are never touched here.
+bool ambient_enabled = true;
 uint32_t random_state = 0x8f12345;
 double clock_seconds = 0;
 size_t spawned_total = 0, dropped_total = 0;
@@ -104,6 +116,37 @@ float random() {
 bool tracing() {
   static const bool on = std::getenv("SLRR_TRAFFIC_LOG") != nullptr;
   return on;
+}
+// Discontinuity diagnostic: reports a per-frame yaw or height jump with the data
+// needed to locate it (edge, arc position, world pose, road surface, body
+// height, delta time, edge change). Off unless SLRR_TRAFFIC_DIAG is set.
+bool diagnosing() {
+  static const bool on = std::getenv("SLRR_TRAFFIC_DIAG") != nullptr;
+  return on;
+}
+struct Tracked {
+  bool valid = false;
+  size_t edge = 0;
+  float along = 0, road_y = 0, body_y = 0, yaw = 0;
+  RoadPoint world{};
+};
+void report_discontinuity(const Registration &r, const Tracked &was,
+                          const RoadPoint &now, float seconds) {
+  const float dy = r.posed_body_y - was.body_y;
+  const float dyaw = std::remainder(r.posed_yaw - was.yaw, 6.2831853f);
+  // A 0.4 m step in one frame or a 7 degree heading step is a discontinuity at
+  // walking pace; below that the filter must stay silent.
+  if (std::fabs(dy) < .4f && std::fabs(dyaw) < .12f)
+    return;
+  std::fprintf(stderr,
+               "[traffic-diag] id=%d edge=%zu->%zu along=%.1f->%.1f "
+               "world=(%.1f,%.1f,%.1f)->(%.1f,%.1f,%.1f) road_y=%.2f->%.2f "
+               "body_y=%.2f->%.2f yaw=%.3f->%.3f dy=%.2f dyaw=%.3f dt=%.4f "
+               "edge_change=%d\n",
+               r.id, was.edge, r.edge, was.along, r.posed_along, was.world[0],
+               was.world[1], was.world[2], now[0], now[1], now[2], was.road_y,
+               r.posed_road_y, was.body_y, r.posed_body_y, was.yaw, r.posed_yaw,
+               dy, dyaw, seconds, was.edge != r.edge ? 1 : 0);
 }
 float number(const std::vector<Value> &args, size_t i, float fallback = 0) {
   if (i >= args.size())
@@ -239,33 +282,155 @@ size_t choose_transition(const std::vector<size_t> &choices,
   return lanes[std::min<size_t>(size_t(random() * lanes.size()),
                                 lanes.size() - 1)];
 }
+// Unit XZ direction of the first (or last) non-degenerate step of an edge.
+bool edge_tangent(const RoadRoutes::Edge &e, bool start, RoadPoint &out) {
+  if (e.points.size() < 2)
+    return false;
+  const size_t n = e.points.size();
+  for (size_t i = 1; i < n; ++i) {
+    const auto &a = start ? e.points[i - 1] : e.points[n - 1 - i];
+    const auto &b = start ? e.points[i] : e.points[n - i];
+    RoadPoint d{b[0] - a[0], 0, b[2] - a[2]};
+    float l = std::sqrt(d[0] * d[0] + d[2] * d[2]);
+    if (l > .05f) {
+      out = {d[0] / l, 0, d[2] / l};
+      return true;
+    }
+  }
+  return false;
+}
+// The world pose of a car that stands `along` metres into `edge`. `entry` is the
+// edge it came from (the pose then fillets the junction), `npos` anywhere else.
+//
+// The map stores a junction as a straight chord between the incoming and the
+// outgoing lane ends, so a chord's own direction is tens of degrees off the lane
+// at both of its ends: following it snapped the car's heading twice per turn.
+// On a crossing edge the pose therefore follows a cubic Hermite whose end
+// tangents are the incoming and the outgoing lane directions, which makes both
+// the position and the heading continuous through the junction. On a lane the
+// heading is the tangent over a +-1.2 m window, so a 1.5 m geometry sample does
+// not step the yaw either.
+TrafficPose traffic_pose(const RoadRoutes &graph, size_t edge, float along,
+                         size_t entry) {
+  TrafficPose pose;
+  const auto &edges = graph.traffic_edges();
+  if (edges.empty())
+    return pose;
+  if (edge >= edges.size())
+    edge = edges.size() - 1;
+  const auto &e = edges[edge];
+  RoadRoute route;
+  route.points = e.points;
+  if (e.points.empty())
+    return pose;
+  along = std::clamp(along, 0.f, e.length);
+  auto direction = [&](const RoadPoint &a, const RoadPoint &b) {
+    RoadPoint d{b[0] - a[0], 0, b[2] - a[2]};
+    float l = std::sqrt(d[0] * d[0] + d[2] * d[2]);
+    if (l > 1e-4f) {
+      d[0] /= l;
+      d[2] /= l;
+    }
+    return d;
+  };
+  if (e.crossing && !e.next.empty() && e.length > .2f) {
+    const RoadPoint p0 = e.points.front(), p1 = e.points.back();
+    RoadPoint chord = direction(p0, p1);
+    const float reach = std::sqrt((p1[0] - p0[0]) * (p1[0] - p0[0]) +
+                                  (p1[2] - p0[2]) * (p1[2] - p0[2]));
+    RoadPoint tin{chord[0], 0, chord[2]}, tout{chord[0], 0, chord[2]};
+    if (entry < edges.size() && entry != edge)
+      edge_tangent(edges[entry], false, tin);
+    if (e.next[0] < edges.size())
+      edge_tangent(edges[e.next[0]], true, tout);
+    // Opposite tangents (a hairpin) would overshoot; shorten both.
+    float scale = reach;
+    if (tin[0] * tout[0] + tin[2] * tout[2] < 0)
+      scale *= .5f;
+    const float t = along / e.length;
+    const float t2 = t * t, t3 = t2 * t;
+    const float h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t;
+    const float h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
+    pose.position[0] = h00 * p0[0] + h10 * scale * tin[0] + h01 * p1[0] +
+                       h11 * scale * tout[0];
+    pose.position[2] = h00 * p0[2] + h10 * scale * tin[2] + h01 * p1[2] +
+                       h11 * scale * tout[2];
+    pose.position[1] = p0[1] + (p1[1] - p0[1]) * t;
+    const float d00 = 6 * t2 - 6 * t, d10 = 3 * t2 - 4 * t + 1;
+    const float d01 = -6 * t2 + 6 * t, d11 = 3 * t2 - 2 * t;
+    RoadPoint d{d00 * p0[0] + d10 * scale * tin[0] + d01 * p1[0] +
+                    d11 * scale * tout[0],
+                0,
+                d00 * p0[2] + d10 * scale * tin[2] + d01 * p1[2] +
+                    d11 * scale * tout[2]};
+    if (std::fabs(d[0]) + std::fabs(d[2]) < 1e-5f)
+      d = chord;
+    pose.heading = std::atan2(-d[0], -d[2]);
+    return pose;
+  }
+  pose.position = road_at(route, along);
+  const float window = 1.2f;
+  auto was = road_at(route, std::max(0.f, along - window));
+  auto next = road_at(route, std::min(e.length, along + window));
+  auto d = direction(was, next);
+  if (d[0] == 0 && d[2] == 0)
+    d = direction(road_at(route, std::max(0.f, along - .25f)),
+                  road_at(route, std::min(e.length, along + .25f)));
+  pose.heading = std::atan2(-d[0], -d[2]);
+  return pose;
+}
 // Publish the pose for one car: the graph point is the tyre contact, so the
 // chassis is parked onto it with its loaded springs. The caller then animates
 // the wheels with the distance it advanced.
 void publish(Registration &r, const RoadRoutes &graph, float at) {
-  const auto &e = graph.traffic_edges()[r.edge];
-  RoadRoute route;
-  route.points = e.points;
-  auto p = road_at(route, at);
-  auto q = road_at(route, std::min(e.length, at + .25f));
-  auto previous = road_at(route, std::max(0.f, at - .25f));
-  auto direction = road_normalize(
-      {q[0] - previous[0], q[1] - previous[1], q[2] - previous[2]});
+  auto pose = traffic_pose(graph, r.edge, at, r.entry);
+  auto p = pose.position;
+  auto direction = RoadPoint{-std::sin(pose.heading), 0, -std::cos(pose.heading)};
+  const float road_y = p[1];
   SceneFloorHit floor;
-  if (scene_instances_sample_floor(p[0], p[2], p[1] + 4, r.car, floor))
+  // A bridge deck, an arch or a canopy four metres above the road is not the
+  // road. The graph point is the lane centreline, so only a surface within a
+  // metre of it may replace the height: without this clamp the probe (which
+  // starts 4 m up) hit a deck and lifted the car for one frame.
+  if (scene_instances_sample_floor(p[0], p[2], p[1] + 4, r.car, floor) &&
+      std::fabs(floor.height - road_y) <= 1.2f)
     p[1] = floor.height;
-  gameref_set_matrix(r.car, p[0], p[1], p[2],
-                     std::atan2(-direction[0], -direction[2]), 0, 0);
+  gameref_set_matrix(r.car, p[0], p[1], p[2], pose.heading, 0, 0);
   part_park_chassis(r.car);
-  if (auto *n = gameref_get(r.car))
+  if (auto *n = gameref_get(r.car)) {
     for (int i = 0; i < 3; ++i)
       n->vel[i] = direction[i] * r.speed;
+    r.posed_body_y = n->pos[1];
+  }
+  r.posed = true;
+  r.posed_edge = r.edge;
+  r.posed_along = at;
+  r.posed_road_y = road_y;
+  r.posed_yaw = gameref_get(r.car) ? gameref_get(r.car)->ypr[0] : 0;
 }
+// Where a car may appear. Measured on the shipped HUD: the minimap's scale bar
+// is 37 px for "50 m" and the map window is ~215 x 140 px, i.e. about 290 m wide
+// and 190 m tall around the player, so its half-width is ~145 m. The chase
+// camera looks along the car and shows the road for a few hundred metres.
+// Hence: never closer than `kSpawnNear` (180 m, clear of the map's half-width)
+// in any direction, and never inside the forward cone closer than
+// `kSpawnAhead`, so a new car only enters the view by being approached. Both are
+// distance rules on the graph, not on the camera frame: a car that exists
+// behind the player is never hidden or removed just because the player turns.
+constexpr float kSpawnNear = 180.f;
+constexpr float kSpawnAhead = 260.f;
+// A spawn must sit inside the retire radius with room to live: 240 m in, 300 m
+// out. Without that hysteresis a car created at the edge of the band was retired
+// on the next frame and the population churned instead of settling.
+constexpr float kSpawnFar = 240.f;
+constexpr float kRetireOwned = 300.f;
+constexpr float kRetireScripted = 400.f;
 // Find a free spot on a lane before anything is allocated. The candidate is
-// rejected when it is blocked, too short, occupied, or outside the band the
-// streaming policy wants around the player.
+// rejected when it is blocked, too short, occupied, inside the minimap or in
+// front of the camera, or outside the band the streaming policy wants around
+// the player.
 bool place(Registration &r, const RoadRoutes &graph, const Population &p,
-           const RoadPoint &focus) {
+           const RoadPoint &focus, const RoadPoint &forward) {
   const auto &edges = graph.traffic_edges();
   if (edges.empty())
     return false;
@@ -280,8 +445,17 @@ bool place(Registration &r, const RoadRoutes &graph, const Population &p,
     line.points = e.points;
     auto candidate = road_at(line, at);
     float distance = road_distance(candidate, focus);
-    if (distance < 45 || distance > 160)
+    if (distance < kSpawnNear || distance > kSpawnFar)
       continue;
+    // Forward cone: a spot the player is looking at is a visible pop-in even at
+    // 200 m, so it is only allowed once it is past the camera's useful range.
+    if (distance < kSpawnAhead) {
+      const float ahead = ((candidate[0] - focus[0]) * forward[0] +
+                           (candidate[2] - focus[2]) * forward[2]) /
+                          std::max(distance, .001f);
+      if (ahead > .5f)
+        continue;
+    }
     bool occupied = false;
     for (const auto &entry : registrations)
       if (entry.first != r.id && entry.second.visible &&
@@ -292,6 +466,7 @@ bool place(Registration &r, const RoadRoutes &graph, const Population &p,
     if (occupied)
       continue;
     r.edge = edge;
+    r.entry = edge;
     r.along = at;
     r.unplaced = false;
     return true;
@@ -331,6 +506,7 @@ int32_t add_car(const RpkIndex &rpk, void *ground, Object *car, Object *where,
     auto graph = race_ground_roads(rpk, ground);
     if (auto projected = graph ? graph->traffic_project(*p) : std::nullopt) {
       r.edge = projected->edge;
+      r.entry = r.edge;
       r.along = projected->along;
       publish(r, *graph, r.along);
     } else {
@@ -361,6 +537,7 @@ Object *create_on_graph(Jvm &vm, const RpkIndex &rpk, void *ground,
   }
   auto &r = it->second;
   r.edge = std::min(edge, graph.traffic_edges().size() - 1);
+  r.entry = r.edge;
   r.along = along;
   r.unplaced = false;
   r.visible = true;
@@ -368,6 +545,24 @@ Object *create_on_graph(Jvm &vm, const RpkIndex &rpk, void *ground,
   queue(r, true);
   ++spawned_total;
   return car;
+}
+// Spawn evidence for SLRR_TRAFFIC_LOG: distance to the player and how far the
+// spot sits in front of the car at the moment of creation. A pop-in inside the
+// minimap or inside the camera would show up here as small `dist` or high
+// `ahead`.
+void log_spawn(const Registration &r, const RoadPoint &focus,
+               const RoadPoint &forward) {
+  if (!tracing())
+    return;
+  const auto pos = position(r.car);
+  const auto d = road_distance(pos, focus);
+  const float ahead = d > .001f ? ((pos[0] - focus[0]) * forward[0] +
+                                   (pos[2] - focus[2]) * forward[2]) /
+                                      d
+                                : 0.f;
+  std::fprintf(stderr,
+               "[traffic-spawn] id=%d edge=%zu along=%.1f dist=%.1f ahead=%.2f\n",
+               r.id, r.edge, r.along, d, ahead);
 }
 const Model *weighted_model(const Population &p) {
   float total = 0;
@@ -402,6 +597,43 @@ void race_traffic_reset() {
   next_id = 1;
   clock_seconds = 0;
   spawned_total = dropped_total = 0;
+  ambient_enabled = true;
+}
+
+bool race_traffic_ambient_enabled() { return ambient_enabled; }
+
+// Which state of `GameLogic.actualState` owns the road. The street race runs
+// in `java.game.RaceSetup` and every track/ROC scene in a `Track` class; the
+// city states are the ones whose map scripts fill the traffic templates.
+// Unknown sections keep the current policy, so a menu or a garage visit does
+// not change anything.
+void race_traffic_note_section(const std::string &section) {
+  const bool race = section.find("RaceSetup") != std::string::npos ||
+                    section.find("Track") != std::string::npos ||
+                    section.find("Race") != std::string::npos;
+  const bool city = section.find("Valocity") != std::string::npos ||
+                    section.find("City") != std::string::npos;
+  if (race)
+    race_traffic_set_ambient(false);
+  else if (city)
+    race_traffic_set_ambient(true);
+}
+
+void race_traffic_set_ambient(bool enabled) {
+  if (enabled == ambient_enabled)
+    return;
+  ambient_enabled = enabled;
+  if (enabled)
+    return;
+  // Retire the cars this module created. The id list is copied first, because
+  // remove() erases from `registrations` and destroys the car; a script-owned
+  // entry stays registered and keeps its owner.
+  std::vector<int32_t> ids;
+  for (const auto &entry : registrations)
+    if (entry.second.owned)
+      ids.push_back(entry.first);
+  for (auto id : ids)
+    remove(id);
 }
 
 int race_traffic_count(void *ground) {
@@ -423,6 +655,11 @@ Object *race_traffic_car_at(void *ground, int index) {
   if (index < 0 || size_t(index) >= ids.size())
     return nullptr;
   return registrations.at(ids[size_t(index)]).car;
+}
+
+TrafficPose race_traffic_pose(const RoadRoutes &graph, size_t edge, float along,
+                             size_t entry) {
+  return traffic_pose(graph, edge, along, entry);
 }
 
 int race_traffic_pointer(Object *car) {
@@ -641,6 +878,14 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
   auto *world = scene_instances_world();
   auto *focus_car = part_controlled_chassis();
   const auto focus = focus_car ? position(focus_car) : RoadPoint{};
+  // The player's facing, for the spawn cone. ypr[0] is set by the same
+  // convention the traffic pose uses (yaw = atan2(-dx, -dz)), so the forward
+  // axis is (-sin, 0, -cos).
+  float focus_yaw = 0.f;
+  if (focus_car)
+    if (auto *n = gameref_get(focus_car))
+      focus_yaw = n->ypr[0];
+  const RoadPoint forward{-std::sin(focus_yaw), 0, -std::cos(focus_yaw)};
   const float density = host_game_options().traffic_density;
   const int cap = std::isfinite(density) ? int(std::clamp(density, 0.f, 1.f) * 100) : 0;
   std::vector<void *> ground_keys;
@@ -650,6 +895,10 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
   static double logged = -1;
   for (void *key : ground_keys) {
     if (!world || !focus_car || !belongs(key, world) || seconds == 0)
+      continue;
+    // A race section owns the road: ambient cars stay out until the city comes
+    // back. Retiring happens on the transition, so this is only a guard.
+    if (!ambient_enabled)
       continue;
     auto graph = race_ground_roads(*resources, key);
     auto *p = population(key);
@@ -679,19 +928,24 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       if (!r.visible)
         continue;
       const float distance = road_distance(position(r.car), focus);
-      const bool over = visible >= cap;
-      const bool far = distance > (r.owned ? 260 : 400);
-      const bool closed = !r.unplaced && r.edge < edges.size() && blocked(*p, edges[r.edge]);
-      if (over || far || closed) {
+      // The cap is an ambient-traffic budget: a script-owned car (police scout,
+      // race bot) is not counted against it and is not retired to make room.
+      const bool over = r.owned && visible >= cap;
+      const bool far = distance > (r.owned ? kRetireOwned : kRetireScripted);
+      const bool closed =
+          r.owned && !r.unplaced && r.edge < edges.size() && blocked(*p, edges[r.edge]);
+      if (r.owned && (over || far || closed)) {
         queue(r, false);
         r.visible = false;
-        if (r.owned) {
-          remove(id);
-          continue;
-        }
-      } else {
-        ++visible;
+        remove(id);
+        continue;
       }
+      if (far) {
+        queue(r, false);
+        r.visible = false;
+        continue;
+      }
+      if (r.owned) ++visible;
     }
     // 2. Drive the cars this module owns along their directed lane.
     for (auto id : ids) {
@@ -735,11 +989,30 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
           r.along = e.length;
         } else {
           r.along -= e.length;
+          r.entry = r.edge;
           r.edge = choose_transition(choices, *graph);
+          r.along = std::min(r.along, edges[r.edge].length);
         }
       }
       const float previous_yaw = n->ypr[0];
+      Tracked was;
+      if (diagnosing() && r.posed) {
+        was.valid = true;
+        was.edge = r.posed_edge;
+        was.along = r.posed_along;
+        was.road_y = r.posed_road_y;
+        was.body_y = r.posed_body_y;
+        was.yaw = r.posed_yaw;
+        was.world = {n->pos[0], n->pos[1], n->pos[2]};
+      }
       publish(r, *graph, std::min(r.along, edges[r.edge].length));
+      if (was.valid) {
+        auto *published = gameref_get(r.car);
+        report_discontinuity(r, was,
+                             {published->pos[0], published->pos[1],
+                              published->pos[2]},
+                             seconds);
+      }
       const float delta = std::remainder(n->ypr[0] - previous_yaw, 6.2831853f);
       part_animate_external_wheels(r.car, advance,
                                    advance > .001f ? std::atan(2.5f * delta / advance)
@@ -753,7 +1026,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         if (!projected || blocked(*p, edges[projected->edge]))
           break;
         Registration candidate;
-        if (!place(candidate, *graph, *p, focus))
+        if (!place(candidate, *graph, *p, focus, forward))
           break;
         --spawn_budget;
         if (!create_on_graph(vm, *resources, key, *graph, seed.model.type,
@@ -763,6 +1036,9 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         }
         ++visible;
         --seed.remaining;
+        if (auto it2 = registrations.find(next_id - 1);
+            it2 != registrations.end())
+          log_spawn(it2->second, focus, forward);
       }
     }
     std::erase_if(p->seeds, [](const Seed &seed) { return seed.remaining <= 0; });
@@ -772,13 +1048,18 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       if (!selected)
         break;
       Registration candidate;
-      if (!place(candidate, *graph, *p, focus))
+      if (!place(candidate, *graph, *p, focus, forward))
         continue;
       --spawn_budget;
-      if (!create_on_graph(vm, *resources, key, *graph, selected->type,
-                           candidate.edge, candidate.along))
+      auto *created = create_on_graph(vm, *resources, key, *graph,
+                                      selected->type, candidate.edge,
+                                      candidate.along);
+      if (!created)
         continue;
       ++visible;
+      if (auto it2 = registrations.find(race_traffic_pointer(created));
+          it2 != registrations.end())
+        log_spawn(it2->second, focus, forward);
     }
     if (tracing() && clock_seconds - logged >= 1) {
       logged = clock_seconds;

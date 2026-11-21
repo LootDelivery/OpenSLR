@@ -388,6 +388,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   }
   MainLoopFrameResult out;
   mainloop_adopt_section(jvm, sections);
+  // Leaving the city for a race/track section retires the ambient traffic before
+  // the race scene is prepared; coming back to the city lets it refill. Script
+  // ownership decides what goes: only the cars this runtime created.
+  race_traffic_note_section(sections.actual_name());
   {
     perf::Scope scope(perf::Zone::Scripts);
     pump_async_messages(jvm, sections.actual());

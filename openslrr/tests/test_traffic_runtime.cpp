@@ -282,8 +282,172 @@ SLRR_TEST(halts_and_idle_tick) {
   std::puts("PASS halts accept valid closures, the idle tick spawns nothing");
 }
 
+// U2-B.1: a car must follow one continuous path through a junction. The map
+// stores the turn as a straight chord between two lane ends, so the heading of
+// the chord is tens of degrees away from both lanes; the pose fillets the
+// junction with a Hermite whose end tangents are the lane directions. This walks
+// a real 90-degree corner of city.trc and pins position, heading and height
+// continuity, and shows the snap the fillet removes.
+SLRR_TEST(junction_continuity) {
+  Fixture f;
+  if (!open(f)) {
+    std::puts("SKIP retail install not found (set SLRR_GAME_ROOT)");
+    return;
+  }
+  auto graph = race_ground_roads(f.packs, &f.ground);
+  SLRR_REQUIRE(graph && !graph->edges().empty());
+  const auto& edges = graph->traffic_edges();
+  auto tangent = [&](size_t edge, bool start) {
+    const auto& p = edges[edge].points;
+    const size_t n = p.size();
+    RoadPoint t{};
+    if (n < 2) return t;
+    const auto& a = start ? p[n - 2] : p[n - 1];
+    const auto& b = start ? p[n - 1] : p[n - 2];
+    t = {b[0] - a[0], 0, b[2] - a[2]};
+    const float l = std::sqrt(t[0] * t[0] + t[2] * t[2]);
+    if (l > .05f) { t[0] /= l; t[2] /= l; }
+    return t;
+  };
+  // Find a turn whose two lanes really do cross at a wide angle.
+  size_t turn = edges.size(), from = edges.size(), to = edges.size();
+  for (size_t i = 0; i < edges.size() && turn == edges.size(); ++i) {
+    if (!edges[i].crossing || edges[i].next.empty() || edges[i].length < 2.f)
+      continue;
+    size_t parent = edges.size();
+    for (size_t j = 0; j < edges.size(); ++j)
+      if (!edges[j].crossing)
+        for (size_t k : edges[j].next)
+          if (k == i) parent = j;
+    if (parent == edges.size()) continue;
+    const auto a = tangent(parent, false), b = tangent(edges[i].next[0], true);
+    if (a[0] * b[0] + a[2] * b[2] > .3f) continue;  // less than ~72 degrees
+    turn = i;
+    from = parent;
+    to = edges[i].next[0];
+  }
+  if (turn == edges.size()) {
+    std::puts("SKIP no wide junction in the city graph");
+    return;
+  }
+  // Walk 4 m of the lane, the whole turn, and 4 m of the next lane, with the
+  // predecessor reported so the junction gets its fillet.
+  struct Sample { RoadPoint p; float heading; };
+  std::vector<Sample> walk;
+  auto add = [&](size_t edge, float along, size_t entry) {
+    auto pose = race_traffic_pose(*graph, edge, along, entry);
+    walk.push_back({pose.position, pose.heading});
+  };
+  for (float a = std::max(0.f, edges[from].length - 4.f); a < edges[from].length;
+       a += .1f)
+    add(from, a, from);
+  for (float a = 0; a <= edges[turn].length; a += .1f)
+    add(turn, a, from);
+  for (float a = 0; a <= 4.f; a += .1f)
+    add(to, a, turn);
+  SLRR_REQUIRE(walk.size() > 30);
+  float worst_position = 0, worst_heading = 0, worst_height = 0;
+  for (size_t i = 1; i < walk.size(); ++i) {
+    const auto step = road_distance(walk[i].p, walk[i - 1].p);
+    worst_position = std::max(worst_position, step);
+    worst_height = std::max(worst_height,
+                            std::fabs(walk[i].p[1] - walk[i - 1].p[1]));
+    worst_heading = std::max(
+        worst_heading,
+        std::fabs(std::remainder(walk[i].heading - walk[i - 1].heading,
+                                 6.2831853f)));
+  }
+  std::printf("junction: %zu samples, step<=%.3f m, heading step<=%.3f rad, "
+              "height step<=%.3f m\n",
+              walk.size(), worst_position, worst_heading, worst_height);
+  // 0.1 m of travel may not teleport, turn more than a few degrees or change
+  // height. The old chord pose failed the heading bound by an order of
+  // magnitude at both ends of the turn.
+  SLRR_REQUIRE(worst_position < .25f);
+  SLRR_REQUIRE(worst_heading < .12f);
+  SLRR_REQUIRE(worst_height < .08f);
+  // The fillet must connect the two lane headings, not some third direction:
+  // the heading it turns through equals the corner the lanes make.
+  const float lane_in =
+      race_traffic_pose(*graph, from, std::max(0.f, edges[from].length - .5f),
+                        from)
+          .heading;
+  const float lane_out = race_traffic_pose(*graph, to, .5f, to).heading;
+  const float turned = std::fabs(
+      std::remainder(walk.back().heading - walk.front().heading, 6.2831853f));
+  const float corner =
+      std::fabs(std::remainder(lane_out - lane_in, 6.2831853f));
+  std::printf("corner: lanes %.2f rad, pose turned %.2f rad\n", corner,
+              turned);
+  SLRR_REQUIRE(corner > .8f);  // a real corner, not a lane continuation
+  SLRR_REQUIRE(std::fabs(turned - corner) < .25f);
+  // The chord without a fillet: at the first metre of the turn the heading is
+  // the chord's, tens of degrees away from the incoming lane.
+  auto chord = race_traffic_pose(*graph, turn, .5f, turn);
+  const float snap = std::fabs(
+      std::remainder(chord.heading - walk.front().heading, 6.2831853f));
+  SLRR_REQUIRE(snap > .3f);
+  gameref_clear();
+  std::puts("PASS junction pose keeps position, heading and height continuous "
+            "and the raw chord would snap");
+}
+
+// U2-B.1: ambient traffic belongs to the city. A race/track section retires the
+// cars this runtime created, keeps every script-owned car (police scouts, race
+// bots, the player's own car is never registered here at all), and a later city
+// section lets the population fill again.
+SLRR_TEST(race_section_clears_ambient) {
+  Fixture f;
+  if (!open(f)) {
+    std::puts("SKIP retail install not found (set SLRR_GAME_ROOT)");
+    return;
+  }
+  auto graph = race_ground_roads(f.packs, &f.ground);
+  SLRR_REQUIRE(graph && !graph->edges().empty());
+  const auto& e = graph->edges().front();
+  gameref_upsert(&f.car, GameRefKind::GameType)->type_id = f.type;
+  auto* where = vector(f.vm, e.points.front());
+  // A script-owned car: the police scout and a race bot come in through the same
+  // call, so it must survive the race transition.
+  const int id = f.call("addTrafficCar",
+                        "(Ljava.util.resource.GameRef;Ljava.lang.Vector3;)I",
+                        {Value::make_obj(&f.car), Value::make_obj(where)})
+                     .v.i;
+  SLRR_REQUIRE(id > 0);
+  SLRR_REQUIRE(race_traffic_ambient_enabled());
+  race_traffic_note_section("java.game.Valocity");
+  SLRR_REQUIRE(race_traffic_ambient_enabled());
+  race_traffic_note_section("java.game.RaceSetup");
+  SLRR_REQUIRE(!race_traffic_ambient_enabled());
+  // Script-owned traffic is not ambient traffic: it is still registered.
+  SLRR_REQUIRE(race_traffic_count(&f.ground) == 1);
+  SLRR_REQUIRE(race_traffic_pointer(&f.car) == id);
+  // A track or ROC scene keeps the block on.
+  race_traffic_note_section("java.game.Valocity");
+  SLRR_REQUIRE(race_traffic_ambient_enabled());
+  race_traffic_note_section("java.game.ROCTrack");
+  SLRR_REQUIRE(!race_traffic_ambient_enabled());
+  // Menus and the garage leave the current policy alone.
+  race_traffic_note_section("java.game.MainMenu");
+  SLRR_REQUIRE(!race_traffic_ambient_enabled());
+  // Back in the city the population may fill again.
+  race_traffic_note_section("java.game.Valocity");
+  SLRR_REQUIRE(race_traffic_ambient_enabled());
+  // The idle tick is still a no-op with the block off.
+  race_traffic_set_ambient(false);
+  race_traffic_tick(f.vm, .02f);
+  SLRR_REQUIRE(race_traffic_count(&f.ground) == 1);
+  race_traffic_set_ambient(true);
+  gameref_clear();
+  std::puts("PASS a race section retires ambient traffic only and the city restores it");
+}
+
 int main() {
-  const standalone::Test tests[] = {template_registration, car_lifecycle,
-                                    road_binding, halts_and_idle_tick};
+  const standalone::Test tests[] = {template_registration,
+                                    car_lifecycle,
+                                    road_binding,
+                                    halts_and_idle_tick,
+                                    junction_continuity,
+                                    race_section_clears_ambient};
   return standalone::run("traffic_runtime", tests);
 }

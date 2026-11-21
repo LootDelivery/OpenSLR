@@ -46,9 +46,25 @@ void race_traffic_tick(Jvm&, float seconds, double clock_seconds = -1);
 void race_halt_path(const RpkIndex&, void*, const RoadPoint&, const RoadPoint&);
 void race_halt_cross(const RpkIndex&, void*, const RoadPoint&, float seconds);
 void race_clear_halts(void*);
+// Ambient traffic is a city feature: the race scene retires the cars this
+// module created and stops refilling, and the city section restores it. Called
+// with the class name of the active section on every section change; only the
+// ambient cars are touched, never a script-owned car (police, race bot).
+void race_traffic_note_section(const std::string& section);
+void race_traffic_set_ambient(bool enabled);
+bool race_traffic_ambient_enabled();
 // Lifecycle, called from GameRef removal and from the wholesale scene reset.
 void race_traffic_forget(void*);
 void race_traffic_reset();
+// The world pose a car standing `along` metres into `edge` must have. `entry` is the
+// edge it came from, which makes the pose fillet the junction instead of snapping to
+// the new lane chord; pass it for every frame after a transition.
+struct TrafficPose {
+  RoadPoint position{};
+  float heading = 0.f;  // world yaw, radians
+};
+TrafficPose race_traffic_pose(const RoadRoutes&, size_t edge, float along,
+                             size_t entry = static_cast<size_t>(-1));
 // The traffic id a car is registered under, 0 when it is not traffic.
 int race_traffic_pointer(Object*);
 // Diagnostics: resident count and the nth resident of one ground.
