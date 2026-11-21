@@ -844,6 +844,9 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     // time used to become layers.front() and push the catalogue windows out of
     // kOsdUnder -- where they belong -- into kOsdView, which draws over the
     // part previews and hides them.
+    // Nothing visible (a section that has built its OSD but not shown it yet)
+    // leaves the layer list empty; layers.front() would be a null deref.
+    if (layers.empty()) return;
     int32_t front_window_layer = layers.front();
     {
       bool have_window_layer = false;
@@ -928,7 +931,13 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         // it -- the backgrounds came out uniformly darker than the original.
         // Interface draws to the window instead: plates before the preview
         // composite, icons and text after it.
-        osd_view_ = osd_owner_modal(w.owner)
+        // The vehicle HUD plate is the GPS bezel: it has to land on top of
+        // the map camera. The map is an active camera with a small viewport,
+        // so it is composited in kPreviewPresent, above kPlateView. Other
+        // plates stay under the preview composite, which is what the parts
+        // catalogue wants.
+        const bool hud_plate = have_hud && w.owner && w.owner == hud.owner;
+        osd_view_ = (hud_plate || osd_owner_modal(w.owner))
                         ? kOsdView
                         : (plate_behind_preview(w) ||
                            w.background ||
