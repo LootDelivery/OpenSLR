@@ -809,9 +809,10 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         return Value::make_void();
       });
 
-  // Player.<init> during start_init is a long TREE. A miss there aborts boot.
-  // Career creation fills the existing player from the menu script.
-  jvm.natives().register_method("java.game.Player", "<init>", "()V", native_noop);
+  // Player.<init> stays unbound on purpose: invoke_by_name() prefers a host
+  // binding over the TREE, so a no-op here swallowed the stock constructor and
+  // left every Java-built player without parts/carlot/osd. Garage.enter builds
+  // its player with `new Player()`.
   for (const bool visible : {true, false}) {
     jvm.natives().register_method("java.game.Player", visible ? "showOsd" : "hideOsd", "()V",
       [&jvm, visible](Object* player, const std::vector<Value>&) {

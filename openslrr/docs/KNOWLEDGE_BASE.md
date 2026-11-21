@@ -517,8 +517,12 @@ signatures, 331 have a body, 4 are explicit no-ops and 41 are missing.
 | Leftovers (`Welder`) | 3 | No stock caller found |
 
 Explicit no-ops: `System.analyze` ×3 (faithful) and
-`GameRef.setActiveCollision` (a real gap). Two host-only no-ops outside the
-stock table: `Player.<init>` and `LoadingScreen.<init>`.
+`GameRef.setActiveCollision` (a real gap). One host-only no-op outside the
+stock table: `LoadingScreen.<init>`. `Player.<init>` used to be one too; since
+U1 it runs the stock TREE. A host binding wins over the TREE in
+`invoke_by_name()`, so the old no-op silently skipped the constructor that
+`Garage.enter` reaches through `new Player()`, leaving the player without
+`parts`, `carlot` and `osd` and crashing the `--spawn-car` garage entry.
 
 Partial bodies that matter for upcoming work: `GameRef.setState` applies to
 cars only, `GroundRef.getNearestCross` returns null,
