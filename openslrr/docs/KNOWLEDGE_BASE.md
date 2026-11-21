@@ -344,6 +344,21 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   after 10 s out of reach, pushed beyond its 64 m cell) returns to its map
   pose. The GroundRef a prop is parented to comes from the shell that woke it:
   each city visit builds a new GroundRef while the prop map stays cached.
+- The road model of a map is a separate file, not part of the ground mesh:
+  the ground's own payload names it (`maps\city\meshes\city.scm,maps\city\ai\city.trc`),
+  and `maps/city/ai/city.trc` is the only TRC in the retail install. Since U2-A
+  `src/resources/race_runtime.cpp` parses it into `RoadRoutes`, keyed by the
+  ground's `incarnation`, `RpkIndex::generation()`, the game root and
+  `type_id`; a payload that names two different TRCs is ambiguous and yields no
+  graph instead of a guess. `city.trc` gives 928 directed edges, 271 crossings
+  and 1146 `trlight` signal heads, in metres. Two blocks are served from it:
+  the route queries (`findRoute`, `getRouteLength` ×2, `getRoutePos`,
+  `getRouteDist`, `getStartDirection`, `alignToRoad`, `getNearestCross`) and,
+  from U2-B on, traffic lanes (`traffic_edges()` plus the 64 m projection grid).
+  Route lengths are metres; `getRoutePos(t)` and `getRouteDist(pos)` are
+  fractions of that length, per the recovered native bodies at
+  0x00483B30/0x00483C20. Maps without a TRC answer "no route" — there is no
+  fallback map.
 - `PhysicsRef.setStatic(0)` releases a script body to the free-body solver
   (`src/resources/part_runtime.cpp:advance_free_bodies`), which reuses the
   loose-body car and scene contacts and publishes pose and velocities.
@@ -513,7 +528,7 @@ signatures, 331 have a body, 4 are explicit no-ops and 41 are missing.
 
 | Missing family | Count | Blocks |
 | --- | ---: | --- |
-| `GroundRef` routes, traffic, water | 19 | Navigation, traffic |
+| `GroundRef` traffic, water | 11 | Traffic, water limits (routes: 8 done in U2-A) |
 | `PhysicsRef` | 7 | `create`, `createSphere`, `setStatic`, `getVel` ×2, `getAngVel`, `getOri`: world physics objects |
 | `ParticleSystem` | 9 | Smoke, sparks and other effects |
 | `Painter` | 3 | Paint booth: `doPaint`, `paintPart`, `xPaint` |
@@ -537,9 +552,10 @@ even though the call happens — that is how the first U1 report mis-read it
 (corrected in `UPSTREAM_INTEGRATION.md`, "Actual lifecycle").
 
 Partial bodies that matter for upcoming work: `GameRef.setState` applies to
-cars only, `GroundRef.getNearestCross` returns null,
-`RenderRef.plotRoute` returns 0, `GroundRef.setFog` stores values nobody
-reads, and `Part.setSfxLoopParams` stores values without applying them.
+cars only, `RenderRef.plotRoute` returns 0, `GroundRef.setFog` stores values
+nobody reads, and `Part.setSfxLoopParams` stores values without applying them.
+`GroundRef.getNearestCross` is no longer among them: since U2-A it answers from
+the map's road graph (and boxes the approximation when the map has none).
 
 ## 9. Where the documentation disagrees with the code
 

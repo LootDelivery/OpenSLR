@@ -91,12 +91,18 @@ being replaced by success-returning mocks.
 
 | System | Count | Methods |
 | --- | ---: | --- |
-| `GroundRef` | 19 | `setWater` (2 overloads), `addWaterLimit`, `addTrafficCar`, `remTrafficCar`, `notifyTrafficCar`, `addTrafficN`, `addTrafficP`, `delTraffic`, `setTrafficCarBehaviour`, `haltTrafficCross`, `haltTrafficPath`, `getStartDirection`, `findRoute`, `getRouteLength` (2 overloads), `getRoutePos`, `getRouteDist`, `alignToRoad` |
+| `GroundRef` | 11 | `setWater` (2 overloads), `addWaterLimit`, `addTrafficCar`, `remTrafficCar`, `notifyTrafficCar`, `addTrafficN`, `addTrafficP`, `delTraffic`, `setTrafficCarBehaviour`, `haltTrafficCross`, `haltTrafficPath` |
 | `PhysicsRef` | 7 | `create`, `createSphere`, `setStatic`, `getVel` (2 overloads), `getAngVel`, `getOri` |
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
 | `Painter` | 3 | `doPaint`, `paintPart`, `xPaint` |
 
-There are 38 missing active signatures and 3 missing leftovers, for 41 total.
+There are 30 missing active signatures and 3 missing leftovers, for 33 total.
+
+Since U2-A the route queries (`getStartDirection`, `findRoute`,
+`getRouteLength` ×2, `getRoutePos`, `getRouteDist`, `alignToRoad`) and
+`getNearestCross` are implemented in `src/resources/race_runtime.cpp` against
+the map's TRC graph (see `UPSTREAM_INTEGRATION.md`, U2-A). The traffic set is
+the remaining `GroundRef` block (U2-B).
 
 ## Roadmap
 
@@ -111,9 +117,9 @@ There are 38 missing active signatures and 3 missing leftovers, for 41 total.
    physics boundary. Continue with standalone dynamic bodies and validate
    track barriers and prop contact in game. Connect impact deformation and
    wear to the parts and the regional HUD display.
-3. **Complete the navigation and race loop.** Read road and route data,
-   implement the `GroundRef` route queries, `Navigator.updateNavigator`
-   and route rendering. Verify map, rear view and cruise control in a race.
+3. **Complete the navigation and race loop.** The road graph and the
+   `GroundRef` route queries are in (U2-A); next are the traffic natives,
+   `Navigator.updateNavigator`, the race bot commands and route rendering. Verify map, rear view and cruise control in a race.
    Add traffic after routes and collision are stable. Pedestrians already walk the `city.walk` sidewalk rows near the player; they do not use the road graph.
 4. **Complete garage actions and effects.** Implement the `Painter` natives
    and resource-created sound, then animation, particles, flares and fog.

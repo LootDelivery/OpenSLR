@@ -693,14 +693,6 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
       });
 
   jvm.natives().register_method(
-      "java.util.resource.GroundRef", "getNearestCross",
-      "(Ljava.lang.Vector3;F)Ljava.lang.Vector3;",
-      [](Object*, const std::vector<Value>&) {
-        // Track.changeCamTV uses its current camera pose when a map has no
-        // crossing index. Route data can supply a result when available.
-        return Value::make_obj(nullptr);
-      });
-  jvm.natives().register_method(
       "java.util.resource.GroundRef", "setPedestrianDensityN", "(F)V",
       [](Object* self, const std::vector<Value>& args) {
         float density = 0.f;

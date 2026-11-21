@@ -282,6 +282,52 @@ Still **not verified** (recorded as unexecuted, not as working):
 - Career reload through the menu (same dialog gap).
 
 
+## U2. Roads, traffic and race bots (#180)
+
+Upstream PR #180 ("Restore shared roads, traffic and race bot driving"), merge
+commit `0a44cf44`, parent base `3f1110ef`. Ported in six blocks on
+`upstream-gameplay-sync` over `1539c625`. Graphics from the same PR (debug
+overlay, frame profiler, route ribbons, signal lenses, bloom/glow, draw passes)
+is **not** ported; `RenderRef.plotRoute` keeps its Java signature and its
+geometry contract but draws nothing extra.
+
+The semantic reference is the recovered engine in `slrr-reverse/`
+(SLRR_rev v221, `engine/Runtime/Resources/GroundRef_route.cpp` and
+`GroundRef_traffic.cpp`), not upstream's re-derivation: #180's own header says
+its graph is a "sampled host model, not recovered original solver". Where the
+two disagree the recovered native body wins, and the differences are listed
+per block.
+
+### U2-A. Road graph and route queries
+
+| Field | Content |
+|---|---|
+| Upstream files | `include/slrr/road_routes.hpp` (77), `src/resources/road_routes.cpp` (613), `src/resources/race_runtime.cpp` (265), `tests/test_road_routes.cpp` (312), `tests/race_fixture.hpp` |
+| Our files | `include/slrr/road_routes.hpp`, `src/resources/road_routes.cpp`, `include/slrr/race_runtime.hpp`, `src/resources/race_runtime.cpp`, `tests/test_road_routes.cpp`, `include/slrr/rpk_index.hpp` (+`generation()`), `include/slrr/gameref.hpp` (+`incarnation`), `src/resources/gameref.cpp`, `src/resources/rpk_index.cpp`, `src/natives/natives_boot.cpp`, `src/natives/natives_renderref.cpp`, `CMakeLists.txt` |
+| Problem | The 12 `GroundRef` route/traffic natives were unbound. `getNearestCross` existed as a null-returning stub, the rest were missing, so `City`/`RaceSetup`/`Traffic` scripts had no road model at all. |
+| Graph | `RoadRoutes` builds one directed edge per `RoadOther` lane record that is linked into both crossing nodes, plus a curve per grey crossing record; the lane-crossing links are what separates the two directions of a road. Sign heads come from ICFG `trlight` placements of the ground and its exterior maps, bound to the nearest crossing, and cycle per crossing branch. |
+| Map lookup | The map TRC is named in the ground's own payload (`maps\city\meshes\city.scm,maps\city\ai\city.trc`), so the loader anchors on the ground, not on a map name: no Valo City fallback, no hardcoded path. Two different `.trc` paths in one payload are ambiguous and leave the ground without a graph. |
+| Cache | Keyed by `GameRefState::incarnation` + `RpkIndex::generation()` + game root + `type_id`. `race_forget()` runs from `gameref_remove()`, `race_reset()` from `gameref_clear()`. `RpkIndex::generation()` and `GameRefState::incarnation` are new here; both are monotonic and never recycled. |
+| Natives | `getNearestCross(V,F)V3`, `findRoute(V,V)F`, `getRouteLength(V,V)F`, `getRouteLength()F`, `getRoutePos(F)V3`, `getRouteDist(V)F`, `getStartDirection(V,V)V3`, `alignToRoad(V)[V3`. The `getNearestCross` stub was removed from `natives_renderref.cpp` so exactly one registration exists. |
+| Adaptation | Upstream parallelises the 64 m projection grid with `jobs_parallel_for` (`slrr/job_system.hpp`), which this tree does not have. The per-lane index split is kept, the pass runs sequentially, and the merge is unchanged; a worker pool can be dropped in later without touching the query path. |
+| Units | `city.trc` node coordinates are metres (first edge 139.8 m, city span ≈ 2 km), so route lengths are metres and `getRoutePos`/`getRouteDist` are fractions of that length. SCX stays in cm — the two are not mixed here. |
+
+Deviations from #180, each against the recovered native body:
+
+| Native | Recovered engine | #180 | Ours |
+|---|---|---|---|
+| `getRouteLength()F` @ 0x00483C00 | cached length, `0` when no cached spline | `-1` | `0` |
+| `getRoutePos(F)` @ 0x00483B30 | `u=(1-t)*u0+t*u1`, i.e. `t` is a fraction; unclamped | treats `t` as metres | fraction |
+| `getRouteDist(V)F` @ 0x00483C20 | `(u-u0)/(u1-u0)`; `0` without a route, `-1` for null | returns metres | fraction, same 0/-1 rules |
+| `getStartDirection(V,V)V3` @ 0x00483400 | tangent at route start, **negated**; zero → null; cache untouched | tangent as-is, cached | negated, local query, cache untouched |
+| `getNearestCross(V,F)V3` @ 0x00483D00 | minimizes `abs(len(node-approx)-distance)`; boxes the approximation on a miss | null on a miss | same as recovered |
+| `alignToRoad(V)[V3` @ 0x00483E60 | always boxes `{snapped, unit XZ tangent}` | null on a miss | same as recovered |
+| route cache on a failed query | replaced only on success | cleared | replaced only on success |
+
+| Tests | `test_road_routes`, 6/6 pass. Synthetic: one-way vs two-way direction separation, arc length, projection, crossing-radius sign, shared crossing phase (green/yellow/opposing red/repeat, `-2` for a regulated approach without a lamp, `-1` for an unregulated one). Corpus (retail install): `city.trc` → **928 directed edges, 271 crossings, 1146 signal heads**, 139.8 m first edge, route both ways; 975 sampled node pairs all finite, none unreachable; every native invoked directly against the real ground, including the failed-query cache rule. |
+| Runtime | No route native is called by the `--bench-map ValoCity --bench-drive` path: it enters the map through `Track.StartMap`, not through `City.startRace`/`RaceSetup`, and no traffic is spawned. Calls are therefore proven at the native boundary in the suite (`[Ф-runtime]`), not by a stock script (`[Ф-код]` only). The career/street callers stay in the untested list of this block. |
+| Status | **Ported** |
+
 ## Deferred and rejected
 
 Deferred items have a reason and a place in
@@ -290,7 +336,7 @@ concrete incompatibility.
 
 | Item | Upstream | Status | Why |
 |---|---|---|---|
-| Roads / traffic / race AI | #180 | **Deferred** | Needs 12 missing `GroundRef` traffic/route natives first; the AI driver rides on them. Phase 1 of the plan. |
+| Roads / traffic / race AI | #180 | **Partially ported** | U2-A (graph, route queries) is in; traffic, signals, race brain, ROC and native vehicle assembly are the remaining U2 blocks. |
 | Vehicle contacts / dynamics | #205 + #48 | **Deferred** | Upstream replaced the single-car loop with a `ContactVehicle` architecture (shared 120 Hz substeps, mass/inertia ownership, wheel loss, flaps). A subsystem port, not a fix. Phase 2. |
 | RPK descriptor/property cache | #146 | **Deferred** | Changes `by_type_id` to lo16 and `find_entry` semantics plus payload/RSD caches and a `generation()`; must be designed against the B4.1.2 strict-resolution contract. Phase 3.1. |
 | GC finalizer/heap lookup | #200 | **Deferred** | 172 lines of `gc.cpp`; needs its own reachability/finalizer evidence against `VM_GC.md`. Phase 3.2. |

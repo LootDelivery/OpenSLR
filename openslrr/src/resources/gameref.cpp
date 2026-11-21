@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/race_runtime.hpp"
 #include "slrr/script_events.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/part_runtime.hpp"
@@ -29,6 +30,7 @@ std::unordered_map<int32_t, GameRefState*> g_live_refs;
 std::unordered_set<void*> g_trigger_refs, g_simulated_refs;
 std::unordered_set<void*> g_lights;
 uint32_t g_next_live = 0x70000000;
+uint64_t g_next_incarnation = 1;
 int32_t g_fog_color = 0;
 float g_fog_near = 0.f;
 float g_fog_far = 0.f;
@@ -60,6 +62,7 @@ const float* gameref_render_matrix(const GameRefState& node) {
 
 void gameref_clear() {
   part_drop_actors();
+  race_reset();
   character_forget_all();
   g_live_refs.clear();
   g_refs.clear();
@@ -79,6 +82,7 @@ GameRefState* gameref_upsert(void* key, GameRefKind kind) {
     return &it->second;
   }
   GameRefState n;
+  n.incarnation = g_next_incarnation++;
   n.key = key;
   n.kind = kind;
   n.empty = false;
@@ -123,6 +127,7 @@ void gameref_remove(void* key) {
   g_trigger_refs.erase(key);
   g_simulated_refs.erase(key);
   character_forget(key);
+  race_forget(key);
   script_events_destroy(static_cast<Object*>(key));
   auto own=g_refs.find(key);
   if(own!=g_refs.end()&&own->second.binding){g_live_refs.erase(own->second.live_id);g_refs.erase(own);return;}
