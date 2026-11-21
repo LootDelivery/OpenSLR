@@ -244,6 +244,7 @@ Record *record(Object *object) {
   return found == records.end() ? nullptr : &found->second;
 }
 void repair_part(Object *part, Record &rec);
+void pose_wheels(Object *chassis, Record &rec);
 Object *object(const std::vector<Value> &args, size_t i) {
   return i < args.size() && args[i].tag == ValueTag::Obj ? args[i].v.o
                                                          : nullptr;
@@ -1537,6 +1538,14 @@ bool part_command(Object *part, const std::string &command) {
     rec->steering_input = std::clamp(value, -1.f, 1.f);
     rec->steering_request = rec->steering_input;
     rec->steering_correction = 0.f;
+    if (rec->dynamic_frames) {
+      // A parked chassis already has suspension/hub frames. Rebuild them with
+      // the new steering before placing parts, not at the next repair: the
+      // steering wheel would otherwise read the new scalar while the wheels
+      // keep the previous pose.
+      pose_wheels(part, *rec);
+      return true;
+    }
     for (const auto &slot : rec->config->slots)
       if (slot.type >= 101 && slot.type <= 304)
         place_child(part, slot.id, false);

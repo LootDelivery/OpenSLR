@@ -152,3 +152,16 @@ Adaptation detail: upstream rolls back a list of `ContactVehicle` carriers
 single `controlled_vehicle`, so it backs up and restores that one body. The
 multi-car rollback arrives with the vehicle-contact port (see the U1-E plan):
 the `try`/restore shape is already the one that port needs.
+
+## U1-F1. Garage steering pose (#137)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#137](https://github.com/EliasFD3S/openslrr/pull/137), commit `996b3ab1` "Recompute parked wheel poses immediately on setsteer" |
+| Upstream files | `src/resources/part_runtime.cpp` |
+| Our files | same |
+| Problem | `setsteer` (sent by `Garage.java` on entry, and on mechanic-mode changes) updated `steering_input`/`steering_request`, then placed the attached parts through the existing dynamic hub matrices. The steering wheel read the new scalar while the wheels kept the previous pose until some later operation recomputed the assembly. |
+| Adaptation | Identical: when `rec->dynamic_frames` is already set, `setsteer` calls `pose_wheels()` and returns; before the frames exist the previous rest-placement path runs unchanged. `pose_wheels` rebuilds the steered/rolling frames from the current suspension state and places/relinks the assembly. It does not integrate physics, move the chassis, repark the car or reset wheel spin — this is pose correctness, not vehicle dynamics. A forward declaration was needed because `pose_wheels` is defined below `part_command`. |
+| Tests | Upstream ships no automated assembled-vehicle test for this and neither do we: a fixture would need a full chassis + suspension + wheel tree. Runtime smoke: garage entry (`spawned … parts=88`) and the ValoCity drive (`drive done`, exit 0) are unchanged; 13 steering lines on the garage entry. Manual check remains: brake/steer visible when the garage opens, before touching any part, and normal driving steering afterwards. |
+| Result | Compiles; garage and drive unchanged. Pose difference is not asserted automatically — recorded as an open manual check, not as verified. |
+| Status | **Ported** (manual verification pending) |
