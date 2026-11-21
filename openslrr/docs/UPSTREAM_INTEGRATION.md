@@ -115,3 +115,21 @@ unchanged, only the on-disk outcome is safer.
 `kTufaMaxLocals = 65536` is the only new limit; the stock corpus never comes
 close (`Player.<init>` uses a handful of slots, and the largest stock method is
 far below it).
+
+## U1-C2. Script argument and array safety (#151)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#151](https://github.com/EliasFD3S/openslrr/pull/151), commit `4c1b8e6` "Check script arguments and bound array growth" (merge `6fffbe6c`) |
+| Upstream files | `src/natives/natives_internal.hpp`, `src/jvm/tree_eval.cpp`, `src/natives/natives_{io,lang,osd,renderref,script}.cpp`, `tests/test_script_safety.cpp` |
+| Our files | same six sources, `tests/test_script_safety.cpp` (verbatim) |
+| Problem | Natives read `args[i].v.i` / `args[i].v.o` without checking size or tag, so a short or mistagged call read the union as an integer (an access violation for `v.o`, garbage for `v.i`). `tree_eval` grew script arrays to any index and clamped `new T[n]` at `1<<20` only for allocation, not for `a[i] = x`. |
+| Adaptation | `native_arg_number/native_arg_integer/native_arg_object` in `natives_internal.hpp` with documented fallbacks (missing, boxed object, NaN → fallback; float → clamped to `INT32_MIN..MAX`). Applied at the six call sites upstream fixed: `System.exit`, `String.timeToString` ×2, `Camera.create/activate` priority, `Text.setPos`, `RenderRef.setMatrix` field reads (now accepts an `Int` field and rejects NaN), `OptionsDialog.get/setRendererOption`, `GfxEngine.displayModeName/changeVideoMode`. `store_array_slot()` in `tree_eval` bounds every array store to `[0, 1<<20)`; both the direct store and the `a[i] += x` write-back use it, and the `new T[n]` clamp shares the constant. Out-of-range stores are ignored and reported once, so a broken script cannot reallocate the heap array. |
+| Tests | `tests/test_script_safety.cpp`: helper fallbacks, empty/short/boxed/NaN arguments through the six native families, array stores at `-1`, `1<<20`, `INT32_MAX` (ignored) and `(1<<20)-1` (grows to the limit), plus direct and compound store paths compiled by the in-repo compiler. |
+| Result | `-BaselineRef 947d11bf` with the six sources reverted: **crash `0xC0000005`, no assertion reached**. After: **exit 0, PASS**. ValoCity drive unchanged (13 `[jvm]` diagnostics, `drive done`). |
+| Status | **Ported** |
+
+Deliberate deviation: upstream clamps `a[i] = x` by resizing to the index; we
+keep that behaviour inside the window and drop anything outside it. Stock
+scripts never address a slot above the window, so the observable behaviour is
+unchanged.

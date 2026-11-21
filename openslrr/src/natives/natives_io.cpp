@@ -380,7 +380,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       "java.lang.System", "exit", "(Ljava.lang.String;)V",
       [&jvm](Object*, const std::vector<Value>& args) {
         std::printf("[native] System.exit(%s)\n",
-                    args.empty() ? "" : obj_str(args[0].v.o).c_str());
+                    obj_str(native_arg_object(args, 0)).c_str());
         jvm.set_static("java.lang.System", "_hostQuit", Value::make_int(1));
         return Value::make_void();
       });

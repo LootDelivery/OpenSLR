@@ -324,8 +324,13 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         auto getf = [](Object* o, const char* n, float* out) {
           if (!o) return;
           auto it = o->fields.find(n);
-          if (it != o->fields.end() && it->second.tag == ValueTag::Float)
-            *out = it->second.v.f;
+          if (it != o->fields.end()) {
+            if (it->second.tag == ValueTag::Float &&
+                std::isfinite(it->second.v.f))
+              *out = it->second.v.f;
+            else if (it->second.tag == ValueTag::Int)
+              *out = static_cast<float>(it->second.v.i);
+          }
         };
         if (!args.empty() && args[0].tag == ValueTag::Obj)
           getf(args[0].v.o, "x", &px), getf(args[0].v.o, "y", &py),
