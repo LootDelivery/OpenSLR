@@ -61,3 +61,22 @@ binds (`Player/Inventory/CarLot/GroundRef/Osd/RenderRef/ResourceRef` →
 
 Also verified: `Player.<init>` is registered only in `natives_io.cpp`; no other
 native group re-registers it.
+
+## U1-B1. File safety (#117)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#117](https://github.com/EliasFD3S/openslrr/pull/117), commit `5a51a4d7` "Protect file deletion and keep SDAT save fields aligned" |
+| Upstream files | `src/natives/natives_boot.cpp` (`under_game`), `src/natives/natives_io.cpp` (`File.delete`, `File.write(ResourceRef)`), `src/natives/natives_internal.hpp`, `tests/test_save_io.cpp`, `scripts/run_save_io_tests.ps1` |
+| Our files | same three sources, `tests/test_save_io.cpp`, `scripts/run_native_io_tests.ps1` |
+| Problem | `under_game()` rejected any path containing the two characters `..` and then compared a **string prefix**, so the game root itself passed as a descendant, legal names like `J..R-1` were refused, and `FindFile` did not canonicalize at all (a `..` pattern enumerated outside the root). `File.delete` used `fs::remove_all`, so `delete(".")` erased the install. `File.write(ResourceRef)` returned before writing when a save resource had no pack, which shifted every following field in the stream. |
+| Adaptation | `resolve_under_game(root, rel, allow_root)`: rejects NUL, `:`, and `..` components; resolves junctions with `weakly_canonical`; compares path **components** case-insensitively (`_wcsicmp`). `under_game()` is the `allow_root=false` wrapper and stays the only exported entry. `FindFile` uses `allow_root=true` (a listing may address the root) and skips children that resolve outside. `File.delete` is `fs::remove`. A packless SDAT resource writes a null id, keeps the stream aligned, still returns 0, and counts in `degraded_resources` (logged by `File.close`). |
+| Tests | `tests/test_save_io.cpp` — 11 cases: root deletion/opening, non-recursive directory delete, stock delete-then-directory, dotted career names (`J..R-1`, `Mr...-1`), traversal rejection, SDAT alignment for unknown/packless/blob resources, valid + null resource roundtrip, raw-file id preservation, and `FindFile` root escape. Run with `powershell -File scripts/run_native_io_tests.ps1 [-BaselineRef 947d11bf]`. |
+| Result | `-BaselineRef 947d11bf`: **3 passed, 8 failed** (root deleted, nonempty dirs erased, dotted names refused, three streams misaligned, `FindFile.first("..\*")` returned 4 entries from outside the root). After: **11 passed, 0 failed**. |
+| Status | **Ported** |
+
+`under_game` is called from `natives_io.cpp` (delete/exists/copy/move/open),
+`natives_resref.cpp` and `natives_script.cpp`; all of them now reject the root
+itself and accept dotted file names. `natives_resref.cpp` keeps its own
+"open a save path" call site unchanged — the containment rule is shared, the
+callers are not.

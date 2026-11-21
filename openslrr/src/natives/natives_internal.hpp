@@ -83,6 +83,8 @@ struct HostFile {
   // True when bytes is the Java payload of an SDAT container. A raw file
   // left by an older host stays false, so readResID returns the stored id.
   bool sdat = false;
+  // Unrepresentable resources are written as null, keeping the stream aligned.
+  uint32_t degraded_resources = 0;
   std::filesystem::path path;
   std::vector<SdatPackRef> sdat_packs;
   std::vector<SdatBlobRef> sdat_blobs;

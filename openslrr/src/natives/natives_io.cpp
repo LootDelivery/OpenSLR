@@ -518,7 +518,9 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           g_unflushed_saves.erase(save_key(p));
           return Value::make_int(1);
         }
-        fs::remove_all(p, ec);
+        // Stock Java deletes contents explicitly before deleting a directory.
+        // Refuse nonempty directories instead of recursively erasing a tree.
+        fs::remove(p, ec);
         if (!ec) g_unflushed_saves.erase(save_key(p));
         std::printf("[native] File.delete %s ok=%d\n", rel.c_str(), ec ? 0 : 1);
         return Value::make_int(ec ? 0 : 1);
@@ -631,11 +633,12 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           else
             g_unflushed_saves[key] = framed;
           std::printf(
-              "[native] File.close %s %zu bytes ok=%d kept=%d sdat=%d packs=%zu\n",
+              "[native] File.close %s %zu bytes ok=%d kept=%d sdat=%d "
+              "packs=%zu degraded_resources=%u\n",
               it->second.path.string().c_str(), framed.size(),
               wrote && static_cast<bool>(out) ? 1 : 0,
               g_unflushed_saves.count(key) ? 1 : 0, it->second.sdat ? 1 : 0,
-              it->second.sdat_packs.size());
+              it->second.sdat_packs.size(), it->second.degraded_resources);
         }
         g_host_files.erase(self);
         return Value::make_void();
@@ -681,14 +684,19 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
             restype = type->second.v.i;
         }
         int32_t wired = id;
-        if (it->second.sdat &&
-            !sdat_wire_resource(rpk, it->second, id, restype, &wired)) {
-          std::printf("[sdat] resource 0x%08x has no pack\n",
-                      static_cast<uint32_t>(id));
-          return Value::make_int(0);
+        const bool degraded = it->second.sdat &&
+            !sdat_wire_resource(rpk, it->second, id, restype, &wired);
+        if (degraded) {
+          // readResID always consumes four bytes and stock callers often
+          // ignore write's return value. A null is safer than a shifted save.
+          wired = 0;
+          ++it->second.degraded_resources;
+          std::printf(
+              "[sdat] resource 0x%08x has no pack; writing null placeholder\n",
+              static_cast<uint32_t>(id));
         }
         if (!file_push(self, &wired, 4)) return Value::make_int(0);
-        return Value::make_int(4);
+        return Value::make_int(degraded ? 0 : 4);
       });
   jvm.natives().register_method(
       "java.io.File", "write", "(Ljava.lang.String;)I",

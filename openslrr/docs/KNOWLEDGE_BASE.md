@@ -144,6 +144,9 @@ current gaps to SLRR_rev code are in
   `b907b6b` deleted it. A Windows CI workflow only ever existed on the PR #3
   branch. The probes are the only automated checks: `--probe` and
   `--probe-gc` need a game root, `--probe-dyno` and `--probe-pacejka` do not.
+  `tests/*.cpp` are standalone suites that link the `slrr_host` objects;
+  `scripts/run_native_io_tests.ps1` builds and runs one of them
+  (`-Test test_save_io`, `-BaselineRef <rev>` for a before/after pair).
 - Ctrl+F12 opens the ImGui debug panel (`src/render/debug_overlay.cpp:handle_message`).
   Its FPS readout is `1000 / cpuTimeFrame`, and VSync defaults to on
   (`src/render/debug_overlay.hpp:RenderOptions`).
