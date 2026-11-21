@@ -411,8 +411,13 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   `fs_vehicle.sc`, driven by `SceneInstance::fade` and the `u_vehicleFade`
   uniform. `docs/TRAFFIC_STREAMING_RESEARCH.md` records the sources and the
   measurements behind that decision.
-- Body clearance stays as a second rule: 130 m ahead, 80 m to the side, 45 m
-  behind, 30 m absolute, with the speed bubble inside the front zone.
+- Body clearance is per direction and unequal on purpose: **200 m ahead** (the
+  road test still read 130 m as "close" even with the dissolve), **95 m to the
+  side and 55 m behind**, 40 m absolute, with the speed bubble inside the front
+  zone. Ahead is where the eye is fixed, so it is the far one; the sides are what
+  keep the streets around the player full. The spawn band follows (340 m spawn,
+  420 m retire), or a 200 m clearance inside a 260 m radius would leave nothing
+  to seed. `SLRR_TRAFFIC_CLEAR=<scale>` scales the three together.
 - Lanes are sorted nearest first and the scheduler draws towards the front of
   the list, so the budget packs the street the player is on before a side
   street 200 m away. Measured at noon with the player standing still: density

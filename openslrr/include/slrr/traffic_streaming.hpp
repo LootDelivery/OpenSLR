@@ -97,16 +97,22 @@ struct StreamRules {
   //
   // The bubble still grows with speed inside the front zone, so a fast player
   // gets his spawns further out than a crawling one.
-  float front_clear = 160.f;
-  float side_clear = 105.f;
-  float rear_clear = 60.f;
+  // The dissolve carries the appearance now, so the clearance is set by what the
+  // eye reads as "far away" rather than by what hides a pop: a car may start
+  // dissolving at 190 m and never be noticed, and one starting at 130 m is seen
+  // doing it.
+  float front_clear = 200.f;
+  float side_clear = 95.f;
+  float rear_clear = 55.f;
   // Absolute floor, whatever the zone says: never on the bumper, never beside
   // the door.
-  float min_player_distance = 45.f;
+  float min_player_distance = 40.f;
   // Spawn and retire distances form the hysteresis band: a car created inside
-  // `spawn_radius` is not retired until it leaves `retire_radius`.
-  float spawn_radius = 260.f;
-  float retire_radius = 330.f;
+  // `spawn_radius` is not retired until it leaves `retire_radius`. The band is
+  // wider than the front clearance, or a far clearance would leave no road ahead
+  // to seed at all.
+  float spawn_radius = 340.f;
+  float retire_radius = 420.f;
   // Desired spacing between cars, linearly from the slider: a light city keeps
   // ~200 m of lane per car, the shipped maximum ~26 m, so the streets around
   // the player queue up instead of holding one car per block. The shipped

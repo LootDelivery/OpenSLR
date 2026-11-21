@@ -600,20 +600,35 @@ StreamRules stream_rules(float density) {
   rules.budget = int(std::lround(d * 80.f));
   rules.min_gap = 30.f - 14.f * d;
   rules.per_car_metres = 40.f - 20.f * d;
-  // A car that dissolves in over `kFadeIn` seconds does not need to be hidden by
-  // distance, so the clearance is back to what the traffic flow wants: far
-  // enough that the dissolve happens where the eye is not focused, close enough
-  // that the road ahead is populated straight away instead of only by cars that
-  // happen to drive in.
-  rules.front_clear = 130.f;
-  rules.side_clear = 80.f;
-  rules.rear_clear = 45.f;
-  rules.min_player_distance = 30.f;
+  // The dissolve decides how close a car may appear, and the road test said
+  // 130 m is close enough to watch: the fade is soft but the car is plainly
+  // there from its first frame. The clearance is therefore set by what reads as
+  // "in the distance" -- 190 m ahead, 120 m to the side, 70 m behind -- and the
+  // surroundings grow with it so there is still a band of road to seed.
+  // SLRR_TRAFFIC_CLEAR=<metres> scales the three clearances together, which is
+  // how the numbers below were chosen.
+  static const float clear_scale = [] {
+    const char *v = std::getenv("SLRR_TRAFFIC_CLEAR");
+    if (!v) return 1.f;
+    const float f = std::strtof(v, nullptr);
+    return std::isfinite(f) && f > .1f ? f : 1.f;
+  }();
+  // The clearance is per direction on purpose. Ahead of the player the eye is
+  // fixed on the road, so a car starting to dissolve there has to be far: 200 m,
+  // which is the distance the road test asked for after watching 130 m. Beside
+  // and behind the player the dissolve is barely noticed, and those directions
+  // are what keeps the streets around the player full, so they stay close.
+  rules.front_clear = 200.f * clear_scale;
+  rules.side_clear = 95.f * clear_scale;
+  rules.rear_clear = 55.f * clear_scale;
+  rules.min_player_distance = 40.f * clear_scale;
+  rules.spawn_radius = std::max(340.f * clear_scale, rules.front_clear + 60.f);
+  rules.retire_radius = rules.spawn_radius + 80.f;
   return rules;
 }
 // A car this module did not create still occupies its lane, so the scheduler
 // sees it; only the budget and the retirement rules care about the owner.
-constexpr float kRetireScripted = 400.f;
+constexpr float kRetireScripted = 480.f;
 constexpr double kMinLifetime = 6.;
 // How long a streamed car takes to dissolve in. Long enough that the eye reads a
 // fade rather than a pop, short enough that the car is solid before the player
@@ -1579,7 +1594,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         const float dz = at[2] - focus[2];
         const float d = std::sqrt(dx * dx + dz * dz);
         if (d <= 140.f) ++near_count;
-        if (d <= 220.f && d > .5f &&
+        if (d <= 340.f && d > .5f &&
             (dx * forward[0] + dz * forward[2]) / d > .3f)
           ++ahead_count;
       }
