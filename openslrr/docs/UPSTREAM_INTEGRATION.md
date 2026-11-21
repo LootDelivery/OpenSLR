@@ -80,3 +80,21 @@ native group re-registers it.
 itself and accept dotted file names. `natives_resref.cpp` keeps its own
 "open a save path" call site unchanged — the containment rule is shared, the
 callers are not.
+
+## U1-B2. Save persistence (#118)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#118](https://github.com/EliasFD3S/openslrr/pull/118), commit `7c9392a7` "Publish saves safely and preserve string and slot damage sentinels" |
+| Upstream files | `src/natives/natives_io.cpp` (`publish_save`, `transfer_pending_save`, `File.close/exists/copy/move/write(String)`), `src/resources/part_runtime.cpp` (`getSlotDamage`), `tests/save_io_fixture.hpp`, `tests/test_save_persistence.cpp` |
+| Our files | same two sources, `tests/save_io_fixture.hpp`, `tests/test_save_persistence.cpp` |
+| Problem | `File.close` truncated the destination with `ofstream` and only then wrote, so a failed or partial write destroyed the previous save; nothing checked `flush`/`close`. The `g_unflushed_saves` buffer that keeps the newest save in memory was invisible to `File.exists` and bypassed by `copy`/`move`, so a caller saw a stale disk file or lost the newest bytes. `File.write(String)` mapped an empty string and `null` to the same length 0. `getSlotDamage` returned an empty string for an undamaged slot, which `Part.save` then wrote as if it were a damage record. |
+| Adaptation | `publish_save()` writes a sibling `*.openslrr-save.<pid>.<n>.tmp` with `CreateFileW`, checks every `WriteFile`, `FlushFileBuffers`, `CloseHandle`, then publishes with `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` and deletes the staging file on any failure; the old destination survives until that rename. `File.close` uses it, keeps the buffer in `g_unflushed_saves` on failure and logs `error=<Win32>`. `transfer_pending_save()` makes `copy`/`move` publish the pending bytes; a successful disk copy/move drops an older pending destination. `File.exists` counts a pending buffer. `write(String)`: `null` is length 0, `""` is length 1 + NUL. `getSlotDamage` returns `null` for an undamaged or out-of-range slot and allocates nothing. Save format is untouched: same SDAT envelope, same fields. |
+| Tests | `tests/test_save_persistence.cpp` — 10 cases: locked replacement keeps disk and the newest memory copy, pending visible without a disk file, copy/move use pending bytes, failed copy preserves both sides, successful copy/move discard an older pending destination, empty vs null string wire lengths, undamaged/invalid slots return null without allocating, damage roundtrip and clearing. |
+| Result | `-BaselineRef 947d11bf`: **4 passed, 6 failed**. After: **10 passed, 0 failed**; `test_save_io` stays 11/0 and the garage boot is unchanged. |
+| Status | **Ported** |
+
+The staging file lives next to the destination because a save may sit on
+another volume; `MoveFileExW` is then a same-directory rename. `File.close`
+still reports `ok=0` to the caller exactly as before — the Java API is
+unchanged, only the on-disk outcome is safer.

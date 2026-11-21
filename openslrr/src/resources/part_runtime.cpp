@@ -5069,13 +5069,13 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
        [&jvm](Object *s, const std::vector<Value> &a) {
          auto *p = record(s);
          const int i = number(a, 0);
-         std::string text;
-         if (p && i >= 0 && static_cast<size_t>(i) < p->config->slots.size()) {
-           auto it = p->slot_damage.find(i);
-           if (it != p->slot_damage.end())
-             text = it->second;
-         }
-         return Value::make_obj(jvm.new_string(text));
+         if (!p || i < 0 || static_cast<size_t>(i) >= p->config->slots.size())
+           return Value::make_obj(nullptr);
+         const auto damage = p->slot_damage.find(i);
+         // Part.save emits a record only for a non-null damage string or an
+         // attachment. Undamaged slots must not masquerade as empty strings.
+         return Value::make_obj(damage == p->slot_damage.end()
+             ? nullptr : jvm.new_string(damage->second));
        });
   bind("setSlotDamage", "(ILjava.lang.String;)V",
        [](Object *s, const std::vector<Value> &a) {
