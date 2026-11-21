@@ -165,3 +165,20 @@ the `try`/restore shape is already the one that port needs.
 | Tests | Upstream ships no automated assembled-vehicle test for this and neither do we: a fixture would need a full chassis + suspension + wheel tree. Runtime smoke: garage entry (`spawned … parts=88`) and the ValoCity drive (`drive done`, exit 0) are unchanged; 13 steering lines on the garage entry. Manual check remains: brake/steer visible when the garage opens, before touching any part, and normal driving steering afterwards. |
 | Result | Compiles; garage and drive unchanged. Pose difference is not asserted automatically — recorded as an open manual check, not as verified. |
 | Status | **Ported** (manual verification pending) |
+
+## U1-F2. Live GameRef lookup index (#154)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#154](https://github.com/EliasFD3S/openslrr/pull/154), commit `44c45505` "Index live GameRefs and reuse controlled vehicle lookup" |
+| Upstream files | `src/resources/gameref.cpp`, `src/resources/part_runtime.cpp`, `tests/test_live_lookup.cpp` |
+| Our files | same two sources, `tests/test_live_lookup.cpp` (verbatim) |
+| Problem | `gameref_find_live()` scanned every `g_refs` entry, on every lookup, and `gameref_make_live()` called it in its ID-skip loop; `advance_free_bodies()` re-resolved the controlled vehicle for every simulated body. |
+| Adaptation | `g_live_refs` (`id → GameRefState*`), maintained on make-live, canonical removal, alias removal and `gameref_clear()`. **Ownership rules are unchanged**: `g_next_live` is a `uint32_t` starting at `0x70000000`, strictly monotonic, IDs are never recycled after `gameref_remove`, and the allocator now refuses (returns 0) instead of overflowing past `INT32_MAX`. The old `while (gameref_find_live(...)) ++g_next_live` skip loop is gone because an ID is only handed out once, so there is nothing to skip. `chassis`/`vehicle` are resolved once per free-body pass. |
+| Tests | `tests/test_live_lookup.cpp`: live ID assignment, rehash stability, alias detach/removal, canonical removal, key reuse and `gameref_clear()`, plus a 100 000-lookup timing line (informational). |
+| Result | Correctness: **PASS before and after**. Lookup cost for 100 000 lookups over 8 000 nodes: **2 203 592 µs → 608 µs** (~3600×). ValoCity drive unchanged (exit 0, `drive done`, 9 `[phys]` lines). |
+| Status | **Ported** |
+
+The contract in `KNOWLEDGE_BASE.md`/L1.1 ("monotonic, no reuse of freed ids,
+reset only on a full registry reset") is preserved and now also enforced
+against `INT32_MAX` overflow.

@@ -21,11 +21,14 @@ namespace slrr {
 namespace {
 
 std::unordered_map<void*, GameRefState> g_refs;
+// unordered_map rehash preserves element addresses. Erase removes the index
+// before freeing its state; aliases retain their own dormant ID if unbound.
+std::unordered_map<int32_t, GameRefState*> g_live_refs;
 // Canonical keys of trigger volumes and of free PhysicsRef bodies, so their
 // per-frame and per-tick passes do not scan every GameRef.
 std::unordered_set<void*> g_trigger_refs, g_simulated_refs;
 std::unordered_set<void*> g_lights;
-int32_t g_next_live = 0x70000000;
+uint32_t g_next_live = 0x70000000;
 int32_t g_fog_color = 0;
 float g_fog_near = 0.f;
 float g_fog_far = 0.f;
@@ -58,6 +61,7 @@ const float* gameref_render_matrix(const GameRefState& node) {
 void gameref_clear() {
   part_drop_actors();
   character_forget_all();
+  g_live_refs.clear();
   g_refs.clear();
   g_trigger_refs.clear();
   g_simulated_refs.clear();
@@ -93,12 +97,19 @@ GameRefState* gameref_get(void* key) {
 }
 GameRefState* gameref_find_live(int32_t id) {
   if(id<0x70000000)return nullptr;
-  for(auto& entry:g_refs)if(!entry.second.binding&&entry.second.live_id==id)return &entry.second;
-  return nullptr;
+  const auto it = g_live_refs.find(id);
+  return it != g_live_refs.end() && !it->second->binding ? it->second : nullptr;
 }
 int32_t gameref_make_live(void* key) {
   auto* state=gameref_get(key);if(!state)state=gameref_upsert(key);if(!state)return 0;
-  if(!state->live_id){while(gameref_find_live(g_next_live))++g_next_live;state->live_id=g_next_live++;}
+  if (!state->live_id) {
+    // IDs never recycle before clear. Check exhaustion without signed overflow.
+    if (g_next_live > static_cast<uint32_t>(INT32_MAX)) return 0;
+    const auto id = static_cast<int32_t>(g_next_live);
+    g_live_refs.emplace(id, state);
+    state->live_id = id;
+    ++g_next_live;
+  }
   return state->live_id;
 }
 bool gameref_bind_alias(void* reference,void* target) {
@@ -114,12 +125,13 @@ void gameref_remove(void* key) {
   character_forget(key);
   script_events_destroy(static_cast<Object*>(key));
   auto own=g_refs.find(key);
-  if(own!=g_refs.end()&&own->second.binding){g_refs.erase(own);return;}
+  if(own!=g_refs.end()&&own->second.binding){g_live_refs.erase(own->second.live_id);g_refs.erase(own);return;}
   GameRefState* n = gameref_get(key);
   if (n) unlink_from_parent(n);
   // Orphan children stay keyed but parent cleared.
   for (auto it = g_refs.begin(); it != g_refs.end();) {
     if (it->second.binding == key) {
+      g_live_refs.erase(it->second.live_id);
       it = g_refs.erase(it);
     } else {
       if (it->second.parent == key) it->second.parent = nullptr;
@@ -127,6 +139,7 @@ void gameref_remove(void* key) {
     }
   }
   g_lights.erase(key);
+  if (n) g_live_refs.erase(n->live_id);
   g_refs.erase(key);
 }
 
