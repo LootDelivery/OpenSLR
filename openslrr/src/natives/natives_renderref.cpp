@@ -98,10 +98,19 @@ void append_line_segment(GameRefState& line, const RenderLinePoint& start,
 // file colours; the file still supplies the direction. Point lights are
 // left alone. The garage light is misc.garage:0x001D, straight down.
 void apply_directional_light(const RpkIndex& rpk, int32_t full_id, Object* type,GameRefState& instance) {
-  if (full_id == 0) return;
+  const bool trace = gameref_light_trace();
+  if (full_id == 0) {
+    if (trace) std::printf("[light-trace] apply id=0 -> ignored\n");
+    return;
+  }
   const std::vector<uint8_t> bytes =
       rpk.read_payload(static_cast<uint32_t>(full_id));
-  if (bytes.size() < 8) return;
+  if (bytes.size() < 8) {
+    if (trace)
+      std::printf("[light-trace] apply id=0x%08x payload=%zu -> ignored\n",
+                  static_cast<uint32_t>(full_id), bytes.size());
+    return;
+  }
   const std::string text(bytes.begin(), bytes.end());
   bool directional = false;
   float diff[3]{}, amb[3]{}, spec[3] = {1.f, 1.f, 1.f}, dir[3]{};
@@ -145,7 +154,21 @@ void apply_directional_light(const RpkIndex& rpk, int32_t full_id, Object* type,
       have_dir = true;
     }
   }
-  if (!directional || !have_d) return;
+  if (!directional || !have_d) {
+    // The only types this function understands are directional resources.
+    // A point or spot resource lands here and registers nothing at all.
+    // Only light resources are reported: menu refs call this in bulk.
+    if (trace) {
+      const RpkEntry* entry = rpk.resolve(static_cast<uint32_t>(full_id));
+      if (entry && entry->typeof_ == 13)
+        std::printf("[light-trace] apply id=0x%08x '%s' directional=%d "
+                    "diffuse=%d -> not a directional light, nothing \n"
+                    "registered\n",
+                    static_cast<uint32_t>(full_id), entry->alias.c_str(),
+                    directional ? 1 : 0, have_d ? 1 : 0);
+    }
+    return;
+  }
   if (!have_a) amb[0] = amb[1] = amb[2] = 0.f;
   if (!have_s) spec[0] = spec[1] = spec[2] = 1.f;
   if (!have_dir) dir[0] = dir[1] = dir[2] = 0.f;
@@ -159,6 +182,11 @@ void apply_directional_light(const RpkIndex& rpk, int32_t full_id, Object* type,
   if (instance.parent) gameref_make_live(instance.key);
   gameref_register_light(instance.key);
   light.has_direction=dir[0]*dir[0]+dir[1]*dir[1]+dir[2]*dir[2]>1e-8f;
+  if (trace)
+    std::printf("[light-trace] apply id=0x%08x directional live_id=0x%x "
+                "parent=%d dir=(%.3f %.3f %.3f)\n",
+                static_cast<uint32_t>(full_id), instance.live_id,
+                instance.parent ? 1 : 0, dir[0], dir[1], dir[2]);
   auto packed = [](Object* o, const char* key, int32_t* out) {
     if (!o) return false;
     auto it = o->fields.find(key);

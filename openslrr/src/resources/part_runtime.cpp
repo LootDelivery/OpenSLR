@@ -438,12 +438,25 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
                  const std::vector<PartLink> *rules,
                  const std::vector<uint32_t> *colors,
                  uint32_t light_flags = 0) {
-    if (!resource ||
-        !index
-             ->model_for_resource(RpkIndex::pack_from_full(resource),
-                                  resource & 0xffff)
-             .ok)
+    const bool modelled =
+        resource &&
+        index
+            ->model_for_resource(RpkIndex::pack_from_full(resource),
+                                 resource & 0xffff)
+            .ok;
+    if (!modelled) {
+      // A `render` line can name a light resource: it has no geometry, so no
+      // node is built and its flags (the `flags 4` line under it) go nowhere.
+      if (resource && gameref_light_trace()) {
+        const RpkEntry *entry = index->resolve(resource);
+        const int type = entry ? static_cast<int>(entry->typeof_) : -1;
+        if (type == 13 || light_flags)
+          std::printf("[light-trace] part render 0x%08x typeof=%d flags=0x%x "
+                      "-> no model, node not created\n",
+                      resource, type, light_flags);
+      }
       return;
+    }
     Object *render = jvm.new_object("java.util.resource.RenderRef");
     auto *node = gameref_upsert(render, GameRefKind::RenderRef);
     node->type_id = static_cast<int32_t>(resource);
@@ -1125,7 +1138,10 @@ void install_cfg_stock(Jvm &jvm, Object *part, int depth = 0) {
 
 } // namespace
 
-bool part_lamp_lit(void *part, uint32_t flags, bool preview) {
+// The stock night lamp switch: city flag, no 0x40, engine running (unless the
+// garage preview asks), then the time of day. Split out so the diagnostic in
+// part_lamp_lit() can print transitions without changing any decision.
+static bool lamp_lit(void *part, uint32_t flags, bool preview) {
   if (!(flags & 4u) || (flags & 0x40u) || !runtime)
     return false;
   if (!preview) {
@@ -1144,6 +1160,22 @@ bool part_lamp_lit(void *part, uint32_t flags, bool preview) {
   // Stock night: outside 6:00..21:00. The selector starts at midnight and
   // LIGHTS ON/OFF adds twelve hours.
   return sec < 21600.f || sec >= 75600.f;
+}
+
+bool part_lamp_lit(void *part, uint32_t flags, bool preview) {
+  const bool lit = lamp_lit(part, flags, preview);
+  // Event only: one line when the state of a part changes, never per frame.
+  if (gameref_light_trace()) {
+    static thread_local std::unordered_map<void *, int> last;
+    const int now = lit ? 1 : 0;
+    auto [entry, fresh] = last.try_emplace(part, -1);
+    if (entry->second != now) {
+      entry->second = now;
+      std::printf("[light-trace] lamp part=%p flags=0x%x preview=%d lit=%d%s\n",
+                  part, flags, preview ? 1 : 0, now, fresh ? " (first)" : "");
+    }
+  }
+  return lit;
 }
 
 Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,

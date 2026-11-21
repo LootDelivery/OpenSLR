@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -999,8 +1000,25 @@ std::vector<GameRefState*> gameref_nodes_with_mesh() {
   }
   return out;
 }
+bool gameref_light_trace() {
+  static const bool on = [] {
+    const char* value = std::getenv("SLRR_LIGHT_TRACE");
+    return value && *value && std::strcmp(value, "0") != 0;
+  }();
+  return on;
+}
 void gameref_register_light(void* key) {
-  if (auto* node = gameref_get(key)) g_lights.insert(node->key);
+  if (auto* node = gameref_get(key)) {
+    g_lights.insert(node->key);
+    // Registration is rare (directional resources and setLight), so one line
+    // per event is enough: it names the node, its resource and its live id.
+    if (gameref_light_trace())
+      std::printf("[light-trace] register key=%p type_id=0x%08x live_id=0x%x "
+                  "set=%d has_dir=%d\n",
+                  node->key, static_cast<uint32_t>(node->type_id), node->live_id,
+                  node->directional_light.set ? 1 : 0,
+                  node->directional_light.has_direction ? 1 : 0);
+  }
 }
 std::vector<GameRefState*> gameref_directional_lights() {
   std::vector<GameRefState*> out;

@@ -449,25 +449,34 @@ levels must be kept apart:
      `point 0x01c7`; `lamp_a`, `lamp_b`, `lamp_c`, `pozna` →
      `fake point 0x0016`.
 
-   Nine references in total, all in `objects.rpk`. None of the four Spot
-   resources is referenced by any config; one of the two Point resources
-   (`0x01c7`) is, the other (`0x01cd`) is not.
+   Всего девять ссылок, все в `objects.rpk`. Ни один из четырёх Spot-ресурсов
+   не упомянут ни в одном конфиге; из двух Point упомянут `0x01c7`, второй
+   (`0x01cd`) — нет.
 2. **Compatible interpretation:** the id names a light resource, the offset is
    local, and the world transform comes from the object placement. Plausible,
    and consistent with every neighbouring line, but not proven.
-3. **Not traced:** no host code path was found that parses these ICFG lines,
-   creates a light node and feeds it to the renderer. Do not treat 1+2 as 3.
+3. **Трассировано в L2 (`LIGHTING_RUNTIME_VALIDATION.md` §L2.2):** host
+   действительно разбирает эти строки (`parse_part_config`), но отбрасывает
+   их до создания узла: световой ресурс не является мешем
+   (`ground_prop_is_mesh`, `typeof 13`), а строка `light 0x…` парсером не
+   читается вообще и попадает в `PartConfig::unknown`. Светового узла не
+   появляется. Не путать «разобрано» с «работает».
 
-`flags 4` in an ICFG is **not** the same datum as `PartConfig::renders[].flags`
-(`light_flags`). The value coincides and the "city" reading is plausible, but
-they are parsed by different code for different owners; nothing establishes
-that they mean the same thing.
+`flags 4` in an ICFG **is** the same datum as `PartConfig::renders[].flags`:
+both object ICFGs and part CFGs go through `parse_part_config()` and its
+`flags` line (`part_config.cpp:332`). What differs is the fate, not the value:
+for a part the flag reaches `add(..., light_flags)` and hides a lamp mesh,
+while for an object prop the whole `render` entry is erased before any node
+exists, so the flag has no effect (L2).
 
-What is still unknown is how a **car part** reaches its light: no packed config
-references any of the car spot resources, so that link is script-side and
-unproven. The object-side references above do not help here, and they do not
-prove a working runtime mechanism either: the host parser for those lines has
-not been found. Do not design a locator format until this is established.
+What is still unknown is how a **car part** reaches its light. L2 did find the
+missing link in the data: the loose part CFGs (`*_data/scripts/*.cfg`) carry
+`render 0x0003xxxx … ` + `flags n` lines naming light resources (310
+references to 11 resources, including three of the four Spot resources), and
+the high half is a dependency slot rather than a host pack id. The host reads
+them and drops them in `part_runtime.cpp:add()` because a light resource has no
+mesh. What remains unknown is what the original engine created from such a
+line. Do not design a locator format until that is established.
 
 ## 15. Paint library audit
 

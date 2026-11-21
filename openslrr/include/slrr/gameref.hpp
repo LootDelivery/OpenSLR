@@ -275,6 +275,9 @@ void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,
 std::vector<GameRefState*> gameref_nodes_with_mesh();
 std::vector<GameRefState*> gameref_render_nodes();
 void gameref_register_light(void* key);
+// Diagnostic switch for light-resource tracing (SLRR_LIGHT_TRACE=1). Off by
+// default; it only gates event prints and never changes a decision.
+bool gameref_light_trace();
 std::vector<GameRefState*> gameref_directional_lights();
 std::vector<void*> gameref_world_roots();  // flags & WORLDTREEROOT
 

@@ -2423,10 +2423,27 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
     auto [type, added] = object_types.try_emplace(placement.type);
     if (added) {
       ground_prop_config(*g_resources, placement.type, type->second);
+      const bool trace = gameref_light_trace();
+      if (trace)
+        for (const auto& token : type->second.unknown)
+          if (token.rfind("light", 0) == 0)
+            std::printf("[light-trace] prop 0x%08x ICFG line unparsed: %s\n",
+                        placement.type, token.c_str());
       auto& renders = type->second.renders;
       std::erase_if(renders, [&](const PartRender& render) {
-        return render.variants.empty() ? !is_visible(render.resource)
+        const bool drop = render.variants.empty() ? !is_visible(render.resource)
             : std::none_of(render.variants.begin(), render.variants.end(), is_visible);
+        // A `render` line that points at a light resource has no geometry:
+        // the entry is removed here, so its `flags 4` never becomes geometry
+        // state and no light node is ever built from it.
+        if (drop && trace && render.resource) {
+          const RpkEntry* entry = g_resources->resolve(render.resource);
+          if (entry && entry->typeof_ == 13)
+            std::printf("[light-trace] prop 0x%08x render 0x%08x typeof=13 "
+                        "flags=0x%x erased (no mesh)\n",
+                        placement.type, render.resource, render.flags);
+        }
+        return drop;
       });
       const auto score = [](const PartRender& render) {
         return std::pair{render.lod_level + render.lod_last, render.lod_last};

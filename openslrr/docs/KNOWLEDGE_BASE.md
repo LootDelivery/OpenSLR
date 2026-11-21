@@ -133,8 +133,12 @@ current gaps to SLRR_rev code are in
   by frame and each CSV row is one simulated second. `--bench-shots DIR`
   writes window captures every 10 simulated seconds
   (`src/boot/boot.cpp:boot_game`).
-- Environment variables: `SLRR_GAME_ROOT` and `SLRR_VLC_DIR`
-  (`src/platform/video_fmv_vlc.cpp`). There are no others.
+- Environment variables: `SLRR_GAME_ROOT`, `SLRR_VLC_DIR`
+  (`src/platform/video_fmv_vlc.cpp`), the render switches `SLRR_NO_*` /
+  `SLRR_MSAA` / `SLRR_REFL_*` (`src/boot/boot.cpp`, `bgfx_lib_backend.cpp`), and
+  `SLRR_LIGHT_TRACE=1` — event trace of light-resource creation, registration
+  and lamp state, off by default (`gameref_light_trace()`,
+  `LIGHTING_RUNTIME_VALIDATION.md`).
 - There is no test target on `main`. `main` had a CTest suite (added in
   `8637eae` with PR #3's `System.arraycopy`, PTX and dyno regressions) until
   `b907b6b` deleted it. A Windows CI workflow only ever existed on the PR #3
