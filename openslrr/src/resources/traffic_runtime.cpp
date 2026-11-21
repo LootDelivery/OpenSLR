@@ -647,6 +647,39 @@ void build_stream_view(const RoadRoutes &graph, const StreamRules &rules,
       continue;
     residents[r.edge].push_back(r.along);
   }
+  // The camera cone, from the real camera when the game has one: a car must not
+  // be seen to appear, and this engine's fog starts at 1.5 km, so distance alone
+  // cannot hide a spawn. The margin widens the cone by a few degrees so a car
+  // never appears right at the edge of the screen.
+  {
+    float eye[3], at[3], up[3], fov = 0.f, znear = 0.f, zfar = 0.f;
+    bool have_camera = gameref_world_camera(eye, at, &fov, &znear, &zfar, up);
+    if (have_camera) {
+      view.eye[0] = eye[0];
+      view.eye[1] = eye[1];
+      view.eye[2] = eye[2];
+      const float dx = at[0] - eye[0], dy = at[1] - eye[1], dz = at[2] - eye[2];
+      const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
+      if (length > 1e-3f) {
+        view.look[0] = dx / length;
+        view.look[1] = dy / length;
+        view.look[2] = dz / length;
+      }
+      const float half_angle =
+          std::clamp(fov > 1.f ? fov : 45.f, 10.f, 80.f) + 6.f;
+      view.view_cos = std::cos(half_angle * 3.14159265f / 180.f);
+    } else {
+      // No camera (headless or a scene without one): fall back to a chase camera
+      // behind the player looking down the car's nose.
+      view.eye[0] = focus[0] - forward[0] * 6.f;
+      view.eye[1] = focus[1] + 2.6f;
+      view.eye[2] = focus[2] - forward[2] * 6.f;
+      view.look[0] = forward[0];
+      view.look[1] = 0.f;
+      view.look[2] = forward[2];
+      view.view_cos = std::cos(51.f * 3.14159265f / 180.f);
+    }
+  }
   view.lanes.reserve(lanes_near.size());
   for (size_t edge : lanes_near) {
     const auto &e = edges[edge];
@@ -796,9 +829,26 @@ void log_spawn(const Registration &r, const RoadPoint &focus,
                                    (pos[2] - focus[2]) * forward[2]) /
                                       d
                                 : 0.f;
+  // Angle off the camera axis, which is the number that decides whether the
+  // player saw the car appear. The scheduler refuses anything below the cone
+  // half angle, so this must always come out above it.
+  float angle = -1.f;
+  if (float eye[3], at[3], up[3], fov = 0.f, znear = 0.f, zfar = 0.f;
+      gameref_world_camera(eye, at, &fov, &znear, &zfar, up)) {
+    const float lx = at[0] - eye[0], ly = at[1] - eye[1], lz = at[2] - eye[2];
+    const float ll = std::sqrt(lx * lx + ly * ly + lz * lz);
+    const float px = pos[0] - eye[0], py = pos[1] - eye[1], pz = pos[2] - eye[2];
+    const float pl = std::sqrt(px * px + py * py + pz * pz);
+    if (ll > 1e-3f && pl > 1e-3f) {
+      const float cosang = std::clamp((px * lx + py * ly + pz * lz) / (ll * pl),
+                                      -1.f, 1.f);
+      angle = std::acos(cosang) * 180.f / 3.14159265f;
+    }
+  }
   std::fprintf(stderr,
-               "[traffic-spawn] id=%d edge=%zu along=%.1f dist=%.1f ahead=%.2f\n",
-               r.id, r.edge, r.along, d, ahead);
+               "[traffic-spawn] id=%d edge=%zu along=%.1f dist=%.1f ahead=%.2f "
+               "ang=%.0f\n",
+               r.id, r.edge, r.along, d, ahead, angle);
 }
 const Model *weighted_model(const Population &p) {
   float total = 0;
@@ -1275,9 +1325,17 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
                         owned_count >= target + 4;
       const bool closed =
           r.owned && !r.unplaced && r.edge < edges.size() && blocked(*p, edges[r.edge]);
+      // Recycling has to happen out of sight as well: replacing a car the player
+      // is watching with a new one up the road is the same pop-in as spawning it
+      // there. The cone is the same one the scheduler refuses, widened by the
+      // engine's own half angle. A car far beyond the retire radius is left out
+      // of this courtesy so nothing can be held forever by a fixed gaze.
+      const bool seen =
+          !closed && distance < rules.retire_radius * 1.6f &&
+          stream_point_visible(view, position(r.car));
       if (frozen)
         continue;
-      if (r.owned && (closed || ((far || over) && !young))) {
+      if (r.owned && (closed || ((far || over) && !young && !seen))) {
         if (r.edge < edges.size())
           edge_cooldown[r.edge] = clock_seconds + kEdgeCooldown;
         queue(r, false);
@@ -1286,7 +1344,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         if (profiling()) ++prof().despawns;
         continue;
       }
-      if (far && !r.owned) {
+      if (far && !r.owned && !seen) {
         queue(r, false);
         r.visible = false;
         continue;

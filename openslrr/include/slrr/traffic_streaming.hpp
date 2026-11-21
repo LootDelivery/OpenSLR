@@ -59,6 +59,20 @@ struct StreamView {
   // `lanes`, which the caller may truncate when it has no room for more.
   float lane_metres = 0;
   std::vector<StreamLane> lanes;
+  // Where the camera actually is. A car must never be seen to appear, and in
+  // this engine distance cannot hide one: the driving camera fades into the sky
+  // from 1.5 km to 3 km, so a car at a hundred metres is a car on screen. The
+  // scheduler therefore refuses any spot inside the camera's view cone, and lets
+  // traffic enter the view by driving instead of by appearing.
+  float eye[3] = {0, 0, 0};
+  // Unit camera forward (`at - eye`) and the cosine of the half angle it covers,
+  // already widened by a margin so nothing pops at the screen edge.
+  float look[3] = {0, 0, -1};
+  float view_cos = 0.7f;
+  // A car is a few pixels across past this distance, so a spawn there is not
+  // something a player can notice. Kept shorter than the network radius only in
+  // tests; here it is a floor on ahead spawns, not a replacement for the cone.
+  float view_range = 300.f;
 };
 
 struct StreamRules {
@@ -136,6 +150,13 @@ struct StreamSpot {
 // reachable lane, which is why the slider felt like it did nothing.
 StreamSpot stream_pick_spot(const StreamView& view, const StreamRules& rules,
                             uint32_t& random);
+
+// Whether a world position is inside the camera's view, and therefore a place a
+// car may not be created or removed. The runtime uses it for retirement as well,
+// so the population is recycled only where nobody is looking.
+bool stream_point_visible(const StreamView& view, const RoadPoint& at);
+bool stream_spot_visible(const StreamView& view, const StreamLane& lane,
+                         float along);
 
 // Position of `along` on the lane's coarse polyline.
 RoadPoint stream_lane_point(const StreamLane& lane, float along);

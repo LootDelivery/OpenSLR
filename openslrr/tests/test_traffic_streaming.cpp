@@ -57,12 +57,30 @@ StreamLane crossing_street(size_t edge, float length, float start, float offset,
   return lane;
 }
 
+// A chase camera behind the player, looking down the car's nose, with the cone
+// the engine reports for the driving camera (half angle 45 degrees, widened by
+// the six degree margin the scheduler adds).
+void chase_camera(StreamView& view, float range = 300.f) {
+  view.eye[0] = 0.f;
+  view.eye[1] = 2.6f;
+  view.eye[2] = 6.f;  // the player looks down -Z, so the camera sits at +Z
+  view.look[0] = 0.f;
+  view.look[1] = 0.f;
+  view.look[2] = -1.f;
+  view.view_cos = std::cos(51.f * 3.14159265f / 180.f);
+  view.view_range = range;
+}
+
+// Most cases below are about spacing, junctions or the target, not about what
+// the camera can see, so they switch the cone off and the visibility rule is
+// tested on its own in `nothing_appears_in_plain_sight`.
 StreamView view_with(const std::vector<StreamLane>& lanes, float speed = 0.f,
                      float heading = 0.f) {
   StreamView view;
   view.player = RoadPoint{0, 0, 0};
   view.heading = heading;
   view.speed = speed;
+  view.view_cos = 2.f;  // no spot can ever satisfy sin < cos > 1, so the cone is off
   view.lanes = lanes;
   for (const auto& lane : lanes)
     if (!lane.crossing) view.lane_metres += lane.length;
@@ -422,11 +440,13 @@ SLRR_TEST(slider_maps_to_spacing) {
               shipped, dense);
 }
 
-// 16. The player must not see a car appear. Every accepted spot has to respect
-//     the clearance of its own direction: far ahead, further to the side, and
-//     clear behind. This is the property the road test broke: a crossing street
-//     beside the car has `dot` near zero, and the old "bubble, but only ahead"
-//     rule let cars materialise ten metres away in plain sight.
+// 16. The player must not see a car appear. Every accepted spot has to be
+//     outside the camera's cone and respect the clearance of its own direction.
+//     This is the property the road test broke twice: first a crossing street
+//     beside the car had `dot` near zero and escaped the "bubble, but only
+//     ahead" rule, then a car at the 160 m front clearance was still plainly
+//     visible down a straight road, because this engine's fog only starts at
+//     1.5 km and distance cannot hide anything.
 SLRR_TEST(nothing_appears_in_plain_sight) {
   const auto r = rules();
   StreamView view = view_with({straight(1, 900, 0, 0, 1),             // ahead
@@ -434,6 +454,7 @@ SLRR_TEST(nothing_appears_in_plain_sight) {
                                crossing_street(3, 500, 0, 60, 0.f),   // left
                                crossing_street(4, 500, 0, 70, 0.f)},  // right
                               /*speed=*/20.f);
+  chase_camera(view);
   uint32_t random = 0x51ed270b;
   const float head_x = -std::sin(view.heading);
   const float head_z = -std::cos(view.heading);
@@ -452,6 +473,10 @@ SLRR_TEST(nothing_appears_in_plain_sight) {
       const float required =
           std::max(r.min_player_distance, stream_min_spawn_distance(dot, view, r));
       SLRR_REQUIRE(distance >= required);
+      // And it may not be on screen at all: ahead of the car is exactly where
+      // the player is looking, so that whole sector is refused and traffic
+      // reaches the view by driving into it.
+      SLRR_REQUIRE(!stream_spot_visible(view, lane, spot.along));
       // The three zones ask for genuinely different distances, so a car cannot
       // slip through a corner of the cone.
       if (dot > .35f) SLRR_REQUIRE(distance >= r.front_clear);
@@ -462,7 +487,63 @@ SLRR_TEST(nothing_appears_in_plain_sight) {
     ++picked;
   }
   SLRR_REQUIRE(picked >= 6);
-  std::puts("PASS every spawn respects the clearance of its own direction");
+  std::printf("  %d cars placed, none of them on screen\n", picked);
+  std::puts("PASS every spawn is outside the view and the clearance");
+}
+
+// 18. The forward sector is not banned, only the part the player is watching: a
+//     spot in front is refused while the camera looks at it, and accepted when
+//     it is out of the cone (around a corner, or the camera turned away).
+SLRR_TEST(ahead_spawns_depend_on_the_camera) {
+  const auto r = rules();
+  StreamView watched = view_with({straight(1, 900, 0, 0, 1)});
+  chase_camera(watched);
+  uint32_t random = 0x2545f491;
+  int ahead = 0;
+  for (int i = 0; i < 60; ++i) {
+    const StreamSpot spot = stream_pick_spot(watched, r, random);
+    if (spot.valid) ++ahead;
+  }
+  SLRR_REQUIRE(ahead == 0);
+
+  // Turn the camera around: the same lane is now behind the eye and fills.
+  StreamView turned = view_with({straight(1, 900, 0, 0, 1)});
+  turned.eye[0] = 0.f;
+  turned.eye[1] = 2.6f;
+  turned.eye[2] = 6.f;
+  turned.look[0] = 0.f;
+  turned.look[1] = 0.f;
+  turned.look[2] = 1.f;  // looking back up the road
+  turned.view_cos = std::cos(51.f * 3.14159265f / 180.f);
+  turned.view_range = 300.f;
+  uint32_t other = 0x2545f491;
+  for (int i = 0; i < 60; ++i) {
+    const StreamSpot spot = stream_pick_spot(turned, r, other);
+    if (!spot.valid) continue;
+    ++ahead;
+    turned.lanes[0].residents.push_back(spot.along);
+  }
+  SLRR_REQUIRE(ahead >= 2);
+  std::puts("PASS ahead spawns are refused only while the camera watches them");
+}
+
+// 19. Beyond the range at which a car is a couple of pixels on screen the cone
+//     stops mattering, so a far straight road can still be seeded.
+SLRR_TEST(far_spawns_are_allowed_beyond_the_resolvable_range) {
+  const auto r = rules();
+  StreamView view = view_with({straight(1, 2000, 0, 0, 1)});
+  chase_camera(view, /*range=*/120.f);
+  uint32_t random = 0x9e3779b9;
+  int far = 0;
+  for (int i = 0; i < 120; ++i) {
+    const StreamSpot spot = stream_pick_spot(view, r, random);
+    if (!spot.valid) continue;
+    const float distance = stream_spot_distance(view.lanes[0], spot.along, view.player);
+    SLRR_REQUIRE(distance > view.view_range);
+    ++far;
+  }
+  SLRR_REQUIRE(far >= 2);
+  std::puts("PASS spawns beyond the resolvable range are allowed");
 }
 
 // 17. A limited budget packs the streets the player is on before it reaches a
@@ -508,6 +589,8 @@ int main() {
                                     saturated_network_refuses_with_a_reason,
                                     slider_maps_to_spacing,
                                     nothing_appears_in_plain_sight,
-                                    budget_draws_towards_the_nearest_lanes};
+                                    budget_draws_towards_the_nearest_lanes,
+                                    ahead_spawns_depend_on_the_camera,
+                                    far_spawns_are_allowed_beyond_the_resolvable_range};
   return standalone::run("traffic_streaming", tests);
 }
