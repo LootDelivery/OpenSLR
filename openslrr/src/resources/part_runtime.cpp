@@ -4181,7 +4181,18 @@ PedView ped_view() {
   view.tan_x = view.tan_y * (800.f / 600.f);
   view.ok = true;
   return view;
+}// Profiling knob, not a gameplay setting: SLRR_PEDESTRIAN_DENSITY overrides the
+// shipped slider so one build can be measured at the slider's maximum.
+float pedestrian_slider() {
+  static const float override_value = [] {
+    const char* v = std::getenv("SLRR_PEDESTRIAN_DENSITY");
+    return v ? std::strtof(v, nullptr) : -1.f;
+  }();
+  const float slider = std::max(0.f, host_game_options().pedestrian_density);
+  return override_value >= 0.f ? override_value : slider;
 }
+
+
 
 void tick_pedestrians(double seconds) {
   const float dt = static_cast<float>(std::min(seconds, 0.1));
@@ -4249,7 +4260,7 @@ void tick_pedestrians(double seconds) {
     // Far enough that people are already on the sidewalk before they enter
     // the view. 150 m clipped them into existence along the street.
     constexpr float kRadius = 400.f;
-    const float slider = std::max(0.f, host_game_options().pedestrian_density);
+    const float slider = pedestrian_slider();
     // The map coefficients are people per square metre of sidewalk. At the
     // slider maximum that asked for about twenty people inside 150 m.
     constexpr float kDensityScale = 4.f;
@@ -4540,7 +4551,7 @@ void part_set_pedestrian_density(void* ground, float density) {
   // GroundRef.setPedestrianDensity already multiplied by the slider. Undo that
   // so a later move of the OptionsDialog control changes the live count.
   PedCrowd& crowd = crowds[ground];
-  const float slider = host_game_options().pedestrian_density;
+  const float slider = pedestrian_slider();
   crowd.map_density = slider > 1e-4f ? density / slider : density;
   crowd.density = crowd.map_density * std::max(0.f, slider);
 }

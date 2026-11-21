@@ -9,9 +9,13 @@
 namespace slrr::perf {
 namespace {
 
-constexpr const char* kZoneNames[] = {"scripts", "physics", "flush",   "collect", "shadows",
-                                      "refl",    "world",   "osd",     "present"};
-static_assert(std::size(kZoneNames) == static_cast<size_t>(Zone::Count));
+// Same order as Zone: a name must never drift from the enum, or every log and
+// CSV column silently reports another zone's time.
+constexpr const char* kZoneNames[] = {
+    "scripts", "physics", "traffic", "ambience", "pump",    "gc",     "flush",
+    "collect", "shadows", "refl",    "world",    "osd",     "present"};
+static_assert(std::size(kZoneNames) == static_cast<size_t>(Zone::Count),
+              "zone names must match the enum");
 
 struct State {
   bool enabled = false;
@@ -73,7 +77,7 @@ void enable_frames(const std::string& csv_path) {
       for (const char* name : kZoneNames) std::fprintf(s.frames_csv, ",%s_ms", name);
       std::fprintf(s.frames_csv,
                    ",render_thread_ms,gpu_ms,wait_render_ms,draws,instances,batch_instances"
-                   ",gpu_shadow_ms,gpu_world_ms,gpu_osd_ms,gpu_refl_ms,gpu_hiz_ms\n");
+                   ",gpu_shadow_ms,gpu_world_ms,gpu_osd_ms,gpu_refl_ms,gpu_hiz_ms,rest_ms\n");
       std::fflush(s.frames_csv);
     } else {
       std::fprintf(stderr, "[perf] cannot open %s\n", csv_path.c_str());
@@ -141,7 +145,7 @@ void end_frame() {
                  s.frame_ms.back());
     for (const int64_t zone : s.frame_zones)
       std::fprintf(s.frames_csv, ",%.3f", to_ms(zone));
-    std::fprintf(s.frames_csv, ",%.3f,%.3f,%.3f,%.0f,%.0f,%.0f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+    std::fprintf(s.frames_csv, ",%.3f,%.3f,%.3f,%.0f,%.0f,%.0f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
                  s.last_sample.render_thread_ms, s.last_sample.gpu_ms,
                  s.last_sample.wait_render_ms, static_cast<double>(s.last_sample.draws),
                  static_cast<double>(s.last_sample.instances),

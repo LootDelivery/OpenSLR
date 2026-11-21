@@ -65,6 +65,12 @@ struct TrafficPose {
 };
 TrafficPose race_traffic_pose(const RoadRoutes&, size_t edge, float along,
                              size_t entry = static_cast<size_t>(-1));
+// Benchmark autodrive (--bench-route): a steering command in [-1, 1] that keeps
+// the player car in its lane, computed from where the car stands on the same
+// directed graph the traffic uses. Positive is left, like the stock axis.
+// False when the car is not on a lane, in which case the caller leaves the
+// steering alone. Measurement support only: nothing in the game calls it.
+bool race_traffic_steer(float speed, float* steer);
 // The traffic id a car is registered under, 0 when it is not traffic.
 int race_traffic_pointer(Object*);
 // Diagnostics: resident count and the nth resident of one ground.

@@ -63,6 +63,11 @@ struct HostInput {
   bool drive_reverse = false, drive_handbrake = false;
   // --bench-drive: >= 0 replaces throttle, brake and steering.
   float bench_throttle = -1.f;
+  // --bench-route: -2 leaves steering alone, >= -1 overrides it with the
+  // benchmark's road follower.
+  float bench_steer = -2.f;
+  // --bench-route: the car is against something; ask for reverse gear.
+  bool bench_reverse = false;
 };
 
 HostInput& host_input();

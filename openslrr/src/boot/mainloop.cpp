@@ -777,12 +777,19 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     perf::Scope scope(perf::Zone::Physics);
     sim_seconds = jvm.advance_sim_time(dt);
     part_physics_advance(sim_seconds);
-    // Traffic moves on the same bounded, pause-aware simulation step; its
-    // halt clock advances by that step as well, so a paused game is still.
+  }
+  // Traffic moves on the same bounded, pause-aware simulation step; its halt
+  // clock advances by that step as well, so a paused game is still. It has its
+  // own zone so its cost is not counted again inside `physics`.
+  {
+    perf::Scope scope(perf::Zone::Traffic);
     race_traffic_tick(jvm, static_cast<float>(sim_seconds));
   }
-  scene_ambience_tick(sim_seconds);
-  scene_triggers_tick(jvm);
+  {
+    perf::Scope scope(perf::Zone::Ambience);
+    scene_ambience_tick(sim_seconds);
+    scene_triggers_tick(jvm);
+  }
 
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.

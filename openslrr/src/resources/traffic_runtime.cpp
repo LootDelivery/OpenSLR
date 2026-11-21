@@ -28,6 +28,7 @@
 #include "slrr/object.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
+#include "slrr/frame_profiler.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/section_machine.hpp"
 
@@ -35,6 +36,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <unordered_map>
@@ -148,6 +150,160 @@ void report_discontinuity(const Registration &r, const Tracked &was,
                r.posed_road_y, was.body_y, r.posed_body_y, was.yaw, r.posed_yaw,
                dy, dyaw, seconds, was.edge != r.edge ? 1 : 0);
 }
+// ---------------------------------------------------------------------------
+// Stage profile (SLRR_TRAFFIC_PROFILE=1).
+//
+// The frame profiler's `traffic` zone measures the whole tick; this says which
+// part of it costs what. Stages are timed with the same monotonic clock, the
+// samples are kept so the summary reports p50/p95/p99 and not just a mean, and
+// a frame that cost more than a rendering budget prints its own breakdown.
+// Nothing is printed otherwise: one summary line every five seconds of
+// simulated time and one table at exit.
+//
+// Cost when off: one branch per stage, no clock reads, no allocation.
+enum ProfStage {
+  kProfTick, kProfRetire, kProfDrive, kProfPose, kProfFloor, kProfPark,
+  kProfWheels, kProfSearch, kProfCreate, kProfEvents, kProfProject,
+  kProfCount
+};
+const char *const kProfNames[kProfCount] = {
+    "tick", "retire", "drive", "pose", "floor", "park", "wheels", "search",
+    "create", "events", "project"};
+struct ProfSamples {
+  std::vector<float> ms;
+  uint32_t stride = 1;
+  double sum = 0;
+  float max = 0;
+  uint64_t count = 0;
+};
+struct ProfState {
+  bool on = false, started = false, reported = false;
+  ProfSamples st[kProfCount];
+  int64_t frame[kProfCount]{};
+  std::vector<float> window_tick;
+  double window_at = 0;
+  uint64_t frames = 0, spawns = 0, despawns = 0, attempts = 0, failures = 0;
+  uint64_t creates = 0, create_failures = 0;
+  int active = 0, active_max = 0, cap = 0;
+};
+void prof_summary();
+ProfState &prof() {
+  static ProfState p;
+  if (!p.started) {
+    p.started = true;
+    p.on = std::getenv("SLRR_TRAFFIC_PROFILE") != nullptr;
+    if (p.on) std::atexit(prof_summary);
+  }
+  return p;
+}
+bool profiling() { return prof().on; }
+int64_t prof_now() { return profiling() ? perf::now_ticks() : 0; }
+void prof_add(ProfStage stage, int64_t start) {
+  if (start) prof().frame[stage] += perf::now_ticks() - start;
+}
+void prof_count(uint64_t &counter) {
+  if (profiling()) ++counter;
+}
+void prof_push(ProfSamples &s, float ms) {
+  s.sum += ms;
+  if (ms > s.max) s.max = ms;
+  if (s.ms.size() >= 20000) {
+    // Bounded memory without losing the shape of the distribution: keep every
+    // second sample and halve the sampling rate from here on.
+    std::vector<float> kept;
+    kept.reserve(s.ms.size() / 2);
+    for (size_t i = 0; i < s.ms.size(); i += 2) kept.push_back(s.ms[i]);
+    s.ms.swap(kept);
+    s.stride *= 2;
+  }
+  if (s.stride <= 1 || (s.count % s.stride) == 0) s.ms.push_back(ms);
+  ++s.count;
+}
+float prof_quantile(std::vector<float> v, double q) {
+  if (v.empty()) return 0;
+  const size_t k = std::min(v.size() - 1, size_t(q * double(v.size() - 1)));
+  std::nth_element(v.begin(), v.begin() + k, v.end());
+  return v[k];
+}
+void prof_report_window() {
+  auto &p = prof();
+  if (p.window_tick.empty()) return;
+  const float worst = *std::max_element(p.window_tick.begin(), p.window_tick.end());
+  double sum = 0;
+  for (float v : p.window_tick) sum += v;
+  std::fprintf(stderr,
+               "[tprof] t=%.1f frames=%llu active=%d/%d spawn=%llu drop=%llu "
+               "tick avg=%.3f p95=%.3f max=%.3f ms\n",
+               p.window_at, (unsigned long long)p.frames, p.active, p.cap,
+               (unsigned long long)p.spawns, (unsigned long long)p.despawns,
+               sum / double(p.window_tick.size()),
+               prof_quantile(p.window_tick, .95), worst);
+  p.window_tick.clear();
+}
+// Closes one tick: folds the per-frame counters into the samples, prints an
+// abnormal frame with its breakdown, and closes the five second window.
+void prof_flush_frame(double sim_seconds) {
+  auto &p = prof();
+  int64_t frame[kProfCount];
+  for (int i = 0; i < kProfCount; ++i) {
+    frame[i] = p.frame[i];
+    p.frame[i] = 0;
+    prof_push(p.st[i], float(double(frame[i]) * 1e-6));
+  }
+  const double tick_ms = double(frame[kProfTick]) * 1e-6;
+  ++p.frames;
+  p.window_tick.push_back(float(tick_ms));
+  if (p.active > p.active_max) p.active_max = p.active;
+  if (tick_ms > 4.) {
+    std::fprintf(stderr, "[tslow] t=%.1f tick=%.2f ms active=%d |", sim_seconds,
+                 tick_ms, p.active);
+    for (int i = 1; i < kProfCount; ++i) {
+      const double ms = double(frame[i]) * 1e-6;
+      if (ms > .05) std::fprintf(stderr, " %s=%.2f", kProfNames[i], ms);
+    }
+    std::fprintf(stderr, "\n");
+  }
+  if (sim_seconds - p.window_at >= 5.) {
+    prof_report_window();
+    p.window_at = sim_seconds;
+  }
+}
+void prof_summary() {
+  auto &p = prof();
+  if (!p.on || p.reported || p.frames == 0) return;
+  p.reported = true;
+  std::fprintf(stderr,
+               "[tprof] summary frames=%llu spawn=%llu despawn=%llu create_ok=%llu "
+               "create_fail=%llu place=%llu place_fail=%llu active_max=%d cap=%d\n",
+               (unsigned long long)p.frames, (unsigned long long)p.spawns,
+               (unsigned long long)p.despawns, (unsigned long long)p.creates,
+               (unsigned long long)p.create_failures, (unsigned long long)p.attempts,
+               (unsigned long long)p.failures, p.active_max, p.cap);
+  std::fprintf(stderr,
+               "[tprof] stage                            n     avg     p50     p95"
+               "     p99     max   total_ms\n");
+  for (int i = 0; i < kProfCount; ++i) {
+    auto &s = p.st[i];
+    if (!s.count) continue;
+    std::fprintf(stderr, "[tprof] %-24s %8llu %7.3f %7.3f %7.3f %7.3f %7.3f %10.2f\n",
+                 kProfNames[i], (unsigned long long)s.count, s.sum / double(s.count),
+                 prof_quantile(s.ms, .5), prof_quantile(s.ms, .95),
+                 prof_quantile(s.ms, .99), s.max, s.sum);
+  }
+  std::fflush(stderr);
+}
+// Closes the tick on every return path, including the early ones.
+struct ProfTickGuard {
+  int64_t start;
+  double sim_seconds;
+  ProfTickGuard(double seconds) : start(prof_now()), sim_seconds(seconds) {}
+  ~ProfTickGuard() {
+    if (!start) return;
+    prof().frame[kProfTick] = perf::now_ticks() - start;
+    prof_flush_frame(sim_seconds);
+  }
+};
+
 float number(const std::vector<Value> &args, size_t i, float fallback = 0) {
   if (i >= args.size())
     return fallback;
@@ -383,7 +539,9 @@ TrafficPose traffic_pose(const RoadRoutes &graph, size_t edge, float along,
 // chassis is parked onto it with its loaded springs. The caller then animates
 // the wheels with the distance it advanced.
 void publish(Registration &r, const RoadRoutes &graph, float at) {
+  int64_t t = prof_now();
   auto pose = traffic_pose(graph, r.edge, at, r.entry);
+  prof_add(kProfPose, t);
   auto p = pose.position;
   auto direction = RoadPoint{-std::sin(pose.heading), 0, -std::cos(pose.heading)};
   const float road_y = p[1];
@@ -392,11 +550,14 @@ void publish(Registration &r, const RoadRoutes &graph, float at) {
   // road. The graph point is the lane centreline, so only a surface within a
   // metre of it may replace the height: without this clamp the probe (which
   // starts 4 m up) hit a deck and lifted the car for one frame.
-  if (scene_instances_sample_floor(p[0], p[2], p[1] + 4, r.car, floor) &&
-      std::fabs(floor.height - road_y) <= 1.2f)
-    p[1] = floor.height;
+  t = prof_now();
+  const bool hit = scene_instances_sample_floor(p[0], p[2], p[1] + 4, r.car, floor);
+  prof_add(kProfFloor, t);
+  if (hit && std::fabs(floor.height - road_y) <= 1.2f) p[1] = floor.height;
+  t = prof_now();
   gameref_set_matrix(r.car, p[0], p[1], p[2], pose.heading, 0, 0);
   part_park_chassis(r.car);
+  prof_add(kProfPark, t);
   if (auto *n = gameref_get(r.car)) {
     for (int i = 0; i < 3; ++i)
       n->vel[i] = direction[i] * r.speed;
@@ -662,6 +823,56 @@ TrafficPose race_traffic_pose(const RoadRoutes &graph, size_t edge, float along,
   return traffic_pose(graph, edge, along, entry);
 }
 
+// Benchmark autodrive: steer toward a point a short way down the lane the
+// player car is standing on, following the same directed transitions the
+// traffic uses, so a long run drives the city instead of a straight line.
+bool race_traffic_steer(float speed, float *steer) {
+  if (!steer || !resources)
+    return false;
+  auto *world = scene_instances_world();
+  auto *car = part_controlled_chassis();
+  if (!world || !car)
+    return false;
+  auto *node = gameref_get(car);
+  if (!node)
+    return false;
+  auto graph = race_ground_roads(*resources, world);
+  if (!graph)
+    return false;
+  const auto &edges = graph->traffic_edges();
+  if (edges.empty())
+    return false;
+  const RoadPoint here{node->pos[0], node->pos[1], node->pos[2]};
+  // Project with the car's heading so a lane running the other way is not
+  // chosen and the follower does not ask for a U-turn.
+  const RoadPoint heading{-std::sin(node->ypr[0]), 0, -std::cos(node->ypr[0])};
+  auto projected = graph->traffic_project(here, &heading);
+  if (!projected || projected->edge >= edges.size())
+    return false;
+  // Look further ahead the faster the car goes, and walk the junction chain so
+  // the target does not sit on the chord of a turn.
+  float look = std::clamp(8.f + .9f * std::max(0.f, speed), 8.f, 45.f);
+  size_t edge = projected->edge;
+  float at = projected->along + look;
+  for (int guard = 0; guard < 8 && at > edges[edge].length; ++guard) {
+    if (edges[edge].next.empty())
+      break;
+    at -= edges[edge].length;
+    edge = edges[edge].next.front();
+  }
+  RoadRoute line;
+  line.points = edges[edge].points;
+  line.length = edges[edge].length;
+  const RoadPoint target = road_at(line, std::min(at, edges[edge].length));
+  const float dx = target[0] - here[0], dz = target[2] - here[2];
+  if (std::fabs(dx) + std::fabs(dz) < .5f)
+    return false;
+  const float want = std::atan2(-dx, -dz);
+  const float error = std::remainder(want - node->ypr[0], 6.2831853f);
+  *steer = std::clamp(error * 1.6f, -1.f, 1.f);
+  return true;
+}
+
 int race_traffic_pointer(Object *car) {
   auto *n = gameref_get(car);
   if (!n)
@@ -868,6 +1079,7 @@ void register_traffic_natives(Jvm &vm, RpkIndex &rpk, SectionMachine &machine) {
 void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
   if (!std::isfinite(seconds) || seconds < 0 || !resources)
     return;
+  ProfTickGuard tick_guard(clock_seconds);
   // The clock follows the pause/warp-aware simulation time; the motion step is
   // the already bounded one from `Jvm::advance_sim_time`. A slow frame must not
   // stretch a halt, and a paused game must not move anything.
@@ -886,7 +1098,19 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
     if (auto *n = gameref_get(focus_car))
       focus_yaw = n->ypr[0];
   const RoadPoint forward{-std::sin(focus_yaw), 0, -std::cos(focus_yaw)};
-  const float density = host_game_options().traffic_density;
+  // Profiling knobs, not gameplay settings: `SLRR_TRAFFIC_DENSITY` overrides
+  // the shipped slider so one build can be measured at several populations,
+  // and `SLRR_TRAFFIC_FREEZE=1` stops spawning and retiring once the population
+  // first reaches its cap, which isolates the cost of driving the cars that
+  // already exist from the cost of creating and destroying them.
+  float density = host_game_options().traffic_density;
+  static const float density_override = [] {
+    const char *v = std::getenv("SLRR_TRAFFIC_DENSITY");
+    return v ? std::strtof(v, nullptr) : -1.f;
+  }();
+  if (density_override >= 0) density = density_override;
+  static const bool freeze_enabled = std::getenv("SLRR_TRAFFIC_FREEZE") != nullptr;
+  static bool frozen = false;
   const int cap = std::isfinite(density) ? int(std::clamp(density, 0.f, 1.f) * 100) : 0;
   std::vector<void *> ground_keys;
   for (const auto &e : populations)
@@ -913,6 +1137,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
     // 1. Retire stale, over-cap and out-of-range entries. A car whose GameRef
     //    was re-created on the same address fails the incarnation check.
     int visible = 0;
+    int64_t t = prof_now();
     for (auto id : ids) {
       auto it = registrations.find(id);
       if (it == registrations.end())
@@ -934,10 +1159,13 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       const bool far = distance > (r.owned ? kRetireOwned : kRetireScripted);
       const bool closed =
           r.owned && !r.unplaced && r.edge < edges.size() && blocked(*p, edges[r.edge]);
+      if (frozen)
+        continue;
       if (r.owned && (over || far || closed)) {
         queue(r, false);
         r.visible = false;
         remove(id);
+        if (profiling()) ++prof().despawns;
         continue;
       }
       if (far) {
@@ -947,7 +1175,18 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       }
       if (r.owned) ++visible;
     }
+    prof_add(kProfRetire, t);
+    if (profiling()) {
+      prof().active = visible;
+      prof().cap = cap;
+    }
+    if (freeze_enabled && !frozen && visible >= cap && cap > 0) {
+      frozen = true;
+      std::fprintf(stderr, "[traffic] frozen at %d cars (SLRR_TRAFFIC_FREEZE)\n",
+                   visible);
+    }
     // 2. Drive the cars this module owns along their directed lane.
+    t = prof_now();
     for (auto id : ids) {
       auto it = registrations.find(id);
       if (it == registrations.end())
@@ -1014,23 +1253,43 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
                              seconds);
       }
       const float delta = std::remainder(n->ypr[0] - previous_yaw, 6.2831853f);
+      const int64_t tw = prof_now();
       part_animate_external_wheels(r.car, advance,
                                    advance > .001f ? std::atan(2.5f * delta / advance)
                                                    : 0);
+      prof_add(kProfWheels, tw);
     }
+    prof_add(kProfDrive, t);
     // 3. Fill the population: positioned requests first, then the template
     //    weights. The road spot is chosen before a car is allocated.
     for (auto &seed : p->seeds) {
-      while (seed.remaining > 0 && visible < cap && spawn_budget > 0) {
+      while (!frozen && seed.remaining > 0 && visible < cap && spawn_budget > 0) {
+        t = prof_now();
         auto projected = graph->traffic_project(seed.position);
+        prof_add(kProfProject, t);
         if (!projected || blocked(*p, edges[projected->edge]))
           break;
         Registration candidate;
-        if (!place(candidate, *graph, *p, focus, forward))
+        t = prof_now();
+        const bool found = place(candidate, *graph, *p, focus, forward);
+        prof_add(kProfSearch, t);
+        if (!found)
           break;
         --spawn_budget;
-        if (!create_on_graph(vm, *resources, key, *graph, seed.model.type,
-                             candidate.edge, candidate.along)) {
+        t = prof_now();
+        auto *made = create_on_graph(vm, *resources, key, *graph, seed.model.type,
+                                     candidate.edge, candidate.along);
+        prof_add(kProfCreate, t);
+        if (profiling()) {
+          ++prof().attempts;
+          if (made) {
+            ++prof().creates;
+            ++prof().spawns;
+          } else {
+            ++prof().create_failures;
+          }
+        }
+        if (!made) {
           seed.remaining = 0;
           break;
         }
@@ -1042,18 +1301,36 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       }
     }
     std::erase_if(p->seeds, [](const Seed &seed) { return seed.remaining <= 0; });
-    for (int attempt = 0; visible < cap && spawn_budget > 0 && attempt < cap * 3;
+    for (int attempt = 0; !frozen && visible < cap && spawn_budget > 0 &&
+                         attempt < cap * 3;
          ++attempt) {
       const Model *selected = weighted_model(*p);
       if (!selected)
         break;
       Registration candidate;
-      if (!place(candidate, *graph, *p, focus, forward))
+      t = prof_now();
+      const bool found = place(candidate, *graph, *p, focus, forward);
+      prof_add(kProfSearch, t);
+      if (profiling()) {
+        ++prof().attempts;
+        if (!found) ++prof().failures;
+      }
+      if (!found)
         continue;
       --spawn_budget;
+      t = prof_now();
       auto *created = create_on_graph(vm, *resources, key, *graph,
                                       selected->type, candidate.edge,
                                       candidate.along);
+      prof_add(kProfCreate, t);
+      if (profiling()) {
+        if (created) {
+          ++prof().creates;
+          ++prof().spawns;
+        } else {
+          ++prof().create_failures;
+        }
+      }
       if (!created)
         continue;
       ++visible;
@@ -1066,19 +1343,21 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       // One line a second: the resident count plus the first car's lane
       // position and world pose, so movement is checkable from the log.
       int32_t first = 0;
-      for (auto id : ids)
-        if (registrations.at(id).visible) {
+      for (auto id : ids) {
+        auto snapshot = registrations.find(id);
+        if (snapshot != registrations.end() && snapshot->second.visible) {
           first = id;
           break;
         }
+      }
       std::fprintf(stderr,
                    "[traffic] t=%.1f ground=0x%x visible=%d cap=%d total=%zu "
                    "dropped=%zu models=%zu seeds=%zu",
                    clock_seconds, gameref_get(key) ? gameref_get(key)->type_id : 0,
                    visible, cap, spawned_total, dropped_total, p->models.size(),
                    p->seeds.size());
-      if (first) {
-        const auto &r = registrations.at(first);
+      if (auto found = registrations.find(first); found != registrations.end()) {
+        const auto &r = found->second;
         auto pos = position(r.car);
         std::fprintf(stderr, " first=id%d edge=%zu along=%.1f v=%.1f pos=%.1f,%.1f",
                      first, r.edge, r.along, r.speed, pos[0], pos[2]);
@@ -1087,6 +1366,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
     }
   }
   // Deliver after placement, and after the calling native has returned.
+  const int64_t te = prof_now();
   auto pending = std::move(events);
   events.clear();
   for (const auto &e : pending) {
@@ -1107,5 +1387,6 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
                Value::make_int(0x10), Value::make_obj(message)},
               false);
   }
+  prof_add(kProfEvents, te);
 }
 }  // namespace slrr

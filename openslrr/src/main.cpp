@@ -92,7 +92,7 @@ void usage() {
       "           [--vehicle-osd PATH]\n"
       "           [--perf-log CSV|-] [--perf-frames CSV] [--bench-map TRACK]\n"
       "           [--bench-drive SECONDS|manual]\n"
-      "           [--bench-time HOUR] [--bench-shots DIR]\n"
+      "           [--bench-time HOUR] [--bench-shots DIR] [--bench-route]\n"
       "           [--no-vsync] [--fps-cap N] [--debug-overlay]\n"
       "           [PlayerName]\n"
       "\n"
@@ -200,6 +200,10 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--debug-overlay") == 0) {
       opt.debug_overlay = true;
+      continue;
+    }
+    if (std::strcmp(a, "--bench-route") == 0) {
+      opt.bench_route = true;
       continue;
     }
     if (std::strcmp(a, "--bench-time") == 0 && i + 1 < argc) {

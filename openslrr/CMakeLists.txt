@@ -36,6 +36,7 @@ add_executable(slrr_host
   src/jvm/script_compiler.cpp
   src/platform/game_root.cpp
   src/platform/frame_profiler.cpp
+  src/platform/stack_sampler.cpp
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp

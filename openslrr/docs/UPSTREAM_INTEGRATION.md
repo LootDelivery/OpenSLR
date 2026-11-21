@@ -380,6 +380,39 @@ into one function so it could be tested, and three call sites changed.
 | Runtime | 35–40 s drives on ValoCity: `SLRR_TRAFFIC_DIAG` reported **zero** discontinuities; 39–40 spawns with distance 180.3…239.0 m and forward projection ≤ 0.42; population stayed at `cap=20` for the whole run, `drive done`, exit 0. A section probe (temporary, removed) forced the race transition in a live scene: 20 cars → 0 → 20 after the return, no GC error, no stale `GameRef`, exit 0. The real section path was exercised too: `--bench-map TestTrack` adopts `java.game.TestTrack` and the log contains no `[traffic]` spawn at all, so a track scene gets no ambient traffic. (`TestTrack` itself drops the spawned car through the map to y ≈ −93 000; that is a pre-existing defect of that map scene, unrelated to traffic, because no traffic exists there.) |
 | Not verified | A street race cannot be started without the menu: `RaceSetup` is a Java/TREE state, so the in-game check above forced the same policy call rather than the actual `changeActiveSection(RaceSetup)`. The partial NightRace flow (rivals created, race started and finished) was not re-run; nothing in this change touches script-owned cars, and the suite pins that they survive the transition. Race rivals still do not drive (U2-D) and there are no car-to-car or car-to-traffic collisions (U3/#205). Police cars are `cars/misc/Police.rpk` spawned by `java.game.PoliceScout`/`City.policeCars`, not by the ambient templates; their placement is script-side and Police AI is untouched. |
 
+### U2-B.2. Measuring the city
+
+The first thing U2-B.2 needed was a profile that can say where a city frame
+goes, including the time no scene zone owns. Everything below is off unless
+asked for.
+
+| Knob | Effect |
+|---|---|
+| `--perf-log CSV\|-` | one `[perf]` line per second per `frame_profiler` zone, plus `[hitch]` for any frame over 17 ms with the zone breakdown and `rest=` for time no zone claimed |
+| `--perf-frames CSV` | one row per frame: total, every zone, renderer numbers, and `rest_ms` |
+| `SLRR_TRAFFIC_PROFILE=1` | stage profile inside `race_traffic_tick`: tick, retire, drive (of which pose, floor, park, wheels), search, create, events, project. One `[tprof]` window line every five simulated seconds, `[tslow]` for a tick over 4 ms, and a table with n/avg/p50/p95/p99/max at exit |
+| `SLRR_STACK_SAMPLE=1` (+`_HZ`) | CPU sampling of the main thread with DbgHelp call stacks (`RelWithDebInfo` for names): top functions and top stacks every five seconds |
+| `SLRR_TRAFFIC_DENSITY=`, `SLRR_PEDESTRIAN_DENSITY=` | measurement overrides of the shipped sliders, so one build covers several populations |
+| `SLRR_TRAFFIC_FREEZE=1` | drives the cars that exist and stops spawning or retiring, which separates "update" cost from "create/destroy" cost |
+| `--bench-route` | the benchmark car follows the road graph instead of driving straight: the run covers streets, junctions and turns, and backs off when it gets stuck |
+
+Zones now cover the loop as a whole: `ambience` (scene ambience and triggers),
+`pump` (window pump and section render sync) and `gc` (the stop-the-world sweep)
+join the old `scripts`/`physics`/`traffic`/`flush`/`collect`/`shadows`/`refl`/
+`world`/`osd`/`present`. `rest` is the frame minus the zones, so a stall in code
+without a scope cannot hide; it measures zero in every run so far.
+
+The names in `kZoneNames` are asserted against `Zone::Count` after a mismatch
+made every CSV column report another zone's time.
+
+Two things the profile already changed:
+
+* `registrations.at(id)` in the one-second trace threw `std::out_of_range` once
+  retires started removing entries, which at density 1.0 happens every second;
+  the lookup is a `find` now, because the id list is a frame-start snapshot.
+* The first `race_traffic_tick` of a map builds the road graph (≈430 ms) and
+  that showed up as a 450 ms first tick; it is once per map load, not per frame.
+
 ## Deferred and rejected
 
 Deferred items have a reason and a place in
