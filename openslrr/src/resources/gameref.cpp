@@ -172,6 +172,8 @@ void gameref_process_collision_requests() {
 
 void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
                         float pitch, float roll) {
+  if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz) ||
+      !std::isfinite(yaw) || !std::isfinite(pitch) || !std::isfinite(roll)) return;
   GameRefState* n = gameref_get(key);
   if(!n)n=gameref_upsert(key);
   if (!n) return;

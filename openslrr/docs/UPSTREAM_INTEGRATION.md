@@ -133,3 +133,22 @@ Deliberate deviation: upstream clamps `a[i] = x` by resizing to the index; we
 keep that behaviour inside the window and drop anything outside it. Stock
 scripts never address a slot above the window, so the observable behaviour is
 unchanged.
+
+## U1-D. Physics fault containment (#166)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#166](https://github.com/EliasFD3S/openslrr/pull/166), commit `2b3d6659` "Contain rigid-body failures and reject non-finite physics inputs" |
+| Upstream files | `src/resources/part_runtime.cpp`, `src/resources/gameref.cpp`, `tests/test_physics_recovery.cpp` |
+| Our files | same two sources, `tests/test_physics_recovery.cpp` (verbatim) |
+| Problem | One malformed body could take the process down or corrupt its neighbours: `RigidBody::configure` threw out of `dynamics_configure`/`part_add_dynamic_native`/`detach_panel`; a bad `attach` left the chassis body configured with the previous bounds and the `physics_ready` flag set; a non-finite frame from a loose body reached `local_matrix`; a throwing free-body step left the carrier body modified; `PhysicsRef.setMatrix` accepted NaN. |
+| Adaptation | Same structure, applied to our code: `initialize_loose_body()` configures a **copy** and commits it only on success, so a rejected type is remembered in `invalid_dynamic_types` and never retried; `dynamics_configure` configures and frames a candidate, then swaps it in, marking the chassis suspended + fault-reported once on failure; `detach_panel` erases the panel when its body cannot be configured; `advance_loose_panels` throws inside a per-panel `try` that restores the carrier body, settles the node and destroys only that part; `advance_free_bodies` keeps the published pose, restores the carrier body and disables that PhysicsRef; non-finite frames are rejected at `gameref_set_matrix` and after every integration step. Strict validation is kept — nothing is skipped or clamped behind a "physics off" switch. |
+| Tests | `tests/test_physics_recovery.cpp`: non-finite `GameRef` pose rejected atomically; a malformed free body disables itself while a healthy one keeps falling; a throwing native entry does not stop the frame or the next tick; `PhysicsRef` creation/`start`/`setRadius` recover after a rejected configure; overflow in integration is contained; a failed `part_add_dynamic_native` cleans its partial state and does not retry. |
+| Result | `-BaselineRef 947d11bf -BaselineSources src/resources/part_runtime,src/resources/gameref`: **0 passed, 8 failed** (three of them as uncaught `invalid rigid frame` / `invalid rigid body mass/bounds`). After: **8 passed, 0 failed**. ValoCity drive: exit 0, `drive done`, the same 6 `[phys]` lines as before. |
+| Status | **Ported** (one adaptation) |
+
+Adaptation detail: upstream rolls back a list of `ContactVehicle` carriers
+(`advance_free_bodies(vehicles, …)`, PR #205/#48). Our loop still takes the
+single `controlled_vehicle`, so it backs up and restores that one body. The
+multi-car rollback arrives with the vehicle-contact port (see the U1-E plan):
+the `try`/restore shape is already the one that port needs.
