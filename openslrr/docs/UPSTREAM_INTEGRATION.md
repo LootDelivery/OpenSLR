@@ -182,3 +182,22 @@ the `try`/restore shape is already the one that port needs.
 The contract in `KNOWLEDGE_BASE.md`/L1.1 ("monotonic, no reuse of freed ids,
 reset only on a full registry reset") is preserved and now also enforced
 against `INT32_MAX` overflow.
+
+## Deferred and rejected
+
+Deferred items have a reason and a place in
+[UPSTREAM_GAMEPLAY_PLAN.md](UPSTREAM_GAMEPLAY_PLAN.md); rejected items have a
+concrete incompatibility.
+
+| Item | Upstream | Status | Why |
+|---|---|---|---|
+| Roads / traffic / race AI | #180 | **Deferred** | Needs 12 missing `GroundRef` traffic/route natives first; the AI driver rides on them. Phase 1 of the plan. |
+| Vehicle contacts / dynamics | #205 + #48 | **Deferred** | Upstream replaced the single-car loop with a `ContactVehicle` architecture (shared 120 Hz substeps, mass/inertia ownership, wheel loss, flaps). A subsystem port, not a fix. Phase 2. |
+| RPK descriptor/property cache | #146 | **Deferred** | Changes `by_type_id` to lo16 and `find_entry` semantics plus payload/RSD caches and a `generation()`; must be designed against the B4.1.2 strict-resolution contract. Phase 3.1. |
+| GC finalizer/heap lookup | #200 | **Deferred** | 172 lines of `gc.cpp`; needs its own reachability/finalizer evidence against `VM_GC.md`. Phase 3.2. |
+| Point/spot light system, street and car lighting, shadows, AO, HDR, reflections | #235, #237, #279 | **Rejected** | Out of scope by instruction: this tree keeps `LIGHTING_AUDIT.md` semantics and the L2 investigation; no external render architecture is imported. |
+| `Painter` replacement | #206 | **Rejected** | Would replace the legacy Painter and pre-empt the B4/A-series painter architecture. |
+| JSON save format | #213 | **Rejected** | The save format is a closed contract; U1-B2 only made the writer atomic. |
+| Cinepak / FMOD | #219 / #229 | **Rejected** | Separate multimedia projects with external dependencies. |
+| Binary `Garage.class` | #162 | **Rejected** | Requires the exact SHA-256 of the installed `Garage.class`; upstream itself states the shipped `Garage.java` order was correct and the defect was in the MWM class. Nothing to verify without the hash, so nothing was copied. |
+| `patch/` directory | — | **Rejected** | Mixed content; its lighting half is out of scope and its `Garage.java` changes are for ceiling lamps we do not have. |
