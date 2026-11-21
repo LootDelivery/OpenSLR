@@ -402,15 +402,17 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   and at least `min_gap` from the cars already standing on that lane. Spacing
   and gap come from the slider (40 m / 30 m at density 0, 20 m / 16 m at
   density 1).
-- A car must not be seen to appear. Distance cannot achieve that here: the
-  driving camera's fog starts at 1.5 km, so a car at a hundred metres is a car on
-  screen. The scheduler therefore refuses any spot inside the camera's view cone
-  (real camera from `gameref_world_camera`, half angle + 6°, spots beyond 300 m
-  exempt) and retirement uses the same test, so traffic is created and recycled
-  only out of sight and enters the view by driving. `docs/TRAFFIC_STREAMING_RESEARCH.md`
-  records the sources behind that decision.
-- Body clearance stays as a second rule: 160 m ahead, 105 m to the side, 60 m
-  behind, 45 m absolute, with the speed bubble inside the front zone.
+- A car must not *change* in view. Distance cannot hide a spawn here: the
+  driving camera's fog starts at 1.5 km, so a car at a hundred metres is on
+  screen. Two rules cover it. A car is never **removed** inside the camera's view
+  cone (real camera from `gameref_world_camera`, half angle + 6°, exempt only
+  past 1.6× the retire radius), and a car **created** in view **dissolves in**
+  over `SLRR_TRAFFIC_FADE` seconds (0.7 default) through a dithered discard in
+  `fs_vehicle.sc`, driven by `SceneInstance::fade` and the `u_vehicleFade`
+  uniform. `docs/TRAFFIC_STREAMING_RESEARCH.md` records the sources and the
+  measurements behind that decision.
+- Body clearance stays as a second rule: 130 m ahead, 80 m to the side, 45 m
+  behind, 30 m absolute, with the speed bubble inside the front zone.
 - Lanes are sorted nearest first and the scheduler draws towards the front of
   the list, so the budget packs the street the player is on before a side
   street 200 m away. Measured at noon with the player standing still: density

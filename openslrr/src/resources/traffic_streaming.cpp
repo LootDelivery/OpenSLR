@@ -55,6 +55,12 @@ float stream_spot_distance(const StreamLane& lane, float along,
   return road_distance(stream_lane_point(lane, along), player);
 }
 
+float stream_fade(double age_seconds, float fade_time) {
+  if (!(fade_time > 0.f)) return 1.f;
+  const double t = age_seconds / double(fade_time);
+  return float(std::clamp(t, 0.0, 1.0));
+}
+
 float stream_spacing(float density, const StreamRules& rules) {
   const float d = std::clamp(density, 0.f, 1.f);
   return rules.spacing_min + (rules.spacing_max - rules.spacing_min) * d;
@@ -161,14 +167,6 @@ StreamSpot stream_pick_spot(const StreamView &view, const StreamRules &rules,
                  stream_min_spawn_distance(dot, view, rules));
     if (spot_distance < required) {
       spot.refused = "too close to the player";
-      continue;
-    }
-    // On screen is on screen at any distance the player can resolve, so a spot
-    // inside the camera cone is refused outright and traffic reaches the view by
-    // driving. This is the rule that stops a car appearing a hundred metres up
-    // the road the player is looking down.
-    if (stream_spot_visible(view, lane, along)) {
-      spot.refused = "in view";
       continue;
     }
     bool crowded = false;

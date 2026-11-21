@@ -376,7 +376,10 @@ void LibBgfxBackend::draw_vehicle_shadows(uint16_t view_id, const float* eye,
           car.xform = instance.transform.data();
         }
       } else if ((flags & 9u) == 8u) {
-        car.casters.push_back(&instance);
+        // A car that is dissolving in does not cast yet: the shadow is drawn
+        // by a separate program, so it would appear full strength a moment
+        // before the body does.
+        if (instance.fade > .5f) car.casters.push_back(&instance);
       }
     }
 

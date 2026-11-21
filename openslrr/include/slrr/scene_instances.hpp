@@ -26,6 +26,9 @@ struct SceneInstance {
   std::string paint_texture;
   std::vector<std::pair<size_t, std::string>> texture_replacements;
   bool vehicle_material = false;
+  // U2-B.3: 1 for a settled object, 0..1 while a streamed traffic car dissolves
+  // in. Filled from `scene_instances_set_fade` through the vehicle's owner key.
+  float fade = 1.f;
   uint32_t light_flags = 0;
   // Render-object id. Carries `flags` (dynamic shadow caster) and `shd_*`.
   int32_t type_id = 0;
@@ -59,6 +62,9 @@ struct SceneShadowDecal {
 
 void scene_instances_set_resources(const RpkIndex *resources);
 void scene_instances_set_envmap(uint32_t resource);
+// U2-B.3: dissolve factor for a streamed object, keyed by the vehicle's owner
+// (the chassis GameRef). 1 removes the entry. Everything else draws at 1.
+void scene_instances_set_fade(void *owner, float fade);
 std::string scene_instances_envmap();
 void scene_instances_select(void *world, void *skydome, bool preview_lamps);
 using SceneFrustum = std::array<std::array<float, 4>, 6>;

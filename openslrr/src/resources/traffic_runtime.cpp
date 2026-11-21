@@ -86,6 +86,8 @@ struct Registration {
   // is not retired for being far away, so a spot cannot be filled and emptied
   // in a loop while the player is moving.
   double born = 0;
+  // Still present in the renderer fade table (U2-B.3).
+  bool fading = true;
   float along = 0, speed = 0, cruise = 0;
   // Last published frame, for the discontinuity diagnostic.
   bool posed = false;
@@ -598,12 +600,36 @@ StreamRules stream_rules(float density) {
   rules.budget = int(std::lround(d * 80.f));
   rules.min_gap = 30.f - 14.f * d;
   rules.per_car_metres = 40.f - 20.f * d;
+  // A car that dissolves in over `kFadeIn` seconds does not need to be hidden by
+  // distance, so the clearance is back to what the traffic flow wants: far
+  // enough that the dissolve happens where the eye is not focused, close enough
+  // that the road ahead is populated straight away instead of only by cars that
+  // happen to drive in.
+  rules.front_clear = 130.f;
+  rules.side_clear = 80.f;
+  rules.rear_clear = 45.f;
+  rules.min_player_distance = 30.f;
   return rules;
 }
 // A car this module did not create still occupies its lane, so the scheduler
 // sees it; only the budget and the retirement rules care about the owner.
 constexpr float kRetireScripted = 400.f;
 constexpr double kMinLifetime = 6.;
+// How long a streamed car takes to dissolve in. Long enough that the eye reads a
+// fade rather than a pop, short enough that the car is solid before the player
+// can close on it: at 30 m/s it is fully visible after 21 m of travel.
+constexpr float kFadeIn = .7f;
+// Measurement knob, not a gameplay setting: `SLRR_TRAFFIC_FADE=0` makes cars
+// appear instantly, so one build can be compared with and without the dissolve.
+const float fade_seconds() {
+  static const float value = [] {
+    const char *v = std::getenv("SLRR_TRAFFIC_FADE");
+    if (!v) return kFadeIn;
+    const float f = std::strtof(v, nullptr);
+    return std::isfinite(f) && f >= 0.f ? f : kFadeIn;
+  }();
+  return value;
+}
 // An edge that was just emptied stays empty for a moment, so a car is not
 // destroyed and immediately re-created in the same place as the player passes.
 constexpr double kEdgeCooldown = 4.;
@@ -763,6 +789,8 @@ int32_t add_car(const RpkIndex &rpk, void *ground, Object *car, Object *where,
   r.car = static_cast<Object *>(c->key);
   r.car_incarnation = c->incarnation;
   r.born = clock_seconds;
+  // Start invisible and dissolve in: see kFadeIn and fs_vehicle.sc.
+  scene_instances_set_fade(r.car, 0.f);
   r.owned = owned;
   r.notify = owned;
   r.cruise = (15 + random() * 20) / 3.6f;
@@ -1376,6 +1404,16 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         continue;
       if (r.unplaced || r.edge >= edges.size())
         continue;
+      // Dissolve in over kFadeIn seconds. The factor reaches the renderer through
+      // the car's owner key and covers every part of the body.
+      const float fade = stream_fade(clock_seconds - r.born, fade_seconds());
+      if (fade < .999f)
+        scene_instances_set_fade(r.car, fade);
+      else if (r.fading) {
+        // Settled: drop the entry, so the per-instance lookup disappears with it.
+        scene_instances_set_fade(r.car, 1.f);
+        r.fading = false;
+      }
       const auto &e = edges[r.edge];
       float desired = r.cruise;
       if (blocked(*p, e))
@@ -1530,11 +1568,12 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       // What the player actually sees: how many cars stand within 140 m, and
       // how many of those are ahead inside 220 m. This is the number that tells
       // whether a density setting looks dense, which a global count cannot.
-      int near_count = 0, ahead_count = 0;
+      int near_count = 0, ahead_count = 0, fading_count = 0;
       for (auto id : ids) {
         auto snapshot = registrations.find(id);
         if (snapshot == registrations.end() || !snapshot->second.visible)
           continue;
+        if (snapshot->second.fading) ++fading_count;
         const auto at = position(snapshot->second.car);
         const float dx = at[0] - focus[0];
         const float dz = at[2] - focus[2];
@@ -1548,12 +1587,12 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       std::fprintf(stderr,
                    "[traffic] t=%.1f ground=0x%x visible=%d owned=%d target=%d "
                    "cap=%d lane_m=%.0f spacing=%.0f total=%zu dropped=%zu "
-                   "models=%zu seeds=%zu near=%d ahead=%d refused=%s",
+                   "models=%zu seeds=%zu near=%d ahead=%d fading=%d refused=%s",
                    clock_seconds, gameref_get(key) ? gameref_get(key)->type_id : 0,
                    visible, owned_count, last_target, cap, view.lane_metres,
                    stream_spacing(std::isfinite(density) ? density : 0.f, rules),
                    spawned_total, dropped_total, p->models.size(), p->seeds.size(),
-                   near_count, ahead_count,
+                   near_count, ahead_count, fading_count,
                    last_refused && *last_refused ? last_refused : "-");
       if (auto found = registrations.find(first); found != registrations.end()) {
         const auto &r = found->second;

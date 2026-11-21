@@ -296,6 +296,10 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         const float no_light[4]{};
         bgfx::setUniform(u_local_light_, simple ? no_light : local_light_.data());
         bgfx::setUniform(u_diffuse_,diffuse);
+        // U2-B.3: a streamed car dissolves in instead of popping. Everything
+        // else draws at 1 and takes the untouched shader path.
+        const float fade_in[4] = {instance.fade, 0.f, 0.f, 0.f};
+        bgfx::setUniform(u_vehicle_fade_, fade_in);
         const float spec[4] = {group.specular[0], group.specular[1], group.specular[2],
                                group.shininess > 0.f ? group.shininess : 1.f};
         bgfx::setUniform(u_spec_, spec);

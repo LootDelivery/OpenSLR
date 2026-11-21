@@ -151,9 +151,9 @@ struct StreamSpot {
 StreamSpot stream_pick_spot(const StreamView& view, const StreamRules& rules,
                             uint32_t& random);
 
-// Whether a world position is inside the camera's view, and therefore a place a
-// car may not be created or removed. The runtime uses it for retirement as well,
-// so the population is recycled only where nobody is looking.
+// Whether a world position is inside the camera's view. A car may be *created*
+// inside it only while it is dissolving in (see `stream_fade`), but it may never
+// be *removed* there, so the runtime uses this for retirement only.
 bool stream_point_visible(const StreamView& view, const RoadPoint& at);
 bool stream_spot_visible(const StreamView& view, const StreamLane& lane,
                          float along);
@@ -168,6 +168,9 @@ float stream_spot_distance(const StreamLane& lane, float along,
 // so the trace can print what the policy decided without duplicating the maths.
 float stream_spacing(float density, const StreamRules& rules);
 float stream_bubble(const StreamView& view, const StreamRules& rules);
+// Streamed cars dissolve in instead of popping: 0 at creation, 1 once `fade_time`
+// seconds have passed. The renderer dithers fragments against this factor.
+float stream_fade(double age_seconds, float fade_time);
 // How far a spot with this direction (`dot` against the player's heading) has to
 // be from the player before a car may be created there.
 float stream_min_spawn_distance(float dot, const StreamView& view,

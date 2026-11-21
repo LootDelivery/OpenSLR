@@ -116,11 +116,26 @@ directly instead of only by driving.
 
 ## 5. Decision
 
-* Adopted now: off-screen spawn and off-screen retirement, plus the existing
-  gap/capacity/insertion-retry rules that match SUMO's insertion constraints.
-* Deferred with a located hook: dithered fade-in for streamed cars, which would
-  remove the forward-flow trade-off above.
-* Rejected: solving pop-in with distance alone (impossible with 1.5 km fog) and
-  spawning behind occluders via ray casts (`scene_instances_pick` is a full CPU
-  ray against instance meshes, too expensive for 48 candidates four times a
-  second).
+Adopted:
+
+* the gap, capacity and refusal-and-retry rules, which match SUMO's insertion
+  constraints;
+* dithered fade-in of 0.7 s on every car this module creates, riding on the
+  existing `u_vehicleDiffuse` draw and a new `u_vehicleFade` uniform. The road
+  test confirmed the need: off-screen-only spawning was correct but left the
+  first minutes of a drive visibly empty, exactly the trade-off predicted here;
+* off-screen retirement, so a car is never deleted — or replaced — in view.
+
+Rejected: solving pop-in with distance alone (impossible with 1.5 km fog) and
+spawning behind occluders via ray casts (`scene_instances_pick` is a full CPU ray
+against instance meshes, too expensive for 48 candidates four times a second).
+
+## 6. Implementation notes (U2-B.3)
+
+| Piece | Where |
+|---|---|
+| Dissolve | `shaders/fs_vehicle.sc`: `u_vehicleFade.x < 0.999` discards fragments against a hash of `gl_FragCoord`, so the car dissolves in the opaque state — no blending, no sorting. |
+| Uniform | `bgfx_lib_backend.cpp` creates `u_vehicleFade` and destroys it with the other vehicle uniforms; `bgfx_lighting.cpp` sets it per group draw from `SceneInstance::fade`. |
+| Plumb | `scene_instances_set_fade(owner, fade)` keeps owner→fade in a small table; the collector applies it to every instance whose `vehicle_material` belongs to that owner, so a car fades in whole. |
+| Ramp | `traffic_runtime.cpp` sets 0 at creation and ramps with `stream_fade(age, fade_seconds())`; the entry is dropped once the car is solid, so the lookup cost disappears with it. |
+| Knob | `SLRR_TRAFFIC_FADE=<seconds>` overrides the fade time; 0 makes cars appear instantly, which is how the dissolve was proven (1000 s leaves cars present but invisible). |

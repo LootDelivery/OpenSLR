@@ -1776,6 +1776,27 @@ bool skin_palette(SceneInstance& instance, void* key, int32_t type_id) {
 }
 
 // defer_skin leaves pedestrians with gpu_skin set and an empty palette.
+// U2-B.3 streaming fade. Small and only populated while cars are dissolving
+// in, so the lookup at instance build is a single hash probe guarded by an
+// emptiness test.
+std::unordered_map<void *, float> &fade_table() {
+  static std::unordered_map<void *, float> table;
+  return table;
+}
+
+// The table lives in the anonymous namespace above; the public entry point is
+// defined outside it, after the namespace closes.
+void fade_set_impl(void *owner, float fade) {
+  if (!owner) return;
+  auto *key = static_cast<void *>(part_render_owner(owner));
+  if (!key) key = owner;
+  auto &table = fade_table();
+  if (!(fade < .999f))
+    table.erase(key);
+  else
+    table[key] = std::clamp(fade, 0.f, 1.f);
+}
+
 std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
   std::vector<SceneInstance> out;
   if (!g_resources || !root)
@@ -1820,6 +1841,14 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
     instance.sky = n->key == g_sky;
     instance.color = n->color;
     instance.vehicle_material = n->vehicle_material;
+    if (instance.vehicle_material && !fade_table().empty()) {
+      // A car's parts inherit its dissolve factor, so a car fades in whole.
+      if (auto *owner = part_render_owner(n->key)) {
+        const auto &table = fade_table();
+        if (auto it = table.find(owner); it != table.end())
+          instance.fade = it->second;
+      }
+    }
     instance.light_flags = n->light_flags;
     if (n->paint_source || !n->texture_replacements.empty()) {
       // The mesh list may prefer a DDS sidecar while the resource names the
@@ -1862,6 +1891,10 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
   return out;
 }
 }  // namespace
+
+void scene_instances_set_fade(void *owner, float fade) {
+  fade_set_impl(owner, fade);
+}
 
 std::vector<SceneInstance> scene_instances_collect_root(void *root) {
   return collect_root(root, false);

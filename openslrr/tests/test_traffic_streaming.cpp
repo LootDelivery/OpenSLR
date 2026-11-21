@@ -473,10 +473,6 @@ SLRR_TEST(nothing_appears_in_plain_sight) {
       const float required =
           std::max(r.min_player_distance, stream_min_spawn_distance(dot, view, r));
       SLRR_REQUIRE(distance >= required);
-      // And it may not be on screen at all: ahead of the car is exactly where
-      // the player is looking, so that whole sector is refused and traffic
-      // reaches the view by driving into it.
-      SLRR_REQUIRE(!stream_spot_visible(view, lane, spot.along));
       // The three zones ask for genuinely different distances, so a car cannot
       // slip through a corner of the cone.
       if (dot > .35f) SLRR_REQUIRE(distance >= r.front_clear);
@@ -487,63 +483,37 @@ SLRR_TEST(nothing_appears_in_plain_sight) {
     ++picked;
   }
   SLRR_REQUIRE(picked >= 6);
-  std::printf("  %d cars placed, none of them on screen\n", picked);
-  std::puts("PASS every spawn is outside the view and the clearance");
+  std::printf("  %d cars placed, all of them clear of the body\n", picked);
+  std::puts("PASS every spawn respects the clearance of its own direction");
 }
 
-// 18. The forward sector is not banned, only the part the player is watching: a
-//     spot in front is refused while the camera looks at it, and accepted when
-//     it is out of the cone (around a corner, or the camera turned away).
-SLRR_TEST(ahead_spawns_depend_on_the_camera) {
-  const auto r = rules();
-  StreamView watched = view_with({straight(1, 900, 0, 0, 1)});
-  chase_camera(watched);
-  uint32_t random = 0x2545f491;
-  int ahead = 0;
-  for (int i = 0; i < 60; ++i) {
-    const StreamSpot spot = stream_pick_spot(watched, r, random);
-    if (spot.valid) ++ahead;
-  }
-  SLRR_REQUIRE(ahead == 0);
-
-  // Turn the camera around: the same lane is now behind the eye and fills.
-  StreamView turned = view_with({straight(1, 900, 0, 0, 1)});
-  turned.eye[0] = 0.f;
-  turned.eye[1] = 2.6f;
-  turned.eye[2] = 6.f;
-  turned.look[0] = 0.f;
-  turned.look[1] = 0.f;
-  turned.look[2] = 1.f;  // looking back up the road
-  turned.view_cos = std::cos(51.f * 3.14159265f / 180.f);
-  turned.view_range = 300.f;
-  uint32_t other = 0x2545f491;
-  for (int i = 0; i < 60; ++i) {
-    const StreamSpot spot = stream_pick_spot(turned, r, other);
-    if (!spot.valid) continue;
-    ++ahead;
-    turned.lanes[0].residents.push_back(spot.along);
-  }
-  SLRR_REQUIRE(ahead >= 2);
-  std::puts("PASS ahead spawns are refused only while the camera watches them");
+// 18. A car may be created in view because it dissolves in, but it may never be
+//     removed there: retirement asks the same camera question. This checks the
+//     test itself, so the runtime cannot recycle a car the player is watching.
+SLRR_TEST(camera_visibility_is_exact) {
+  StreamView view = view_with({});
+  chase_camera(view, /*range=*/300.f);
+  // Straight ahead, inside the cone and inside the range.
+  SLRR_REQUIRE(stream_point_visible(view, RoadPoint{0.f, 1.f, -100.f}));
+  // Behind the eye.
+  SLRR_REQUIRE(!stream_point_visible(view, RoadPoint{0.f, 1.f, 60.f}));
+  // Beside the eye, outside the half angle.
+  SLRR_REQUIRE(!stream_point_visible(view, RoadPoint{200.f, 1.f, 0.f}));
+  // Ahead but past the range at which a car is a couple of pixels.
+  SLRR_REQUIRE(!stream_point_visible(view, RoadPoint{0.f, 1.f, -400.f}));
+  std::puts("PASS the visibility test answers by cone and range");
 }
 
-// 19. Beyond the range at which a car is a couple of pixels on screen the cone
-//     stops mattering, so a far straight road can still be seeded.
-SLRR_TEST(far_spawns_are_allowed_beyond_the_resolvable_range) {
-  const auto r = rules();
-  StreamView view = view_with({straight(1, 2000, 0, 0, 1)});
-  chase_camera(view, /*range=*/120.f);
-  uint32_t random = 0x9e3779b9;
-  int far = 0;
-  for (int i = 0; i < 120; ++i) {
-    const StreamSpot spot = stream_pick_spot(view, r, random);
-    if (!spot.valid) continue;
-    const float distance = stream_spot_distance(view.lanes[0], spot.along, view.player);
-    SLRR_REQUIRE(distance > view.view_range);
-    ++far;
-  }
-  SLRR_REQUIRE(far >= 2);
-  std::puts("PASS spawns beyond the resolvable range are allowed");
+// 19. The dissolve curve: a car starts invisible, is half way at half the fade
+//     time, and is solid afterwards. With a zero fade time it never dissolves,
+//     which is what the measurement knob sets.
+SLRR_TEST(fade_curve_reaches_opaque) {
+  SLRR_REQUIRE(stream_fade(0., .7f) == 0.f);
+  SLRR_REQUIRE(std::fabs(stream_fade(.35, .7f) - .5f) < .01f);
+  SLRR_REQUIRE(stream_fade(.7, .7f) == 1.f);
+  SLRR_REQUIRE(stream_fade(9., .7f) == 1.f);
+  SLRR_REQUIRE(stream_fade(0., 0.f) == 1.f);
+  std::puts("PASS a streamed car dissolves from nothing to solid");
 }
 
 // 17. A limited budget packs the streets the player is on before it reaches a
@@ -590,7 +560,7 @@ int main() {
                                     slider_maps_to_spacing,
                                     nothing_appears_in_plain_sight,
                                     budget_draws_towards_the_nearest_lanes,
-                                    ahead_spawns_depend_on_the_camera,
-                                    far_spawns_are_allowed_beyond_the_resolvable_range};
+                                    camera_visibility_is_exact,
+                                    fade_curve_reaches_opaque};
   return standalone::run("traffic_streaming", tests);
 }

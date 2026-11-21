@@ -27,6 +27,10 @@ uniform vec4 u_vehicleMixUv;
 uniform vec4 u_vehicleEnvUv;
 uniform vec4 u_vehicleDiffuse;
 uniform vec4 u_vehicleSpec; // rgb, shininess
+// U2-B.3 streaming fade. x is 1 for every car that is not being streamed in;
+// the traffic runtime ramps it from 0 to 1 over the fade time on the cars it
+// creates, and the dithered discard below dissolves them instead of popping.
+uniform vec4 u_vehicleFade;
 uniform vec4 u_sunDiff; // rgb, set
 uniform vec4 u_sunAmb;
 uniform vec4 u_sunSpec;
@@ -61,6 +65,15 @@ vec3 envPrefilter(vec3 dir, float radius)
 }
 void main()
 {
+    // A car appearing within sight is the one thing this streaming policy may not
+    // do, and distance cannot hide it (the camera fog starts at 1.5 km), so a new
+    // car is dissolved in over a fraction of a second. Dithering keeps the
+    // opaque state -- no blending, no sorting, and the discarded pixels are the
+    // same ones the depth pass sees.
+    if (u_vehicleFade.x < 0.999) {
+        float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+        if (dither > u_vehicleFade.x) discard;
+    }
     vec3 n = normalize(v_normal);
     vec2 baseUv = channelUv(u_vehicleChannels.x, v_texcoord0, v_texcoord1, v_texcoord2)*u_vehicleBaseUv.xy+u_vehicleBaseUv.zw;
     vec4 base = texture2D(s_texColor, baseUv);
