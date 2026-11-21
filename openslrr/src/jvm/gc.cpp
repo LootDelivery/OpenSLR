@@ -28,14 +28,59 @@ int Jvm::request_gc() {
   return -1;
 }
 void Jvm::gc_safe_point() {
-  // Drain dead objects gradually; a collection may also run here.
-  if (!gc_graveyard_.empty()) {
-    const size_t budget = std::min<size_t>(gc_graveyard_.size(), 256);
-    for (size_t i = gc_graveyard_.size() - budget; i < gc_graveyard_.size(); ++i) {
-      gc_managed_.erase(gc_graveyard_[i].get());
-      host_input_forget(gc_graveyard_[i].get());
+  // Run the finalizers of dead objects a few at a time, oldest first. A dead
+  // Part or RenderRef finalizer is interpreted work (tens of microseconds
+  // each); a collection that found 448 of them froze the frame for 22 ms.
+  if (!gc_finalize_queue_.empty()) {
+    constexpr double kFinalizeBudgetMs = 1.5;
+    const auto start = std::chrono::steady_clock::now();
+    size_t done = 0;
+    while (!gc_finalize_queue_.empty() && done < 512) {
+      Object* object = gc_finalize_queue_.front();
+      gc_finalize_queue_.erase(gc_finalize_queue_.begin());
+      ++done;
+      // The object is unreachable: had it become reachable again this would
+      // need a new mark. Let the next sweep collect it.
+      object->gc_marked = false;
+      invoke(object->class_name, "finalize", "()V", {Value::make_obj(object)}, false);
+      const double spent = std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - start)
+                               .count();
+      if (spent >= kFinalizeBudgetMs) break;
     }
-    gc_graveyard_.resize(gc_graveyard_.size() - budget);
+    if (getenv("SLRR_GC_TRACE"))
+      std::fprintf(stderr, "[gc-finalize] ran=%zu left=%zu ms=%.1f\n", done,
+                   gc_finalize_queue_.size(),
+                   std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - start)
+                       .count());
+  }
+  // Drain dead objects gradually; a collection may also run here. The budget is
+  // a duration, not an object count: 256 resource holders can take a hundred
+  // milliseconds to destroy while 256 field bags take microseconds. One object
+  // is always drained, so a long queue still makes progress on a slow frame.
+  if (!gc_graveyard_.empty()) {
+    constexpr double kDrainBudgetMs = 1.5;
+    constexpr size_t kDrainLimit = 512;
+    const auto drain_start = std::chrono::steady_clock::now();
+    size_t drained = 0;
+    while (!gc_graveyard_.empty() && drained < kDrainLimit) {
+      Object* object = gc_graveyard_.back().get();
+      gc_managed_.erase(object);
+      host_input_forget(object);
+      gc_graveyard_.pop_back();  // the destructor, and its native payload
+      ++drained;
+      const double spent = std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - drain_start)
+                               .count();
+      if (spent >= kDrainBudgetMs) break;
+    }
+    if (getenv("SLRR_GC_TRACE"))
+      std::fprintf(stderr, "[gc-drain] destroyed=%zu left=%zu ms=%.1f\n", drained,
+                   gc_graveyard_.size(),
+                   std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - drain_start)
+                       .count());
   }
   // Every heap insertion (fresh or recycled) is future dead weight: count
   // both toward the trigger or the heap balloons between collections.
@@ -120,10 +165,18 @@ int Jvm::collect_garbage() {
     if (has_finalize) finalizers.push_back(o);
   }
   const auto finalize_scan_end = std::chrono::steady_clock::now();
+  const auto finalize_invoke_start = std::chrono::steady_clock::now();
+  // Queue the work instead of doing it inside the pause, and keep these objects
+  // alive for this cycle so the sweep cannot destroy them before `finalize()`
+  // has run. A finalizer that resurrects its object is not honoured any more:
+  // the mark phase already declared it dead, and the object is destroyed after
+  // its cleanup.
   for (Object* o : finalizers) {
     o->gc_finalized = true;
-    invoke(o->class_name, "finalize", "()V", {Value::make_obj(o)}, false);
+    o->gc_marked = true;
+    gc_finalize_queue_.push_back(o);
   }
+  const auto finalize_invoke_end = std::chrono::steady_clock::now();
   // A finalizer may resurrect an object, change native roots or allocate.
   // Trace again and keep this cycle's new allocations alive until next time.
   if (!finalizers.empty() || heap_.size() != before) {
@@ -131,6 +184,7 @@ int Jvm::collect_garbage() {
     for (size_t i = before; i < heap_.size(); ++i) mark(heap_[i].get());
     trace();
   }
+  const auto remark_end = std::chrono::steady_clock::now();
   const size_t sweep_size = heap_.size();
   // Dead objects are unreachable (the mark phase is atomic), so destroying
   // them can be spread over the following frames: the per-object dtors and
@@ -139,7 +193,13 @@ int Jvm::collect_garbage() {
   for (size_t i = 0; i < heap_.size(); ++i) {
     auto& object = heap_[i];
     if (object->gc_marked) {
-      heap_[write++] = std::move(object);
+      // Swap, never assign: assigning would destroy the dead object still
+      // sitting at the write slot, and with it its native payload, right here
+      // in the pause. Swapping leaves dead slots as nulls at the tail, which
+      // `heap_.resize` destroys for free, and hands the real destruction to
+      // the time-budgeted drain in `gc_safe_point`.
+      if (write != i) std::swap(heap_[write], heap_[i]);
+      ++write;
       continue;
     }
     // The registry entry is dropped when the object is actually destroyed
@@ -173,14 +233,24 @@ int Jvm::collect_garbage() {
       std::chrono::duration<double, std::milli>(finalize_scan_end - mark_end).count();
   const double sweep_ms =
       std::chrono::duration<double, std::milli>(sweep_end - finalize_scan_end).count();
+  const double fin_call_ms =
+      std::chrono::duration<double, std::milli>(finalize_invoke_end - finalize_invoke_start)
+          .count();
+  const double remark_ms =
+      std::chrono::duration<double, std::milli>(remark_end - finalize_invoke_end).count();
+  const double compact_ms =
+      std::chrono::duration<double, std::milli>(sweep_end - remark_end).count();
   if (mark_ms + fin_ms + sweep_ms > 2. || getenv("SLRR_GC_HISTOGRAM")) {
     std::unordered_map<std::string, size_t> alive_types;
     for (const auto& o : heap_) ++alive_types[o->class_name];
     std::vector<std::pair<std::string, size_t>> top(alive_types.begin(), alive_types.end());
     std::partial_sort(top.begin(), top.begin() + std::min<size_t>(5, top.size()), top.end(),
                       [](const auto& a, const auto& b) { return a.second > b.second; });
-    std::fprintf(stderr, "[gc-slow] mark=%.1f finalize_scan=%.1f sweep=%.1f ms |", mark_ms,
-                 fin_ms, sweep_ms);
+    std::fprintf(stderr,
+                 "[gc-slow] mark=%.1f finalize_scan=%.1f sweep=%.1f "
+                 "(finalize=%zu objs %.1f ms, remark %.1f, compact %.1f) ms |",
+                 mark_ms, fin_ms, sweep_ms, finalizers.size(), fin_call_ms, remark_ms,
+                 compact_ms);
     for (size_t i = 0; i < top.size() && i < 5; ++i)
       std::fprintf(stderr, " %s=%zu", top[i].first.c_str(), top[i].second);
     std::fprintf(stderr, "\n");

@@ -126,6 +126,10 @@ class Jvm : public TreeHost {
   std::unordered_set<const void*> gc_managed_;
   // Dead objects awaiting gradual destruction (sweep slicing).
   std::vector<std::unique_ptr<Object>> gc_graveyard_;
+  // Dead objects whose `finalize()` has not run yet. They stay alive in the
+  // heap until the finalizer has run, so the cleanup of a large batch is spread
+  // over frames instead of freezing one.
+  std::vector<Object*> gc_finalize_queue_;
   uint32_t gc_next_identity_ = 1;
   std::vector<GcRootProvider> gc_roots_;
   uint64_t gc_frame_id_=0;
