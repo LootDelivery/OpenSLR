@@ -71,6 +71,16 @@ All are #180 only; #205/#48 stay in Phase 2 and are never mixed in.
 | U2-E ROC / NightRace | nothing from B–D | `maps/ROC_track/race.spl` is the only `.spl` in the install; `RaceRuntime`/`race_runtime.cpp` has no ROC path yet. The partial NightRace flow (rivals created, race started and finished) is unchanged by U2-B and U2-B.1. |
 | U2-F native vehicle assembly | U2-B | `part_create(..., native_only)` skips the CFG `script` line, and the InlineWheel physics (0.25 m spring, 0.1 m sag, 0.65 damping) already rests a template car on its tyres, so what remains is letting that body be simulated (`drive.native_traffic`) instead of externally posed |
 
+Known broken or unverified after U2-B.1, each with its own owner:
+
+| Item | State | Owner |
+|---|---|---|
+| Race rivals do not drive; a race without the player does not start | observed, not fixed | U2-D |
+| Ambient traffic is cleared on race entry, but a real street race cannot be started from the bench harness | policy verified in the suite and through a real `Track` section; the menu flow stays manual | U2-D/manual |
+| `TestTrack` scene drops the car through the map (y ≈ −93 000) | pre-existing map-scene defect, no traffic involved | separate audit |
+| Car-to-car, car-to-traffic and traffic-to-player collisions | not implemented | U3 (#205/#48) |
+| Police AI does not react; police cars come from `cars/misc/Police.rpk` via `PoliceScout`, not from the ambient templates, and spawn behind the player by script | observed, not fixed | police audit |
+
 The traffic templates themselves are ordinary CFG cars in
 `cars/traffic/*.rpk` (10 packs: Ambulance, ArmoredVan, CivilVan, Coach,
 Erbilac, FireEngine, Schoolbus, Taxi, Wagon, Wreck), so U2-B needs no new asset
