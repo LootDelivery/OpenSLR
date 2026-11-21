@@ -71,6 +71,8 @@ add_executable(slrr_host
   src/formats/skeleton_text.cpp
   src/formats/matrixdata.cpp
   src/resources/gameref.cpp
+  src/resources/road_routes.cpp
+  src/resources/race_runtime.cpp
   src/resources/scene_instances.cpp
   src/resources/scene_ambience.cpp
   src/resources/scene_triggers.cpp

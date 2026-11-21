@@ -37,6 +37,10 @@ struct RpkPack {
 class RpkIndex {
  public:
   void set_root(std::string root);
+  // Bumped whenever the pack set changes (root change, a pack is parsed).
+  // Native caches that decode a payload key on it, so a reload cannot serve a
+  // graph built from the previous map files.
+  uint64_t generation() const { return generation_; }
 
   // Non-recursive *.rpk basenames in dir (relative to game root or absolute).
   std::vector<std::string> list_rpks(const std::string& dir) const;
@@ -124,6 +128,7 @@ class RpkIndex {
   std::string root_;
   std::unordered_map<std::string, int32_t> by_path_;
   std::vector<RpkPack> packs_;  // index 0 unused; pack_id == index
+  uint64_t generation_ = 1;
   int32_t next_id_ = 1;
 };
 

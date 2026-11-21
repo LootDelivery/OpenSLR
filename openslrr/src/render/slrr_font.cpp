@@ -852,6 +852,8 @@ void slrr_text_set_osd(void* key, void* osd) {
     const auto hidden = owner->fields.find("_host_hidden");
     suppressed = hidden != owner->fields.end() && hidden->second.tag == ValueTag::Int &&
                  hidden->second.v.i != 0;
+    // An OSD that was never shown draws neither plates nor text.
+    if (!osd_owner_shown(owner)) suppressed = true;
   }
   it->second.osd = osd;
   it->second.layer = text_osd_layer(osd);

@@ -144,6 +144,9 @@ current gaps to SLRR_rev code are in
   `b907b6b` deleted it. A Windows CI workflow only ever existed on the PR #3
   branch. The probes are the only automated checks: `--probe` and
   `--probe-gc` need a game root, `--probe-dyno` and `--probe-pacejka` do not.
+  `tests/*.cpp` are standalone suites that link the `slrr_host` objects;
+  `scripts/run_native_io_tests.ps1` builds and runs one of them
+  (`-Test test_save_io`, `-BaselineRef <rev>` for a before/after pair).
 - Ctrl+F12 opens the ImGui debug panel (`src/render/debug_overlay.cpp:handle_message`).
   Its FPS readout is `1000 / cpuTimeFrame`, and VSync defaults to on
   (`src/render/debug_overlay.hpp:RenderOptions`).
@@ -341,6 +344,21 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   after 10 s out of reach, pushed beyond its 64 m cell) returns to its map
   pose. The GroundRef a prop is parented to comes from the shell that woke it:
   each city visit builds a new GroundRef while the prop map stays cached.
+- The road model of a map is a separate file, not part of the ground mesh:
+  the ground's own payload names it (`maps\city\meshes\city.scm,maps\city\ai\city.trc`),
+  and `maps/city/ai/city.trc` is the only TRC in the retail install. Since U2-A
+  `src/resources/race_runtime.cpp` parses it into `RoadRoutes`, keyed by the
+  ground's `incarnation`, `RpkIndex::generation()`, the game root and
+  `type_id`; a payload that names two different TRCs is ambiguous and yields no
+  graph instead of a guess. `city.trc` gives 928 directed edges, 271 crossings
+  and 1146 `trlight` signal heads, in metres. Two blocks are served from it:
+  the route queries (`findRoute`, `getRouteLength` ×2, `getRoutePos`,
+  `getRouteDist`, `getStartDirection`, `alignToRoad`, `getNearestCross`) and,
+  from U2-B on, traffic lanes (`traffic_edges()` plus the 64 m projection grid).
+  Route lengths are metres; `getRoutePos(t)` and `getRouteDist(pos)` are
+  fractions of that length, per the recovered native bodies at
+  0x00483B30/0x00483C20. Maps without a TRC answer "no route" — there is no
+  fallback map.
 - `PhysicsRef.setStatic(0)` releases a script body to the free-body solver
   (`src/resources/part_runtime.cpp:advance_free_bodies`), which reuses the
   loose-body car and scene contacts and publishes pose and velocities.
@@ -510,20 +528,34 @@ signatures, 331 have a body, 4 are explicit no-ops and 41 are missing.
 
 | Missing family | Count | Blocks |
 | --- | ---: | --- |
-| `GroundRef` routes, traffic, water | 19 | Navigation, traffic |
+| `GroundRef` traffic, water | 11 | Traffic, water limits (routes: 8 done in U2-A) |
 | `PhysicsRef` | 7 | `create`, `createSphere`, `setStatic`, `getVel` ×2, `getAngVel`, `getOri`: world physics objects |
 | `ParticleSystem` | 9 | Smoke, sparks and other effects |
 | `Painter` | 3 | Paint booth: `doPaint`, `paintPart`, `xPaint` |
 | Leftovers (`Welder`) | 3 | No stock caller found |
 
 Explicit no-ops: `System.analyze` ×3 (faithful) and
-`GameRef.setActiveCollision` (a real gap). Two host-only no-ops outside the
-stock table: `Player.<init>` and `LoadingScreen.<init>`.
+`GameRef.setActiveCollision` (a real gap). One host-only no-op outside the
+stock table: `LoadingScreen.<init>`. `Player.<init>` used to be one too; since
+U1 it runs the stock TREE.
+
+`new Player()` reaches the constructor through
+`tree_eval new_init → TreeHost::tree_call_by_name → Jvm::invoke_by_name`, **not**
+through `Jvm::invoke`, and `invoke_by_name` resolves a host binding before the
+TREE. So the old no-op never produced an "invoke miss": it allocated the object
+and skipped the body. `java.game.GameLogic.<init>` does this twice during
+`Init` (same `GameLogic` receiver, two `new Player()` sites); `GameLogic.player`
+keeps the first object. With the no-op bound, that player came out without
+`parts`, `carlot` or `osd`; `Garage.enter` does not create a player of its own,
+it reuses `GameLogic.player`. Tracing `Jvm::invoke` for this event shows 0 hits
+even though the call happens — that is how the first U1 report mis-read it
+(corrected in `UPSTREAM_INTEGRATION.md`, "Actual lifecycle").
 
 Partial bodies that matter for upcoming work: `GameRef.setState` applies to
-cars only, `GroundRef.getNearestCross` returns null,
-`RenderRef.plotRoute` returns 0, `GroundRef.setFog` stores values nobody
-reads, and `Part.setSfxLoopParams` stores values without applying them.
+cars only, `RenderRef.plotRoute` returns 0, `GroundRef.setFog` stores values
+nobody reads, and `Part.setSfxLoopParams` stores values without applying them.
+`GroundRef.getNearestCross` is no longer among them: since U2-A it answers from
+the map's road graph (and boxes the approximation when the map has none).
 
 ## 9. Where the documentation disagrees with the code
 

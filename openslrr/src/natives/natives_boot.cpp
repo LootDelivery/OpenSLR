@@ -3,6 +3,7 @@
 #include "slrr/script_events.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/race_runtime.hpp"
 #include "natives_internal.hpp"
 
 #include "slrr/host_cursor.hpp"
@@ -22,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -45,25 +47,50 @@ std::string file_name_of(Object* file) {
   return it->second.v.o->str;
 }
 
-// Game-relative path. Rejects anything that climbs out of the game root.
-std::filesystem::path under_game(const std::string& root, std::string rel) {
+namespace {
+// Shared physical containment for file targets and enumeration directories.
+// Only a directory listing may address the game root itself.
+std::filesystem::path resolve_under_game(const std::string& root, std::string rel,
+                                        bool allow_root) {
   namespace fs = std::filesystem;
-  if (root.empty() || rel.empty()) return {};
+  if (root.empty() || rel.find('\0') != std::string::npos) return {};
+  if (rel.empty() && !allow_root) return {};
   for (char& c : rel)
     if (c == '/') c = '\\';
-  if (rel.find("..") != std::string::npos) return {};
-  if (rel.size() > 1 && rel[1] == ':') return {};
+  // Drive names and NTFS alternate streams are not game-relative files.
+  if (rel.find(':') != std::string::npos) return {};
   while (!rel.empty() && (rel.front() == '\\' || rel.front() == '/'))
     rel.erase(rel.begin());
+  if (rel.empty()) {
+    if (!allow_root) return {};
+    rel = ".";
+  }
+  const fs::path relative(rel);
+  for (const auto& component : relative)
+    if (component == "..") return {};
   std::error_code ec;
   const fs::path base = fs::weakly_canonical(fs::path(root), ec);
   if (ec) return {};
-  const fs::path full = fs::weakly_canonical(base / rel, ec);
-  const fs::path check = ec ? (base / rel).lexically_normal() : full;
-  const std::string bs = base.string();
-  const std::string cs = check.string();
-  if (cs.size() < bs.size() || cs.compare(0, bs.size(), bs) != 0) return {};
+  const fs::path check = fs::weakly_canonical(base / relative, ec);
+  if (ec) return {};
+  // Compare complete components, not a string prefix (game-other is not
+  // under game). Canonicalization resolves junctions/symlinks first.
+  auto parent = base.begin();
+  auto child = check.begin();
+  for (; parent != base.end(); ++parent, ++child) {
+    if (child == check.end() || _wcsicmp(parent->c_str(), child->c_str()) != 0)
+      return {};
+  }
+  // In particular, File.delete(".") must never address the game root.
+  if (child == check.end() && !allow_root) return {};
   return check;
+}
+} // namespace
+
+// Game-relative descendant path. Parent components and resolved escapes are
+// rejected, but legal file names containing two dots are not traversal.
+std::filesystem::path under_game(const std::string& root, std::string rel) {
+  return resolve_under_game(root, std::move(rel), false);
 }
 
 void wr_u32(std::vector<uint8_t>& b, uint32_t v) {
@@ -166,9 +193,8 @@ void findfile_start(Jvm& jvm, Object* self, const std::string& pattern,
 
   namespace fs = std::filesystem;
   std::error_code ec;
-  fs::path base(jvm.game_root());
-  if (!dir.empty()) base /= dir;
-  if (!fs::is_directory(base, ec)) {
+  const fs::path base = resolve_under_game(jvm.game_root(), dir, true);
+  if (base.empty() || !fs::is_directory(base, ec)) {
     std::printf("[native] FindFile.first(%s, %d) -> 0 (no dir)\n",
                 pattern.c_str(), flags);
     return;
@@ -176,11 +202,15 @@ void findfile_start(Jvm& jvm, Object* self, const std::string& pattern,
   for (fs::directory_iterator it(base, ec), end; !ec && it != end;
        it.increment(ec)) {
     std::error_code ec2;
-    const bool is_dir = it->is_directory(ec2);
-    if (flags == 1 && is_dir) continue;   // FILES_ONLY
-    if (flags == 2 && !is_dir) continue;  // DIRS_ONLY
     const std::string name = it->path().filename().string();
     if (name == "." || name == "..") continue;
+    // Do not expose an escaping junction/symlink as a usable child either.
+    const auto child = dir.empty() ? name : dir + "\\" + name;
+    if (under_game(jvm.game_root(), child).empty()) continue;
+    const bool is_dir = it->is_directory(ec2);
+    if (ec2) continue;
+    if (flags == 1 && is_dir) continue;   // FILES_ONLY
+    if (flags == 2 && !is_dir) continue;  // DIRS_ONLY
     if (!findfile_glob(name, mask)) continue;
     self->find_entries.push_back(name);
   }
@@ -574,6 +604,7 @@ void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   register_resref_natives(jvm, rpk, sections);
   register_script_natives(jvm, rpk, sections);
   register_part_natives(jvm,rpk);
+  register_race_natives(jvm, rpk, sections);
   install_osd_script_hover(jvm);
 
   // Statics

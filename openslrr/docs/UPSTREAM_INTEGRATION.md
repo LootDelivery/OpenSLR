@@ -1,0 +1,348 @@
+# UPSTREAM INTEGRATION — EliasFD3S/openslrr → OpenSLR
+
+Registry of upstream changes that were ported into this tree, the ones that were
+deliberately deferred, and the ones that were rejected with a reason.
+
+- Base commit: `947d11bf843ea4dad5e7267ff3f8dda4babc1e5a` (L2).
+- Upstream source: `https://github.com/EliasFD3S/openslrr`, `main` at
+  `5b002e422259e9e7a9f7b55d46bb52c51d8f2b5b`.
+- Branch: `upstream-gameplay-sync`.
+
+The two repositories have **no merge base** (`git merge-base` finds nothing),
+so nothing here is a cherry-pick: every entry was re-implemented against our
+own code, or rejected because our implementation solves the problem
+differently. Upstream graphics (`LightSource`/`PointLight`/`SpotLight`, bgfx
+passes, shadows, AO, HDR, the `patch/` tree) is out of scope and never ported.
+
+Columns follow the integration protocol: upstream PR, upstream files, our
+files, problem, adaptation, tests, result, status.
+
+## U1-A. Player constructor (#228)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#228](https://github.com/EliasFD3S/openslrr/pull/228), commit `48b19c63` "#226 Run Player's constructor so the boot player has a car lot" |
+| Upstream files | `src/natives/natives_io.cpp` (3-line removal), `docs/KNOWLEDGE_BASE.md` |
+| Our files | `src/natives/natives_io.cpp`, `docs/KNOWLEDGE_BASE.md` |
+| Problem | `java.game.Player.<init>()V` was registered as `native_noop`. Our VM resolves a host binding **before** the TREE (`Jvm::invoke_by_name`, `native_has_alias` check), so every `new Player()` in stock Java allocated the object and skipped the constructor body: it had no `parts`, `carlot` or `osd`. `java.game.GameLogic.<init>` performs that `new Player()` twice during `Init`, and `Garage.enter` reuses the resulting `GameLogic.player`. |
+| Adaptation | Same single change: the registration is gone and the stock TREE runs. No host-side substitute was added, because the Java path already constructs the object. The comment on the removed block now records **why** the binding must not come back. |
+| Tests | See the matrix below. |
+| Result | `--spawn-car`: crash 5/5 before, 5/5 clean after; the car spawns with 88 parts, the garage renders and the run reaches the map. `--auto-new` and the plain boot are unchanged. The crash itself was the empty-layer dereference described in U1.1, not the missing constructor; see "Actual lifecycle" below. |
+| Status | **Ported** |
+
+### Actual lifecycle (reconciled in U1.2)
+
+The first version of this entry said the constructor is "reached only from
+`Garage.enter`" and that "no boot path invokes it during `start_init`". That was
+wrong, and U1.2 corrected it with instrumentation that prints the allocating
+site, the creating method, the object address and the resolution result:
+
+| Event | Phase | Caller | Stub bound | Stub removed |
+|---|---|---|---|---|
+| allocate `Player` #1 | `Init` | `java.game.GameLogic.<init>` | yes | yes |
+| `Player.<init>()V` #1 | `Init` | `tree_eval` `new_init` → `tree_call_by_name` → `invoke_by_name` | resolves to the host no-op, **body skipped** | TREE body runs |
+| allocate `Player` #2 | `Init` | `java.game.GameLogic.<init>` (same object, two `new Player()` sites) | yes | yes |
+| `Player.<init>()V` #2 | `Init` | same path | host no-op, **body skipped** | TREE body runs |
+| `GameLogic.player` | after `Init` | static field | first of the two objects | first of the two objects |
+| garage entry | `--spawn-car` / `Garage.enter` | reuses `GameLogic.player`; **no** `new Player()` | — | — |
+
+Measured with `[u12]` probes (temporary, not shipped) on `--game --window`:
+2 allocations and 2 constructor invocations before `[boot] after Init`, all from
+`java.game.GameLogic.<init>` with the same receiver; with the binding restored
+both invocations report `host=BINDING` and the player comes out with
+`osd == null` and no `parts` field, without it both report `none->TREE` and the
+constructor creates the `Osd` (two `GPS_Frame.ptx` plates exist afterwards).
+
+Why the original trace missed it: `[u1-call]` hooked `Jvm::invoke`, but
+`new Player()` never enters that function — the `new_init` opcode calls
+`TreeHost::tree_call_by_name`, which is `Jvm::invoke_by_name`. Across a full
+cold boot the `Jvm::invoke` probe records **0** `Player.<init>` calls while the
+`invoke_by_name` probe records **2** — the "zero calls before the garage"
+reading in this entry came from the hook that cannot see them, not from a
+property of the game.
+
+So the stub did not guard a "miss during `start_init`" (the constructor tree
+runs to completion in both cases — with the binding it simply never starts).
+It silently disabled the stock constructor at **both** sites, which is what
+left `GameLogic.player` without `parts`/`carlot`/`osd`.
+
+Consequence for the garage crash — measured, and not what this entry first
+claimed:
+
+| Tree | Binding | Result on `--spawn-car` |
+|---|---|---|
+| base `947d11bf` | stub | `0xC0000005` in `LibBgfxBackend::draw_osd` (symbolised from the linker map of that build: `draw_osd+0x48b`), right after the section-change `[bgfx] reset` |
+| `a7f0f39e` | stub re-bound (`SLRR_U12_NOOP`, temporary) | no crash, car spawns, but `GameLogic.player.osd == null` and no `parts` field |
+| `a7f0f39e` with U1.1 fix 2 disabled | stub re-bound | `0xC0000005` in `draw_osd` (`+0x54f`) at the same boot point |
+
+So the stub did not crash the garage by leaving the player incomplete: with the
+stub bound, the first frame after the section change had nothing to draw and
+`draw_osd` called `layers.front()` on an empty vector. Removing the binding
+made the untouched HUD widgets visible by the old default, which kept the layer
+list non-empty — the crash disappeared without the defect being fixed, and the
+same visible-by-default widgets are what U1.1 then had to hide. Fix 2 of U1.1
+is the actual repair; U1.1 fix 1 is why the HUD plates no longer reach the
+menu.
+
+### Verification
+
+Measured with a player-field probe, `--game --window` (the invoke trace used
+at the time hooked `Jvm::invoke` and never saw this call — see "Actual
+lifecycle"):
+
+| Scenario | Before (stub bound) | After (TREE runs) |
+|---|---|---|
+| boot → `MainMenu` | `after Init section=java.game.MainMenu`, exit 10 on `--auto-new` | identical |
+| `--auto-new` | builds the car, then `StringRequesterDialog no pump` → `CMD_NEW→Garage … ok=0` | identical (host dialog pump gap, not this fix) |
+| `--spawn-car Maz3_2005.rpk:0x6` | `0xC0000005` while entering the garage, 5/5 runs | garage entered, `spawned … parts=88`, 5/5 runs |
+| `--spawn-car … --bench-map ValoCity --bench-drive 3` | crash before the map | `[bench] start map java.game.ValoCity_Track`, `drive done`, exit 0 |
+| `player.parts/carlot/osd` | 0/0/0 after `Garage.enter` | 1/1/1 (constructor creates `Inventory`, `CarLot`, `Osd`, `GroundRef carlot`) |
+| `GameLogic.changeActiveSection` | crash inside the section transition | completes; `[section] actual=java.game.Garage` |
+
+No new `[jvm] invoke miss` lines appear: the constructor tree of the stock
+`Player.class` (Build 940, `TUFA` blob) calls only natives our host already
+binds (`Player/Inventory/CarLot/GroundRef/Osd/RenderRef/ResourceRef` →
+`newNative`/`createNativeInstance`, `ResourceRef.set`, `Osd.setFlags`,
+`Viewport.get*`, `Group.*`, `Vector.*`).
+
+Also verified: `Player.<init>` is registered only in `natives_io.cpp`; no other
+native group re-registers it.
+
+## U1-B1. File safety (#117)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#117](https://github.com/EliasFD3S/openslrr/pull/117), commit `5a51a4d7` "Protect file deletion and keep SDAT save fields aligned" |
+| Upstream files | `src/natives/natives_boot.cpp` (`under_game`), `src/natives/natives_io.cpp` (`File.delete`, `File.write(ResourceRef)`), `src/natives/natives_internal.hpp`, `tests/test_save_io.cpp`, `scripts/run_save_io_tests.ps1` |
+| Our files | same three sources, `tests/test_save_io.cpp`, `scripts/run_native_io_tests.ps1` |
+| Problem | `under_game()` rejected any path containing the two characters `..` and then compared a **string prefix**, so the game root itself passed as a descendant, legal names like `J..R-1` were refused, and `FindFile` did not canonicalize at all (a `..` pattern enumerated outside the root). `File.delete` used `fs::remove_all`, so `delete(".")` erased the install. `File.write(ResourceRef)` returned before writing when a save resource had no pack, which shifted every following field in the stream. |
+| Adaptation | `resolve_under_game(root, rel, allow_root)`: rejects NUL, `:`, and `..` components; resolves junctions with `weakly_canonical`; compares path **components** case-insensitively (`_wcsicmp`). `under_game()` is the `allow_root=false` wrapper and stays the only exported entry. `FindFile` uses `allow_root=true` (a listing may address the root) and skips children that resolve outside. `File.delete` is `fs::remove`. A packless SDAT resource writes a null id, keeps the stream aligned, still returns 0, and counts in `degraded_resources` (logged by `File.close`). |
+| Tests | `tests/test_save_io.cpp` — 11 cases: root deletion/opening, non-recursive directory delete, stock delete-then-directory, dotted career names (`J..R-1`, `Mr...-1`), traversal rejection, SDAT alignment for unknown/packless/blob resources, valid + null resource roundtrip, raw-file id preservation, and `FindFile` root escape. Run with `powershell -File scripts/run_native_io_tests.ps1 [-BaselineRef 947d11bf]`. |
+| Result | `-BaselineRef 947d11bf`: **3 passed, 8 failed** (root deleted, nonempty dirs erased, dotted names refused, three streams misaligned, `FindFile.first("..\*")` returned 4 entries from outside the root). After: **11 passed, 0 failed**. |
+| Status | **Ported** |
+
+`under_game` is called from `natives_io.cpp` (delete/exists/copy/move/open),
+`natives_resref.cpp` and `natives_script.cpp`; all of them now reject the root
+itself and accept dotted file names. `natives_resref.cpp` keeps its own
+"open a save path" call site unchanged — the containment rule is shared, the
+callers are not.
+
+## U1-B2. Save persistence (#118)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#118](https://github.com/EliasFD3S/openslrr/pull/118), commit `7c9392a7` "Publish saves safely and preserve string and slot damage sentinels" |
+| Upstream files | `src/natives/natives_io.cpp` (`publish_save`, `transfer_pending_save`, `File.close/exists/copy/move/write(String)`), `src/resources/part_runtime.cpp` (`getSlotDamage`), `tests/save_io_fixture.hpp`, `tests/test_save_persistence.cpp` |
+| Our files | same two sources, `tests/save_io_fixture.hpp`, `tests/test_save_persistence.cpp` |
+| Problem | `File.close` truncated the destination with `ofstream` and only then wrote, so a failed or partial write destroyed the previous save; nothing checked `flush`/`close`. The `g_unflushed_saves` buffer that keeps the newest save in memory was invisible to `File.exists` and bypassed by `copy`/`move`, so a caller saw a stale disk file or lost the newest bytes. `File.write(String)` mapped an empty string and `null` to the same length 0. `getSlotDamage` returned an empty string for an undamaged slot, which `Part.save` then wrote as if it were a damage record. |
+| Adaptation | `publish_save()` writes a sibling `*.openslrr-save.<pid>.<n>.tmp` with `CreateFileW`, checks every `WriteFile`, `FlushFileBuffers`, `CloseHandle`, then publishes with `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` and deletes the staging file on any failure; the old destination survives until that rename. `File.close` uses it, keeps the buffer in `g_unflushed_saves` on failure and logs `error=<Win32>`. `transfer_pending_save()` makes `copy`/`move` publish the pending bytes; a successful disk copy/move drops an older pending destination. `File.exists` counts a pending buffer. `write(String)`: `null` is length 0, `""` is length 1 + NUL. `getSlotDamage` returns `null` for an undamaged or out-of-range slot and allocates nothing. Save format is untouched: same SDAT envelope, same fields. |
+| Tests | `tests/test_save_persistence.cpp` — 10 cases: locked replacement keeps disk and the newest memory copy, pending visible without a disk file, copy/move use pending bytes, failed copy preserves both sides, successful copy/move discard an older pending destination, empty vs null string wire lengths, undamaged/invalid slots return null without allocating, damage roundtrip and clearing. |
+| Result | `-BaselineRef 947d11bf`: **4 passed, 6 failed**. After: **10 passed, 0 failed**; `test_save_io` stays 11/0 and the garage boot is unchanged. |
+| Status | **Ported** |
+
+The staging file lives next to the destination because a save may sit on
+another volume; `MoveFileExW` is then a same-directory rename. `File.close`
+still reports `ok=0` to the caller exactly as before — the Java API is
+unchanged, only the on-disk outcome is safer.
+
+## U1-C1. TUFA validation (#147)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#147](https://github.com/EliasFD3S/openslrr/pull/147), commit `f8434a07` "Validate TUFA counts, constants and local slots before execution" |
+| Upstream files | `src/jvm/tufa.cpp`, `include/slrr/tufa.hpp`, `src/jvm/tree_eval.cpp`, `src/jvm/jvm.cpp`, `tests/test_tufa_validation.cpp` |
+| Our files | same four sources, `tests/test_tufa_validation.cpp` (verbatim) |
+| Problem | Every TUFA count was trusted: `reserve(count)` ran before the first truncation check, so a damaged `CONS`/`FILD`/`MTHD`/`TREE`/`CLSS` count attempted a multi-gigabyte allocation. Constant-bearing nodes were resolved lazily during execution, so a bad pool index only failed mid-run, and `tufa_parse` could publish a partial class list from a concatenated container whose later blob was damaged. Local slots (`op 1/2`) and `method.locals` were unbounded, which reached `locals.resize(imm + 1)`. |
+| Adaptation | Same checks, in the same places. Additionally: `tufa_parse` clears the output on failure (all-or-nothing container), and `tufa_load_file` uses `ios::ate` so a failed `tellg` cannot produce a huge `size_t`, and is wrapped so an allocation failure is reported instead of escaping. `enrich_static_fields` catches a throwing static initializer, logs `[jvm] static initializer <owner>.<field>: <error>` and skips it: one bad `<clinit>` must not abort the process. Parser compatibility is unchanged — `reference()` still accepts bare `Utf8`/`NameAndType` carriers. |
+| Tests | `tests/test_tufa_validation.cpp`: compiles `probe.Validation` with the in-repo compiler, then corrupts one count at a time (`CONS`, `FILD`, `MTHD`, `TREE`, interface count, node count, method locals, declare slot 65536/`0x7fffffff`/`0xffffffff`, static `String`/`RID` constant with `UINT32_MAX`), plus a trailing-byte container and a runtime `method.locals = UINT32_MAX`. |
+| Result | `-BaselineRef 947d11bf -BaselineSources src/jvm/tufa,src/jvm/tree_eval,src/jvm/jvm`: **crash, exit `0xC0000409`, 0 assertions printed**. After: **exit 0, 14 `PASS` lines**. Boot, garage and the ValoCity drive produce byte-identical `[jvm]` diagnostics before and after, so no shipped class is rejected. |
+| Status | **Ported** |
+
+`kTufaMaxLocals = 65536` is the only new limit; the stock corpus never comes
+close (`Player.<init>` uses a handful of slots, and the largest stock method is
+far below it).
+
+## U1-C2. Script argument and array safety (#151)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#151](https://github.com/EliasFD3S/openslrr/pull/151), commit `4c1b8e6` "Check script arguments and bound array growth" (merge `6fffbe6c`) |
+| Upstream files | `src/natives/natives_internal.hpp`, `src/jvm/tree_eval.cpp`, `src/natives/natives_{io,lang,osd,renderref,script}.cpp`, `tests/test_script_safety.cpp` |
+| Our files | same six sources, `tests/test_script_safety.cpp` (verbatim) |
+| Problem | Natives read `args[i].v.i` / `args[i].v.o` without checking size or tag, so a short or mistagged call read the union as an integer (an access violation for `v.o`, garbage for `v.i`). `tree_eval` grew script arrays to any index and clamped `new T[n]` at `1<<20` only for allocation, not for `a[i] = x`. |
+| Adaptation | `native_arg_number/native_arg_integer/native_arg_object` in `natives_internal.hpp` with documented fallbacks (missing, boxed object, NaN → fallback; float → clamped to `INT32_MIN..MAX`). Applied at the six call sites upstream fixed: `System.exit`, `String.timeToString` ×2, `Camera.create/activate` priority, `Text.setPos`, `RenderRef.setMatrix` field reads (now accepts an `Int` field and rejects NaN), `OptionsDialog.get/setRendererOption`, `GfxEngine.displayModeName/changeVideoMode`. `store_array_slot()` in `tree_eval` bounds every array store to `[0, 1<<20)`; both the direct store and the `a[i] += x` write-back use it, and the `new T[n]` clamp shares the constant. Out-of-range stores are ignored and reported once, so a broken script cannot reallocate the heap array. |
+| Tests | `tests/test_script_safety.cpp`: helper fallbacks, empty/short/boxed/NaN arguments through the six native families, array stores at `-1`, `1<<20`, `INT32_MAX` (ignored) and `(1<<20)-1` (grows to the limit), plus direct and compound store paths compiled by the in-repo compiler. |
+| Result | `-BaselineRef 947d11bf` with the six sources reverted: **crash `0xC0000005`, no assertion reached**. After: **exit 0, PASS**. ValoCity drive unchanged (13 `[jvm]` diagnostics, `drive done`). |
+| Status | **Ported** |
+
+Deliberate deviation: upstream clamps `a[i] = x` by resizing to the index; we
+keep that behaviour inside the window and drop anything outside it. Stock
+scripts never address a slot above the window, so the observable behaviour is
+unchanged.
+
+## U1-D. Physics fault containment (#166)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#166](https://github.com/EliasFD3S/openslrr/pull/166), commit `2b3d6659` "Contain rigid-body failures and reject non-finite physics inputs" |
+| Upstream files | `src/resources/part_runtime.cpp`, `src/resources/gameref.cpp`, `tests/test_physics_recovery.cpp` |
+| Our files | same two sources, `tests/test_physics_recovery.cpp` (verbatim) |
+| Problem | One malformed body could take the process down or corrupt its neighbours: `RigidBody::configure` threw out of `dynamics_configure`/`part_add_dynamic_native`/`detach_panel`; a bad `attach` left the chassis body configured with the previous bounds and the `physics_ready` flag set; a non-finite frame from a loose body reached `local_matrix`; a throwing free-body step left the carrier body modified; `PhysicsRef.setMatrix` accepted NaN. |
+| Adaptation | Same structure, applied to our code: `initialize_loose_body()` configures a **copy** and commits it only on success, so a rejected type is remembered in `invalid_dynamic_types` and never retried; `dynamics_configure` configures and frames a candidate, then swaps it in, marking the chassis suspended + fault-reported once on failure; `detach_panel` erases the panel when its body cannot be configured; `advance_loose_panels` throws inside a per-panel `try` that restores the carrier body, settles the node and destroys only that part; `advance_free_bodies` keeps the published pose, restores the carrier body and disables that PhysicsRef; non-finite frames are rejected at `gameref_set_matrix` and after every integration step. Strict validation is kept — nothing is skipped or clamped behind a "physics off" switch. |
+| Tests | `tests/test_physics_recovery.cpp`: non-finite `GameRef` pose rejected atomically; a malformed free body disables itself while a healthy one keeps falling; a throwing native entry does not stop the frame or the next tick; `PhysicsRef` creation/`start`/`setRadius` recover after a rejected configure; overflow in integration is contained; a failed `part_add_dynamic_native` cleans its partial state and does not retry. |
+| Result | `-BaselineRef 947d11bf -BaselineSources src/resources/part_runtime,src/resources/gameref`: **0 passed, 8 failed** (three of them as uncaught `invalid rigid frame` / `invalid rigid body mass/bounds`). After: **8 passed, 0 failed**. ValoCity drive: exit 0, `drive done`, the same 6 `[phys]` lines as before. |
+| Status | **Ported** (one adaptation) |
+
+Adaptation detail: upstream rolls back a list of `ContactVehicle` carriers
+(`advance_free_bodies(vehicles, …)`, PR #205/#48). Our loop still takes the
+single `controlled_vehicle`, so it backs up and restores that one body. The
+multi-car rollback arrives with the vehicle-contact port (see the U1-E plan):
+the `try`/restore shape is already the one that port needs.
+
+## U1-F1. Garage steering pose (#137)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#137](https://github.com/EliasFD3S/openslrr/pull/137), commit `996b3ab1` "Recompute parked wheel poses immediately on setsteer" |
+| Upstream files | `src/resources/part_runtime.cpp` |
+| Our files | same |
+| Problem | `setsteer` (sent by `Garage.java` on entry, and on mechanic-mode changes) updated `steering_input`/`steering_request`, then placed the attached parts through the existing dynamic hub matrices. The steering wheel read the new scalar while the wheels kept the previous pose until some later operation recomputed the assembly. |
+| Adaptation | Identical: when `rec->dynamic_frames` is already set, `setsteer` calls `pose_wheels()` and returns; before the frames exist the previous rest-placement path runs unchanged. `pose_wheels` rebuilds the steered/rolling frames from the current suspension state and places/relinks the assembly. It does not integrate physics, move the chassis, repark the car or reset wheel spin — this is pose correctness, not vehicle dynamics. A forward declaration was needed because `pose_wheels` is defined below `part_command`. |
+| Tests | Upstream ships no automated assembled-vehicle test for this and neither do we: a fixture would need a full chassis + suspension + wheel tree. Runtime smoke: garage entry (`spawned … parts=88`) and the ValoCity drive (`drive done`, exit 0) are unchanged; 13 steering lines on the garage entry. Manual check remains: brake/steer visible when the garage opens, before touching any part, and normal driving steering afterwards. |
+| Result | Compiles; garage and drive unchanged. Pose difference is not asserted automatically — recorded as an open manual check, not as verified. |
+| Status | **Ported** (manual verification pending) |
+
+## U1-F2. Live GameRef lookup index (#154)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#154](https://github.com/EliasFD3S/openslrr/pull/154), commit `44c45505` "Index live GameRefs and reuse controlled vehicle lookup" |
+| Upstream files | `src/resources/gameref.cpp`, `src/resources/part_runtime.cpp`, `tests/test_live_lookup.cpp` |
+| Our files | same two sources, `tests/test_live_lookup.cpp` (verbatim) |
+| Problem | `gameref_find_live()` scanned every `g_refs` entry, on every lookup, and `gameref_make_live()` called it in its ID-skip loop; `advance_free_bodies()` re-resolved the controlled vehicle for every simulated body. |
+| Adaptation | `g_live_refs` (`id → GameRefState*`), maintained on make-live, canonical removal, alias removal and `gameref_clear()`. **Ownership rules are unchanged**: `g_next_live` is a `uint32_t` starting at `0x70000000`, strictly monotonic, IDs are never recycled after `gameref_remove`, and the allocator now refuses (returns 0) instead of overflowing past `INT32_MAX`. The old `while (gameref_find_live(...)) ++g_next_live` skip loop is gone because an ID is only handed out once, so there is nothing to skip. `chassis`/`vehicle` are resolved once per free-body pass. |
+| Tests | `tests/test_live_lookup.cpp`: live ID assignment, rehash stability, alias detach/removal, canonical removal, key reuse and `gameref_clear()`, plus a 100 000-lookup timing line (informational). |
+| Result | Correctness: **PASS before and after**. Lookup cost for 100 000 lookups over 8 000 nodes: **2 203 592 µs → 608 µs** (~3600×). ValoCity drive unchanged (exit 0, `drive done`, 9 `[phys]` lines). |
+| Status | **Ported** |
+
+The contract in `KNOWLEDGE_BASE.md`/L1.1 ("monotonic, no reuse of freed ids,
+reset only on a full registry reset") is preserved and now also enforced
+against `INT32_MAX` overflow.
+
+## U1.1. Minimap frame lifecycle (follow-up, no upstream PR)
+
+| Field | Content |
+|---|---|
+| Trigger | After U1-A a frame plate appeared in the left bottom corner of the main menu on a cold start, before `947d11bf` had none. |
+| Our files | `src/ui/osd_registry.cpp`, `include/slrr/osd_registry.hpp`, `src/render/slrr_font.cpp`, `src/render/bgfx_osd.cpp` |
+| Bisect | Base `947d11bf` … `038f65b3`, every revision rebuilt from source: 329 widgets and no `GPS_Frame.ptx` widget at the base, 331 widgets with two visible `GPS_Frame.ptx` plates from `8ba945e5` on. `038f65b3` is documentation only. |
+| Cause | The stock `Player` constructor builds its HUD `Osd` (the `GPS_Frame.ptx` bezel plate) but never shows it. The registry treated "widget exists" as "widget visible", and `restore_other_osds()` additionally revived every OSD that had no `_host_hidden` flag — including owners that had never been shown. |
+| Fix 1 (visibility) | `g_shown_owners` plus `osd_owner_shown()`: a widget is created hidden unless its owner was shown (`osd_set_owner_visible`, `osd_show_group`, `osd_show_only_group`); `restore_other_osds()` only restores owners that were shown once; `slrr_text_set_osd()` applies the same rule to OSD text; `osd_clear_widgets()` clears the set. |
+| Fix 2 (empty layer list) | `draw_osd` collected the visible layers and then called `layers.front()`. A frame where a section has built its OSD but not shown it yet leaves the list empty: `0xC0000005` inside `draw_osd`. Reproduced with `--spawn-car` (symbolised from the linker map: `draw_osd+0x544`) and now returns early instead. |
+| Fix 3 (HUD plate order) | The bezel plate went to `kPlateView` (69) like every other background plate, but the map is an active camera with a small viewport and is composited in `kPreviewPresent` (70), so the map covered its own frame. Plates owned by the vehicle HUD owner now go to `kOsdView` (71); all other plates keep the catalogue order. |
+| Tests | Cold boot: no `GPS_Frame` widget visible in `MainMenu` (2 created, 0 visible). Garage: 0 visible. Street (`--bench-map ValoCity --bench-drive 3`): the active player's plate visible and drawn over the map. Native suites unchanged (11/0, 10/0, 14 PASS, PASS, 8/0, 2 PASS). |
+| Status | **Ported** (`a7f0f39e`) |
+
+### OSD ownership guarantees (U1.2 audit)
+
+- Where the set is written: `osd_set_owner_visible(true)` (`Osd.show`,
+  `Viewport.activate`), `osd_show_group`, `osd_show_only_group` (both iterate
+  existing widgets) and `restore_other_osds` (re-inserts an owner it restored).
+  It is erased by `osd_set_owner_visible(false)` — which is what
+  `Viewport.destroy`, `Viewport.deactivate` and `Osd.hide` reach — and by
+  `osd_clear_widgets()`.
+- Widgets are never erased individually (retired ones are only marked `dead`),
+  so an owner that owns a widget is kept alive by
+  `osd_visit_gc_roots()` → `visit(w.owner)`. The only wholesale reset of the
+  registry is `osd_clear_widgets()` in `boot_game` before the intros (it clears
+  the set too). Section transitions deliberately do not clear it: the Java side
+  hides the outgoing OSD (erase) and shows the next one on entry (insert).
+- One case has no widget edge: `osd_set_owner_visible(true)` can run for an OSD
+  before any widget or text is created on it. Measured on the shipped build: 2
+  such activations on a cold boot and 3 across garage → street. Those owners
+  were the only members of the set without a native edge, so
+  `osd_visit_gc_roots()` now visits `g_shown_owners` directly. Without it the
+  collector could free such an address while the set still claimed "shown", and
+  a later allocation reusing that address would read back as already shown.
+  With it, `g_shown_owners` only ever contains live script objects, which is
+  also why address reuse cannot inherit the flag.
+- `restore_other_osds()` cannot show a never-shown owner: its collection loop
+  skips `!osd_owner_shown(w.owner)`. Before U1.1 it revived every OSD without a
+  `_host_hidden` flag, which is how the two `Player` HUD plates reached the
+  main menu.
+
+Still **not verified** (recorded as unexecuted, not as working):
+
+- Garage → MainMenu after entering the garage, Street → Garage, and
+  Garage → MainMenu → Garage. The headless harness has no input pump for the
+  menu commands: `--auto-cmd mainmenu|street` is dispatched before the garage
+  finishes loading, and `--auto-new` stops at the `StringRequesterDialog` host
+  gap. What is covered instead is one dump per section owned by the section
+  machine (`MainMenu` 0/2 visible frame plates, `Garage` 0/2, `Street` 1/2).
+- Career reload through the menu (same dialog gap).
+
+
+## U2. Roads, traffic and race bots (#180)
+
+Upstream PR #180 ("Restore shared roads, traffic and race bot driving"), merge
+commit `0a44cf44`, parent base `3f1110ef`. Ported in six blocks on
+`upstream-gameplay-sync` over `1539c625`. Graphics from the same PR (debug
+overlay, frame profiler, route ribbons, signal lenses, bloom/glow, draw passes)
+is **not** ported; `RenderRef.plotRoute` keeps its Java signature and its
+geometry contract but draws nothing extra.
+
+The semantic reference is the recovered engine in `slrr-reverse/`
+(SLRR_rev v221, `engine/Runtime/Resources/GroundRef_route.cpp` and
+`GroundRef_traffic.cpp`), not upstream's re-derivation: #180's own header says
+its graph is a "sampled host model, not recovered original solver". Where the
+two disagree the recovered native body wins, and the differences are listed
+per block.
+
+### U2-A. Road graph and route queries
+
+| Field | Content |
+|---|---|
+| Upstream files | `include/slrr/road_routes.hpp` (77), `src/resources/road_routes.cpp` (613), `src/resources/race_runtime.cpp` (265), `tests/test_road_routes.cpp` (312), `tests/race_fixture.hpp` |
+| Our files | `include/slrr/road_routes.hpp`, `src/resources/road_routes.cpp`, `include/slrr/race_runtime.hpp`, `src/resources/race_runtime.cpp`, `tests/test_road_routes.cpp`, `include/slrr/rpk_index.hpp` (+`generation()`), `include/slrr/gameref.hpp` (+`incarnation`), `src/resources/gameref.cpp`, `src/resources/rpk_index.cpp`, `src/natives/natives_boot.cpp`, `src/natives/natives_renderref.cpp`, `CMakeLists.txt` |
+| Problem | The 12 `GroundRef` route/traffic natives were unbound. `getNearestCross` existed as a null-returning stub, the rest were missing, so `City`/`RaceSetup`/`Traffic` scripts had no road model at all. |
+| Graph | `RoadRoutes` builds one directed edge per `RoadOther` lane record that is linked into both crossing nodes, plus a curve per grey crossing record; the lane-crossing links are what separates the two directions of a road. Sign heads come from ICFG `trlight` placements of the ground and its exterior maps, bound to the nearest crossing, and cycle per crossing branch. |
+| Map lookup | The map TRC is named in the ground's own payload (`maps\city\meshes\city.scm,maps\city\ai\city.trc`), so the loader anchors on the ground, not on a map name: no Valo City fallback, no hardcoded path. Two different `.trc` paths in one payload are ambiguous and leave the ground without a graph. |
+| Cache | Keyed by `GameRefState::incarnation` + `RpkIndex::generation()` + game root + `type_id`. `race_forget()` runs from `gameref_remove()`, `race_reset()` from `gameref_clear()`. `RpkIndex::generation()` and `GameRefState::incarnation` are new here; both are monotonic and never recycled. |
+| Natives | `getNearestCross(V,F)V3`, `findRoute(V,V)F`, `getRouteLength(V,V)F`, `getRouteLength()F`, `getRoutePos(F)V3`, `getRouteDist(V)F`, `getStartDirection(V,V)V3`, `alignToRoad(V)[V3`. The `getNearestCross` stub was removed from `natives_renderref.cpp` so exactly one registration exists. |
+| Adaptation | Upstream parallelises the 64 m projection grid with `jobs_parallel_for` (`slrr/job_system.hpp`), which this tree does not have. The per-lane index split is kept, the pass runs sequentially, and the merge is unchanged; a worker pool can be dropped in later without touching the query path. |
+| Units | `city.trc` node coordinates are metres (first edge 139.8 m, city span ≈ 2 km), so route lengths are metres and `getRoutePos`/`getRouteDist` are fractions of that length. SCX stays in cm — the two are not mixed here. |
+
+Deviations from #180, each against the recovered native body:
+
+| Native | Recovered engine | #180 | Ours |
+|---|---|---|---|
+| `getRouteLength()F` @ 0x00483C00 | cached length, `0` when no cached spline | `-1` | `0` |
+| `getRoutePos(F)` @ 0x00483B30 | `u=(1-t)*u0+t*u1`, i.e. `t` is a fraction; unclamped | treats `t` as metres | fraction |
+| `getRouteDist(V)F` @ 0x00483C20 | `(u-u0)/(u1-u0)`; `0` without a route, `-1` for null | returns metres | fraction, same 0/-1 rules |
+| `getStartDirection(V,V)V3` @ 0x00483400 | tangent at route start, **negated**; zero → null; cache untouched | tangent as-is, cached | negated, local query, cache untouched |
+| `getNearestCross(V,F)V3` @ 0x00483D00 | minimizes `abs(len(node-approx)-distance)`; boxes the approximation on a miss | null on a miss | same as recovered |
+| `alignToRoad(V)[V3` @ 0x00483E60 | always boxes `{snapped, unit XZ tangent}` | null on a miss | same as recovered |
+| route cache on a failed query | replaced only on success | cleared | replaced only on success |
+
+| Tests | `test_road_routes`, 6/6 pass. Synthetic: one-way vs two-way direction separation, arc length, projection, crossing-radius sign, shared crossing phase (green/yellow/opposing red/repeat, `-2` for a regulated approach without a lamp, `-1` for an unregulated one). Corpus (retail install): `city.trc` → **928 directed edges, 271 crossings, 1146 signal heads**, 139.8 m first edge, route both ways; 975 sampled node pairs all finite, none unreachable; every native invoked directly against the real ground, including the failed-query cache rule. |
+| Runtime | No route native is called by the `--bench-map ValoCity --bench-drive` path: it enters the map through `Track.StartMap`, not through `City.startRace`/`RaceSetup`, and no traffic is spawned. Calls are therefore proven at the native boundary in the suite (`[Ф-runtime]`), not by a stock script (`[Ф-код]` only). The career/street callers stay in the untested list of this block. |
+| Status | **Ported** |
+
+## Deferred and rejected
+
+Deferred items have a reason and a place in
+[UPSTREAM_GAMEPLAY_PLAN.md](UPSTREAM_GAMEPLAY_PLAN.md); rejected items have a
+concrete incompatibility.
+
+| Item | Upstream | Status | Why |
+|---|---|---|---|
+| Roads / traffic / race AI | #180 | **Partially ported** | U2-A (graph, route queries) is in; traffic, signals, race brain, ROC and native vehicle assembly are the remaining U2 blocks. |
+| Vehicle contacts / dynamics | #205 + #48 | **Deferred** | Upstream replaced the single-car loop with a `ContactVehicle` architecture (shared 120 Hz substeps, mass/inertia ownership, wheel loss, flaps). A subsystem port, not a fix. Phase 2. |
+| RPK descriptor/property cache | #146 | **Deferred** | Changes `by_type_id` to lo16 and `find_entry` semantics plus payload/RSD caches and a `generation()`; must be designed against the B4.1.2 strict-resolution contract. Phase 3.1. |
+| GC finalizer/heap lookup | #200 | **Deferred** | 172 lines of `gc.cpp`; needs its own reachability/finalizer evidence against `VM_GC.md`. Phase 3.2. |
+| Point/spot light system, street and car lighting, shadows, AO, HDR, reflections | #235, #237, #279 | **Rejected** | Out of scope by instruction: this tree keeps `LIGHTING_AUDIT.md` semantics and the L2 investigation; no external render architecture is imported. |
+| `Painter` replacement | #206 | **Rejected** | Would replace the legacy Painter and pre-empt the B4/A-series painter architecture. |
+| JSON save format | #213 | **Rejected** | The save format is a closed contract; U1-B2 only made the writer atomic. |
+| Cinepak / FMOD | #219 / #229 | **Rejected** | Separate multimedia projects with external dependencies. |
+| Binary `Garage.class` | #162 | **Rejected** | Requires the exact SHA-256 of the installed `Garage.class`; upstream itself states the shipped `Garage.java` order was correct and the defect was in the MWM class. Nothing to verify without the hash, so nothing was copied. |
+| `patch/` directory | — | **Rejected** | Mixed content; its lighting half is out of scope and its `Garage.java` changes are for ceiling lamps we do not have. |
