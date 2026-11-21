@@ -24,25 +24,71 @@ files, problem, adaptation, tests, result, status.
 | Upstream PR | [#228](https://github.com/EliasFD3S/openslrr/pull/228), commit `48b19c63` "#226 Run Player's constructor so the boot player has a car lot" |
 | Upstream files | `src/natives/natives_io.cpp` (3-line removal), `docs/KNOWLEDGE_BASE.md` |
 | Our files | `src/natives/natives_io.cpp`, `docs/KNOWLEDGE_BASE.md` |
-| Problem | `java.game.Player.<init>()V` was registered as `native_noop`. Our VM resolves a host binding **before** the TREE (`Jvm::invoke_by_name`, `native_has_alias` check), so every `new Player()` in stock Java silently ran nothing: the object had no `parts`, `carlot` or `osd`. `Garage.enter` builds its player that way, so `--spawn-car` crashed on the garage entry. |
+| Problem | `java.game.Player.<init>()V` was registered as `native_noop`. Our VM resolves a host binding **before** the TREE (`Jvm::invoke_by_name`, `native_has_alias` check), so every `new Player()` in stock Java allocated the object and skipped the constructor body: it had no `parts`, `carlot` or `osd`. `java.game.GameLogic.<init>` performs that `new Player()` twice during `Init`, and `Garage.enter` reuses the resulting `GameLogic.player`. |
 | Adaptation | Same single change: the registration is gone and the stock TREE runs. No host-side substitute was added, because the Java path already constructs the object. The comment on the removed block now records **why** the binding must not come back. |
 | Tests | See the matrix below. |
-| Result | `--spawn-car`: crash 5/5 before, 5/5 clean after; the car spawns with 88 parts, the garage renders and the run reaches the map. `--auto-new` and the plain boot are unchanged. |
+| Result | `--spawn-car`: crash 5/5 before, 5/5 clean after; the car spawns with 88 parts, the garage renders and the run reaches the map. `--auto-new` and the plain boot are unchanged. The crash itself was the empty-layer dereference described in U1.1, not the missing constructor; see "Actual lifecycle" below. |
 | Status | **Ported** |
 
-### Why the stub was there, and why it is not needed
+### Actual lifecycle (reconciled in U1.2)
 
-The old comment said "`Player.<init>` during start_init is a long TREE. A miss
-there aborts boot". The trace below shows that no boot path invokes it during
-`start_init` at all — the constructor is reached only from `Garage.enter`
-(`[section] enter java.game.Garage` → `invoke_by_name(Player, <init>)`). The
-stub therefore guarded nothing; it suppressed the constructor at the one place
-that uses it.
+The first version of this entry said the constructor is "reached only from
+`Garage.enter`" and that "no boot path invokes it during `start_init`". That was
+wrong, and U1.2 corrected it with instrumentation that prints the allocating
+site, the creating method, the object address and the resolution result:
+
+| Event | Phase | Caller | Stub bound | Stub removed |
+|---|---|---|---|---|
+| allocate `Player` #1 | `Init` | `java.game.GameLogic.<init>` | yes | yes |
+| `Player.<init>()V` #1 | `Init` | `tree_eval` `new_init` → `tree_call_by_name` → `invoke_by_name` | resolves to the host no-op, **body skipped** | TREE body runs |
+| allocate `Player` #2 | `Init` | `java.game.GameLogic.<init>` (same object, two `new Player()` sites) | yes | yes |
+| `Player.<init>()V` #2 | `Init` | same path | host no-op, **body skipped** | TREE body runs |
+| `GameLogic.player` | after `Init` | static field | first of the two objects | first of the two objects |
+| garage entry | `--spawn-car` / `Garage.enter` | reuses `GameLogic.player`; **no** `new Player()` | — | — |
+
+Measured with `[u12]` probes (temporary, not shipped) on `--game --window`:
+2 allocations and 2 constructor invocations before `[boot] after Init`, all from
+`java.game.GameLogic.<init>` with the same receiver; with the binding restored
+both invocations report `host=BINDING` and the player comes out with
+`osd == null` and no `parts` field, without it both report `none->TREE` and the
+constructor creates the `Osd` (two `GPS_Frame.ptx` plates exist afterwards).
+
+Why the original trace missed it: `[u1-call]` hooked `Jvm::invoke`, but
+`new Player()` never enters that function — the `new_init` opcode calls
+`TreeHost::tree_call_by_name`, which is `Jvm::invoke_by_name`. Across a full
+cold boot the `Jvm::invoke` probe records **0** `Player.<init>` calls while the
+`invoke_by_name` probe records **2** — the "zero calls before the garage"
+reading in this entry came from the hook that cannot see them, not from a
+property of the game.
+
+So the stub did not guard a "miss during `start_init`" (the constructor tree
+runs to completion in both cases — with the binding it simply never starts).
+It silently disabled the stock constructor at **both** sites, which is what
+left `GameLogic.player` without `parts`/`carlot`/`osd`.
+
+Consequence for the garage crash — measured, and not what this entry first
+claimed:
+
+| Tree | Binding | Result on `--spawn-car` |
+|---|---|---|
+| base `947d11bf` | stub | `0xC0000005` in `LibBgfxBackend::draw_osd` (symbolised from the linker map of that build: `draw_osd+0x48b`), right after the section-change `[bgfx] reset` |
+| `a7f0f39e` | stub re-bound (`SLRR_U12_NOOP`, temporary) | no crash, car spawns, but `GameLogic.player.osd == null` and no `parts` field |
+| `a7f0f39e` with U1.1 fix 2 disabled | stub re-bound | `0xC0000005` in `draw_osd` (`+0x54f`) at the same boot point |
+
+So the stub did not crash the garage by leaving the player incomplete: with the
+stub bound, the first frame after the section change had nothing to draw and
+`draw_osd` called `layers.front()` on an empty vector. Removing the binding
+made the untouched HUD widgets visible by the old default, which kept the layer
+list non-empty — the crash disappeared without the defect being fixed, and the
+same visible-by-default widgets are what U1.1 then had to hide. Fix 2 of U1.1
+is the actual repair; U1.1 fix 1 is why the HUD plates no longer reach the
+menu.
 
 ### Verification
 
-Measured with an invoke trace (`[u1-call]`, temporary, not shipped) and a
-player-field probe, `--game --window`:
+Measured with a player-field probe, `--game --window` (the invoke trace used
+at the time hooked `Jvm::invoke` and never saw this call — see "Actual
+lifecycle"):
 
 | Scenario | Before (stub bound) | After (TREE runs) |
 |---|---|---|
@@ -182,6 +228,59 @@ the `try`/restore shape is already the one that port needs.
 The contract in `KNOWLEDGE_BASE.md`/L1.1 ("monotonic, no reuse of freed ids,
 reset only on a full registry reset") is preserved and now also enforced
 against `INT32_MAX` overflow.
+
+## U1.1. Minimap frame lifecycle (follow-up, no upstream PR)
+
+| Field | Content |
+|---|---|
+| Trigger | After U1-A a frame plate appeared in the left bottom corner of the main menu on a cold start, before `947d11bf` had none. |
+| Our files | `src/ui/osd_registry.cpp`, `include/slrr/osd_registry.hpp`, `src/render/slrr_font.cpp`, `src/render/bgfx_osd.cpp` |
+| Bisect | Base `947d11bf` … `038f65b3`, every revision rebuilt from source: 329 widgets and no `GPS_Frame.ptx` widget at the base, 331 widgets with two visible `GPS_Frame.ptx` plates from `8ba945e5` on. `038f65b3` is documentation only. |
+| Cause | The stock `Player` constructor builds its HUD `Osd` (the `GPS_Frame.ptx` bezel plate) but never shows it. The registry treated "widget exists" as "widget visible", and `restore_other_osds()` additionally revived every OSD that had no `_host_hidden` flag — including owners that had never been shown. |
+| Fix 1 (visibility) | `g_shown_owners` plus `osd_owner_shown()`: a widget is created hidden unless its owner was shown (`osd_set_owner_visible`, `osd_show_group`, `osd_show_only_group`); `restore_other_osds()` only restores owners that were shown once; `slrr_text_set_osd()` applies the same rule to OSD text; `osd_clear_widgets()` clears the set. |
+| Fix 2 (empty layer list) | `draw_osd` collected the visible layers and then called `layers.front()`. A frame where a section has built its OSD but not shown it yet leaves the list empty: `0xC0000005` inside `draw_osd`. Reproduced with `--spawn-car` (symbolised from the linker map: `draw_osd+0x544`) and now returns early instead. |
+| Fix 3 (HUD plate order) | The bezel plate went to `kPlateView` (69) like every other background plate, but the map is an active camera with a small viewport and is composited in `kPreviewPresent` (70), so the map covered its own frame. Plates owned by the vehicle HUD owner now go to `kOsdView` (71); all other plates keep the catalogue order. |
+| Tests | Cold boot: no `GPS_Frame` widget visible in `MainMenu` (2 created, 0 visible). Garage: 0 visible. Street (`--bench-map ValoCity --bench-drive 3`): the active player's plate visible and drawn over the map. Native suites unchanged (11/0, 10/0, 14 PASS, PASS, 8/0, 2 PASS). |
+| Status | **Ported** (`a7f0f39e`) |
+
+### OSD ownership guarantees (U1.2 audit)
+
+- Where the set is written: `osd_set_owner_visible(true)` (`Osd.show`,
+  `Viewport.activate`), `osd_show_group`, `osd_show_only_group` (both iterate
+  existing widgets) and `restore_other_osds` (re-inserts an owner it restored).
+  It is erased by `osd_set_owner_visible(false)` — which is what
+  `Viewport.destroy`, `Viewport.deactivate` and `Osd.hide` reach — and by
+  `osd_clear_widgets()`.
+- Widgets are never erased individually (retired ones are only marked `dead`),
+  so an owner that owns a widget is kept alive by
+  `osd_visit_gc_roots()` → `visit(w.owner)`. The only wholesale reset of the
+  registry is `osd_clear_widgets()` in `boot_game` before the intros (it clears
+  the set too). Section transitions deliberately do not clear it: the Java side
+  hides the outgoing OSD (erase) and shows the next one on entry (insert).
+- One case has no widget edge: `osd_set_owner_visible(true)` can run for an OSD
+  before any widget or text is created on it. Measured on the shipped build: 2
+  such activations on a cold boot and 3 across garage → street. Those owners
+  were the only members of the set without a native edge, so
+  `osd_visit_gc_roots()` now visits `g_shown_owners` directly. Without it the
+  collector could free such an address while the set still claimed "shown", and
+  a later allocation reusing that address would read back as already shown.
+  With it, `g_shown_owners` only ever contains live script objects, which is
+  also why address reuse cannot inherit the flag.
+- `restore_other_osds()` cannot show a never-shown owner: its collection loop
+  skips `!osd_owner_shown(w.owner)`. Before U1.1 it revived every OSD without a
+  `_host_hidden` flag, which is how the two `Player` HUD plates reached the
+  main menu.
+
+Still **not verified** (recorded as unexecuted, not as working):
+
+- Garage → MainMenu after entering the garage, Street → Garage, and
+  Garage → MainMenu → Garage. The headless harness has no input pump for the
+  menu commands: `--auto-cmd mainmenu|street` is dispatched before the garage
+  finishes loading, and `--auto-new` stops at the `StringRequesterDialog` host
+  gap. What is covered instead is one dump per section owned by the section
+  machine (`MainMenu` 0/2 visible frame plates, `Garage` 0/2, `Street` 1/2).
+- Career reload through the menu (same dialog gap).
+
 
 ## Deferred and rejected
 

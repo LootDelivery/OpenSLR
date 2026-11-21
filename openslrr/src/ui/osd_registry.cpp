@@ -1064,5 +1064,10 @@ void osd_visit_gc_roots(const GcRootVisitor& visit) {
     visit(w.handler); visit(w.owner); visit(w.button); visit(w.picture_source);
     visit(w.highlight_for); visit(w.label_src); visit(w.value_str); visit(w.gadget); visit(w.text_key);
   }
+  // g_shown_owners is a native registry of script objects too: an owner that
+  // was activated but never got a widget or a text has no other edge, so the
+  // set has to keep it alive. Otherwise the address could be freed and handed
+  // to an unrelated object that would read back as "already shown".
+  for (const Object* owner : g_shown_owners) visit(owner);
 }
 }  // namespace slrr

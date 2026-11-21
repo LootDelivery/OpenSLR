@@ -522,10 +522,19 @@ signatures, 331 have a body, 4 are explicit no-ops and 41 are missing.
 Explicit no-ops: `System.analyze` ×3 (faithful) and
 `GameRef.setActiveCollision` (a real gap). One host-only no-op outside the
 stock table: `LoadingScreen.<init>`. `Player.<init>` used to be one too; since
-U1 it runs the stock TREE. A host binding wins over the TREE in
-`invoke_by_name()`, so the old no-op silently skipped the constructor that
-`Garage.enter` reaches through `new Player()`, leaving the player without
-`parts`, `carlot` and `osd` and crashing the `--spawn-car` garage entry.
+U1 it runs the stock TREE.
+
+`new Player()` reaches the constructor through
+`tree_eval new_init → TreeHost::tree_call_by_name → Jvm::invoke_by_name`, **not**
+through `Jvm::invoke`, and `invoke_by_name` resolves a host binding before the
+TREE. So the old no-op never produced an "invoke miss": it allocated the object
+and skipped the body. `java.game.GameLogic.<init>` does this twice during
+`Init` (same `GameLogic` receiver, two `new Player()` sites); `GameLogic.player`
+keeps the first object. With the no-op bound, that player came out without
+`parts`, `carlot` or `osd`; `Garage.enter` does not create a player of its own,
+it reuses `GameLogic.player`. Tracing `Jvm::invoke` for this event shows 0 hits
+even though the call happens — that is how the first U1 report mis-read it
+(corrected in `UPSTREAM_INTEGRATION.md`, "Actual lifecycle").
 
 Partial bodies that matter for upcoming work: `GameRef.setState` applies to
 cars only, `GroundRef.getNearestCross` returns null,

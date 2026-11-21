@@ -4,9 +4,17 @@ Companion to `UPSTREAM_INTEGRATION.md`. Everything below is **not ported**.
 This file records the order, the dependencies and the open questions so the
 next pass can continue without re-deriving them.
 
-Baseline after U1-A…U1-F2: the garage opens, `--spawn-car` no longer crashes,
-and `--bench-map ValoCity --bench-drive` drives the car to `drive done`.
-That is the new floor every item below must not regress.
+Baseline after U1-A…U1-F2 plus U1.1/U1.2: the garage opens, `--spawn-car` does
+not crash, and `--bench-map ValoCity --bench-drive` drives the car to
+`drive done`. That is the new floor every item below must not regress.
+
+Note on the crash: U1-A removed the `Player.<init>` stub, which made the
+untouched HUD OSD widgets visible and kept `draw_osd`'s layer list non-empty.
+The real defect — `layers.front()` on an empty list — was fixed in U1.1, and
+U1.1 also restored the correct HUD visibility (see
+[UPSTREAM_INTEGRATION.md](UPSTREAM_INTEGRATION.md), U1.1). Traffic bots in
+Phase 1 still need the constructor running: it is what builds every player's
+`parts`, `carlot` and `osd`.
 
 ## Why these are not in U1
 
