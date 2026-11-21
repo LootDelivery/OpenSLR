@@ -123,6 +123,10 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
     out.error = "empty TREE (host native expected)";
     return out;
   }
+  if (method.locals > kTufaMaxLocals || args.size() >= kTufaMaxLocals) {
+    out.error = "method local count out of range";
+    return out;
+  }
   std::vector<Value> locals;
   if (method.flags & kStaticFlag) {
     // Last parameter is local 0. File.delete(path, mask) was reading the
@@ -888,13 +892,16 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         break;
       }
       case 0x02:  // only declarations with an initializer own a trailing store
+        if (n.wide && n.imm >= kTufaMaxLocals) return fail("local slot out of range");
         if (n.wide) {
-          if (local_types.size() <= n.imm) local_types.resize(n.imm + 1);
+          if (local_types.size() <= n.imm)
+            local_types.resize(static_cast<size_t>(n.imm) + 1);
           if (ip + 1 < tree.size() && tree[ip + 1].op == 0x06) local_types[n.imm] = cls.utf8(tree[ip + 1].imm);
           // Invictus permits uninitialized locals. A declaration inside a
           // loop starts a new lifetime; retaining the preceding iteration's
           // InventoryItem attaches the same can to multiple empty panels.
-          if(locals.size()<=n.imm)locals.resize(n.imm+1);
+          if (locals.size() <= n.imm)
+            locals.resize(static_cast<size_t>(n.imm) + 1);
           const auto& type=local_types[n.imm];
           locals[n.imm]=!type.empty()&&(type[0]=='L'||type[0]=='[')
             ?Value::make_obj(nullptr):type=="F"?Value::make_float(0.f):Value::make_int(0);

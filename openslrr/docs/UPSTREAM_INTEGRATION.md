@@ -98,3 +98,20 @@ The staging file lives next to the destination because a save may sit on
 another volume; `MoveFileExW` is then a same-directory rename. `File.close`
 still reports `ok=0` to the caller exactly as before — the Java API is
 unchanged, only the on-disk outcome is safer.
+
+## U1-C1. TUFA validation (#147)
+
+| Field | Content |
+|---|---|
+| Upstream PR | [#147](https://github.com/EliasFD3S/openslrr/pull/147), commit `f8434a07` "Validate TUFA counts, constants and local slots before execution" |
+| Upstream files | `src/jvm/tufa.cpp`, `include/slrr/tufa.hpp`, `src/jvm/tree_eval.cpp`, `src/jvm/jvm.cpp`, `tests/test_tufa_validation.cpp` |
+| Our files | same four sources, `tests/test_tufa_validation.cpp` (verbatim) |
+| Problem | Every TUFA count was trusted: `reserve(count)` ran before the first truncation check, so a damaged `CONS`/`FILD`/`MTHD`/`TREE`/`CLSS` count attempted a multi-gigabyte allocation. Constant-bearing nodes were resolved lazily during execution, so a bad pool index only failed mid-run, and `tufa_parse` could publish a partial class list from a concatenated container whose later blob was damaged. Local slots (`op 1/2`) and `method.locals` were unbounded, which reached `locals.resize(imm + 1)`. |
+| Adaptation | Same checks, in the same places. Additionally: `tufa_parse` clears the output on failure (all-or-nothing container), and `tufa_load_file` uses `ios::ate` so a failed `tellg` cannot produce a huge `size_t`, and is wrapped so an allocation failure is reported instead of escaping. `enrich_static_fields` catches a throwing static initializer, logs `[jvm] static initializer <owner>.<field>: <error>` and skips it: one bad `<clinit>` must not abort the process. Parser compatibility is unchanged — `reference()` still accepts bare `Utf8`/`NameAndType` carriers. |
+| Tests | `tests/test_tufa_validation.cpp`: compiles `probe.Validation` with the in-repo compiler, then corrupts one count at a time (`CONS`, `FILD`, `MTHD`, `TREE`, interface count, node count, method locals, declare slot 65536/`0x7fffffff`/`0xffffffff`, static `String`/`RID` constant with `UINT32_MAX`), plus a trailing-byte container and a runtime `method.locals = UINT32_MAX`. |
+| Result | `-BaselineRef 947d11bf -BaselineSources src/jvm/tufa,src/jvm/tree_eval,src/jvm/jvm`: **crash, exit `0xC0000409`, 0 assertions printed**. After: **exit 0, 14 `PASS` lines**. Boot, garage and the ValoCity drive produce byte-identical `[jvm]` diagnostics before and after, so no shipped class is rejected. |
+| Status | **Ported** |
+
+`kTufaMaxLocals = 65536` is the only new limit; the stock corpus never comes
+close (`Player.<init>` uses a handful of slots, and the largest stock method is
+far below it).

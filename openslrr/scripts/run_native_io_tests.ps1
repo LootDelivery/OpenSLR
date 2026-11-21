@@ -1,7 +1,8 @@
 param(
   [string]$BuildDir = "build",
   [string]$Test = "test_save_io",
-  [string]$BaselineRef = ""
+  [string]$BaselineRef = "",
+  [string]$BaselineSources = "src/natives/natives_boot,src/natives/natives_io,src/resources/part_runtime"
 )
 # Standalone native-IO/native-state regression runners. The tests link the
 # slrr_host object files (minus main.obj), so no second copy of the engine is
@@ -49,13 +50,13 @@ try {
     $label = 'before'
     $baselineRoot = Join-Path $outputRoot 'baseline'
     New-Item -ItemType Directory -Path $baselineRoot -Force | Out-Null
-    foreach ($name in @('natives_boot', 'natives_io', 'part_runtime')) {
+    foreach ($relative in $BaselineSources.Split(',')) {
+      $relative = $relative.Trim()
+      if (-not $relative) { continue }
+      $name = [IO.Path]::GetFileNameWithoutExtension($relative)
       $source = Join-Path $baselineRoot "$name.cpp"
-      $bytes = & git -c "safe.directory=$($repoRoot.Replace('\','/'))" show "${BaselineRef}:./src/natives/$name.cpp"
-      if ($LASTEXITCODE -ne 0) {
-        $bytes = & git -c "safe.directory=$($repoRoot.Replace('\','/'))" show "${BaselineRef}:./src/resources/$name.cpp"
-      }
-      if ($LASTEXITCODE -ne 0) { throw "Could not read $BaselineRef src/*/$name.cpp" }
+      $bytes = & git -c "safe.directory=$($repoRoot.Replace('\','/'))" show "${BaselineRef}:./$relative.cpp"
+      if ($LASTEXITCODE -ne 0) { throw "Could not read $BaselineRef $relative.cpp" }
       [IO.File]::WriteAllText($source, ($bytes -join "`n"), [Text.UTF8Encoding]::new($false))
       $object = Join-Path $baselineRoot "$name.obj"
       & $compiler /nologo /std:c++20 /EHsc /MD /O2 /utf-8 /D_CRT_SECURE_NO_WARNINGS /Iinclude /Isrc/natives /c $source "/Fo:$object"
