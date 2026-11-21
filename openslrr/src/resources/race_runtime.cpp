@@ -151,14 +151,17 @@ const RoadRoute* race_plot_route() { return race_last_route(plot_ground); }
 void race_forget(void* key) {
   if (plot_ground == key) plot_ground = nullptr;
   grounds.erase(key);
+  race_traffic_forget(key);
 }
 
 void race_reset() {
   plot_ground = nullptr;
   grounds.clear();
+  race_traffic_reset();
 }
 
-void register_race_natives(Jvm& vm, RpkIndex& rpk, SectionMachine&) {
+void register_race_natives(Jvm& vm, RpkIndex& rpk, SectionMachine& sections) {
+  register_traffic_natives(vm, rpk, sections);
   // getNearestCross(V,F)V3 @ 0x00483D00: minimize |len(node-approx)-distance|
   // over the crossings. The boxed value is produced even on a miss, so a
   // caller always receives a spawn point (the approximation itself).

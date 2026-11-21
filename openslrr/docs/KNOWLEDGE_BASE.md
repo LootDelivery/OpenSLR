@@ -351,14 +351,30 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   ground's `incarnation`, `RpkIndex::generation()`, the game root and
   `type_id`; a payload that names two different TRCs is ambiguous and yields no
   graph instead of a guess. `city.trc` gives 928 directed edges, 271 crossings
-  and 1146 `trlight` signal heads, in metres. Two blocks are served from it:
+  and 1146 `trlight` signal heads, in metres. Three blocks are served from it:
   the route queries (`findRoute`, `getRouteLength` ×2, `getRoutePos`,
-  `getRouteDist`, `getStartDirection`, `alignToRoad`, `getNearestCross`) and,
-  from U2-B on, traffic lanes (`traffic_edges()` plus the 64 m projection grid).
+  `getRouteDist`, `getStartDirection`, `alignToRoad`, `getNearestCross`),
+  traffic lanes (`traffic_edges()` plus the 64 m projection grid) and, from
+  U2-B, the ambient traffic runtime below.
   Route lengths are metres; `getRoutePos(t)` and `getRouteDist(pos)` are
   fractions of that length, per the recovered native bodies at
   0x00483B30/0x00483C20. Maps without a TRC answer "no route" — there is no
   fallback map.
+- Ambient traffic (`src/resources/traffic_runtime.cpp`, U2-B) is the consumer
+  of the map's own `GroundRef.addTrafficN` requests: the map registers template
+  resources from `cars/traffic/*.rpk`, the runtime keeps one population per
+  ground and one `Registration` per live car, chooses a free lane spot before
+  allocating anything (45…160 m from the player, off a crossing, ≥15 m long,
+  ≥12 m from another car), and drives each owned car along its directed edge
+  at 15…35 km/h with a 0.8 m/s² ramp, a 4 m/s² brake limit and a same-lane gap
+  rule that only slows down. The cap is `traffic_density × 100` (the shipped
+  slider is 0.2, so 20 cars); owned cars are destroyed beyond 260 m and
+  script-owned ones beyond 400 m, so nothing accumulates. The pose is published
+  by the runtime — `part_set_external_motion` makes the physics step skip the
+  chassis — and the template's CFG wheel renders are spun and steered by
+  `part_animate_external_wheels`, so a car with no rim parts still rests on its
+  tyres instead of its shell. Signals and race-bot driving are not part of this
+  block.
 - `PhysicsRef.setStatic(0)` releases a script body to the free-body solver
   (`src/resources/part_runtime.cpp:advance_free_bodies`), which reuses the
   loose-body car and scene contacts and publishes pose and velocities.
@@ -521,18 +537,27 @@ Process:
 ## 8. Native coverage at a glance
 
 From [NATIVE_AUDIT.md](NATIVE_AUDIT.md) and
-`assets/progress/native-coverage.json` (12 November 2026): of 376 stock
-signatures, 331 have a body, 4 are explicit no-ops and 41 are missing.
+`assets/progress/native-coverage.json` (22 November 2026): of 376 stock
+signatures, 355 have a body, 3 are explicit no-ops and 18 are missing.
 `scripts/render_native_coverage.py` recomputes these counts from `src/`;
-`--list missing` prints the missing signatures.
+`--list missing|noop|body` prints the signatures themselves.
 
-| Missing family | Count | Blocks |
-| --- | ---: | --- |
-| `GroundRef` traffic, water | 11 | Traffic, water limits (routes: 8 done in U2-A) |
-| `PhysicsRef` | 7 | `create`, `createSphere`, `setStatic`, `getVel` ×2, `getAngVel`, `getOri`: world physics objects |
-| `ParticleSystem` | 9 | Smoke, sparks and other effects |
-| `Painter` | 3 | Paint booth: `doPaint`, `paintPart`, `xPaint` |
-| Leftovers (`Welder`) | 3 | No stock caller found |
+| Family | With a body | No-op | Missing |
+| --- | ---: | ---: | ---: |
+| World | 42 | 0 | 12 |
+| Language | 68 | 3 | 0 |
+| Sound & scripts | 15 | 0 | 3 |
+| Resources | 57 | 0 | 0 |
+| Rendering | 36 | 0 | 0 |
+| Files & input | 37 | 0 | 0 |
+| Parts | 97 | 0 | 0 |
+| Leftovers | 3 | 0 | 3 |
+| **Total** | **355** | **3** | **18** |
+
+The 18 missing signatures are `GroundRef.setWater` ×2 and `addWaterLimit`,
+`ParticleSystem` ×9, `Painter` ×3 and the three `RenderRef` leftovers. U2-A
+bound the eight route queries and U2-B the ten traffic calls, which is why the
+`GroundRef` row is down to water limits only.
 
 Explicit no-ops: `System.analyze` ×3 (faithful) and
 `GameRef.setActiveCollision` (a real gap). One host-only no-op outside the

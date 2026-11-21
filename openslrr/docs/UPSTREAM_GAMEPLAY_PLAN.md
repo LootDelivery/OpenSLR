@@ -4,10 +4,13 @@ Companion to `UPSTREAM_INTEGRATION.md`. Everything below is **not ported**.
 This file records the order, the dependencies and the open questions so the
 next pass can continue without re-deriving them.
 
-Baseline after U1-A…U1-F2 plus U1.1/U1.2 and U2-A: the garage opens,
+Baseline after U1-A…U1-F2 plus U1.1/U1.2 and U2-A/U2-B: the garage opens,
 `--spawn-car` does not crash, `--bench-map ValoCity --bench-drive` drives the
-car to `drive done`, and `GameRef.findRoute` answers against `city.trc`
-(928 directed edges, 271 crossings, 1146 signal heads). That is the new floor every item below must not regress.
+car to `drive done`, `GameRef.findRoute` answers against `city.trc`
+(928 directed edges, 271 crossings, 1146 signal heads), and the map's own
+`addTrafficN` requests are served: 20 ambient cars from nine stock templates
+drive their lanes and are retired as the player leaves them. That is the new
+floor every item below must not regress.
 
 Note on the crash: U1-A removed the `Player.<init>` stub, which made the
 untouched HUD OSD widgets visible and kept `draw_osd`'s layer list non-empty.
@@ -42,7 +45,10 @@ Phase 1 still need the constructor running: it is what builds every player's
    `notifyTrafficCar`, `setTrafficCarBehaviour`, `haltTrafficCross/Path`.
    The lane/crossing edge set for them already exists in `RoadRoutes`
    (`traffic_edges()`, `traffic_project()`, `traffic_signal()`), so this block
-   is the runtime and the natives, not the geometry.
+   is the runtime and the natives, not the geometry. **Done in U2-B** for the
+   natives, the population/lifecycle model and lane movement with externally
+   animated wheels (`src/resources/traffic_runtime.cpp`); signals, the race
+   brain and the physics driving of a template car are U2-C/U2-D/U2-F.
    These create and retire script-owned cars, so they depend on the U1-A
    constructor work (a traffic bot's `Player`/`CarLot` context) and on
    `vehicle_spawn_stock`.
@@ -59,11 +65,11 @@ All are #180 only; #205/#48 stay in Phase 2 and are never mixed in.
 
 | Block | Depends on | Evidence for the dependency |
 |---|---|---|
-| U2-B traffic | `part_runtime` primitives `part_set_external_motion`, `part_animate_external_wheels`, the inline-wheel list filled by `render_part` and the `native_vehicle` flag; a `streamed_hidden` flag on `GameRefState`; a `drive.native_traffic` path in `src/physics/vehicle_dynamics.cpp` so a template car can take throttle/brake without Java ratios; `race_traffic_tick` driven from the main loop | `traffic_runtime.cpp` calls all four, and its `Registration` stores `(ground, ground_incarnation)` and `(car, car_incarnation)` pairs, so `GameRefState::incarnation` (added in U2-A) is a hard requirement |
-| U2-C signals | U2-B | the crossing clock already lives in `RoadRoutes::signal`/`traffic_signal` (0/1/2 plus `-2` for a regulated approach without a lamp, `-1` unregulated); the block is the consumer — crossing permission, `haltTrafficCross`/`haltTrafficPath` and their `race_signal_revision` bump |
+| U2-B traffic | **Done.** `part_set_external_motion`, `part_animate_external_wheels`, the inline-wheel list filled by `render_part` and `race_traffic_tick` are in this tree; `Registration` keys both `(ground, ground_incarnation)` and `(car, car_incarnation)` on top of `GameRefState::incarnation` (U2-A). Still absent from the upstream design: a `streamed_hidden` flag on `GameRefState` (this tree creates and retires by distance instead) and a `drive.native_traffic` path in `src/physics/vehicle_dynamics.cpp` (U2-F) | `traffic_runtime.cpp` called all four primitives; the streamed/`native_vehicle` halves were not needed to move ambient cars and stay recorded here |
+| U2-C signals | U2-B | the crossing clock already lives in `RoadRoutes::signal`/`traffic_signal` (0/1/2 plus `-2` for a regulated approach without a lamp, `-1` unregulated); the block is the consumer — crossing permission, `haltTrafficCross`/`haltTrafficPath` and their `race_signal_revision` bump. U2-B already queues and expires the halts and slows a car on a closed lane, so U2-C adds the phase decision only |
 | U2-D race brain | U2-B (traffic registry) and the `Part` native query 56/7 hook | `race_brain_command` is reached from the Part native table and steers/brakes a car that is already registered |
 | U2-E ROC / NightRace | nothing from B–D | `maps/ROC_track/race.spl` is the only `.spl` in the install; `RaceRuntime`/`race_runtime.cpp` has no ROC path yet |
-| U2-F native vehicle assembly | U2-B | `part_create(..., native_only)` skips the CFG `script` line, and the InlineWheel physics (0.25 m spring, 0.1 m sag, 0.65 damping) only matter once a template car has no Java wheels |
+| U2-F native vehicle assembly | U2-B | `part_create(..., native_only)` skips the CFG `script` line, and the InlineWheel physics (0.25 m spring, 0.1 m sag, 0.65 damping) already rests a template car on its tyres, so what remains is letting that body be simulated (`drive.native_traffic`) instead of externally posed |
 
 The traffic templates themselves are ordinary CFG cars in
 `cars/traffic/*.rpk` (10 packs: Ambulance, ArmoredVan, CivilVan, Coach,

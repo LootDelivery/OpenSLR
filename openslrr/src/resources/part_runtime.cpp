@@ -67,6 +67,19 @@ struct SfxItem {
   float pitch = 1, pmin = 0, pmax = 0, vmin = 0, vmax = 0;
 };
 struct Record {
+  // Traffic and other host-driven bodies: the runtime owns the pose and the
+  // physics step must not simulate this chassis.
+  bool external_motion = false;
+  // Cfg `render` lines that live under a `wheel` block, captured by render_part
+  // so the external driver can spin and steer them without a wheel part.
+  struct InlineWheel {
+    Object *node = nullptr;
+    PartMatrix base{}, mesh{};
+    float radius = 0, steer_factor = 0;
+    size_t corner = 0;
+    double spin = 0;
+  };
+  std::vector<InlineWheel> inline_wheels;
   std::unique_ptr<physics::DeformationCage> deformation;
   std::unique_ptr<ScxGeometry> collision, deformed_collision;
   unsigned deformation_upload_ticks = 0;
@@ -429,6 +442,7 @@ Object *car(Object *self) {
   return nullptr;
 }
 void render_part(Jvm &jvm, Object *self, Record &rec) {
+  rec.inline_wheels.clear();
   auto paint_of = [&](const std::vector<uint32_t> &colors) {
     uint32_t paint = 0xffffff;
     if (!rec.colour_set || colors.empty())
@@ -525,7 +539,20 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
       PartMatrix local = part_matrix_multiply(
           part_pose_matrix(rec.config->wheels[static_cast<size_t>(r.wheel)]),
           part_pose_matrix(r.pose));
+      const auto count = rec.renders.size();
       add(r.resource, local, &r.links, &r.colors);
+      if (rec.renders.size() > count) {
+        const auto i = static_cast<size_t>(r.wheel);
+        const float radius = i < rec.config->wheel_springs.size()
+                                 ? rec.config->wheel_springs[i].radius
+                                 : 0;
+        const float factor =
+            i < rec.config->wheel_steering.size() ? rec.config->wheel_steering[i] : 0;
+        rec.inline_wheels.push_back({rec.renders.back(),
+                                     part_pose_matrix(rec.config->wheels[i]),
+                                     part_pose_matrix(r.pose),
+                                     radius > 0 ? radius : .33f, factor, i, 0});
+      }
     }
   }
 }
@@ -1877,7 +1904,13 @@ void dynamics_wheels(Record &rec) {
     // on it, so the car rests on the brake instead of passing through the
     // floor, or on an outer dually wheel.
     const double reach = mount ? 0 : corner_hardware_reach(rec, i);
-    if (!mount && !(reach > 0))
+    // A cfg wheel render with no rim part in the slot is the traffic case: the
+    // authored wheel is all there is. It still needs a contact point, or the
+    // parked body rests on its shell instead of on the tyre.
+    const bool inline_wheel =
+        !mount && std::any_of(rec.inline_wheels.begin(), rec.inline_wheels.end(),
+                              [&](const auto &w) { return w.corner == i; });
+    if (!mount && !inline_wheel && !(reach > 0))
       continue;
     const auto fallback = i < rec.config->wheel_springs.size()
                               ? rec.config->wheel_springs[i]
@@ -1902,7 +1935,9 @@ void dynamics_wheels(Record &rec) {
         (physics::wheel_steering(ypr[0]) *
          physics::Quaternion{std::sin(ypr[1] * .5), 0, 0, std::cos(ypr[1] * .5)} *
          physics::Quaternion{0, 0, std::sin(ypr[2] * .5), std::cos(ypr[2] * .5)}).normalized();
-    cfg.radius = !mount ? reach : live.radius > 0 ? live.radius : fallback.radius;
+    cfg.radius = inline_wheel ? fallback.radius
+                 : !mount    ? reach
+                             : live.radius > 0 ? live.radius : fallback.radius;
     cfg.rest = live.rest;
     cfg.anchor = fallback.base + fallback.travel;
     cfg.minimum = std::max(0.f, live.min_len);
@@ -1911,6 +1946,21 @@ void dynamics_wheels(Record &rec) {
     cfg.bump_damping = live.damp_bound;
     cfg.rebound_damping = live.damp_rebound;
     cfg.unsprung = fallback.mass;
+    if (inline_wheel) {
+      // Traffic templates carry no wheel part, so their authored spring data
+      // would leave the body hanging. Use the nominal traffic suspension the
+      // external driver is modelled on: .25 m spring, .1 m static sag at the
+      // loaded corner, .65 damping.
+      cfg.rest = .25;
+      cfg.anchor = .25;
+      cfg.minimum = .05;
+      cfg.maximum = .45;
+      const double mass = rec.config->mass > 0 ? rec.config->mass : 1400;
+      cfg.spring = mass * 9.81 / 4 / .1;
+      cfg.bump_damping = cfg.rebound_damping =
+          2 * std::sqrt(cfg.spring * mass / 4) * .65;
+      cfg.unsprung = 0;
+    }
     cfg.arm_length = 0;
     cfg.has_hub = false;
     cfg.hub = {};
@@ -1997,6 +2047,15 @@ void pose_wheels(Object *chassis, Record &rec) {
     const physics::Quaternion rolling{std::sin(spin * .5), 0, 0, std::cos(spin * .5)};
     rec.rolling_frame[i] = part_matrix_multiply(
         physics::corner_matrix(frames.hub_origin, hub_steered * rolling), inverse);
+  }
+  for (auto &wheel : rec.inline_wheels) {
+    auto local = part_matrix_multiply(
+        rec.rolling_frame[wheel.corner],
+        part_matrix_multiply(wheel.base, wheel.mesh));
+    if (auto *n = gameref_get(wheel.node)) {
+      std::copy(local.begin(), local.end(), n->local_matrix);
+      n->matrix_override = true;
+    }
   }
   for (const auto &slot : rec.config->slots)
     if (corner_gear(slot.type))
@@ -2171,6 +2230,46 @@ bool script_pos(void *key, float *x, float *y, float *z) {
 }
 } // namespace
 void part_park_chassis(Object *car, bool shift) { park_chassis(car, shift); }
+// External motion contract: while set, the physics step skips this chassis and
+// the owner publishes the pose itself (traffic, scripted props). park_chassis
+// has already suspended it; the flag survives a later release attempt.
+void part_set_external_motion(Object *car, bool external) {
+  auto *rec = record(as_part(car));
+  if (!rec)
+    return;
+  rec->external_motion = external;
+  if (!external) {
+    // Handing the body back: the next prepare must rebuild it, because the
+    // pose was published by us while the flag was set.
+    rec->physics_ready = false;
+    rec->physics_dirty = true;
+  }
+}
+// Advance the cfg wheel meshes of an externally driven car: `metres` is the
+// distance travelled since the previous call, `steer` the yaw change per metre
+// (the caller converts its heading delta). Rotation and steering are clamped,
+// so a bad frame cannot spin the wheels inside out.
+void part_animate_external_wheels(Object *car, float metres, float steer) {
+  auto *rec = record(as_part(car));
+  if (!rec || !rec->external_motion || !std::isfinite(metres) ||
+      !std::isfinite(steer))
+    return;
+  for (auto &wheel : rec->inline_wheels) {
+    if (!(wheel.radius > 0.f))
+      continue;
+    wheel.spin =
+        std::remainder(wheel.spin - metres / wheel.radius, 6.283185307179586);
+    PartPose rotation;
+    rotation.rotation = {std::clamp(steer, -.6f, .6f) * wheel.steer_factor,
+                         float(wheel.spin), 0};
+    auto local = part_matrix_multiply(
+        wheel.base, part_matrix_multiply(part_pose_matrix(rotation), wheel.mesh));
+    if (auto *n = gameref_get(wheel.node)) {
+      std::copy(local.begin(), local.end(), n->local_matrix);
+      n->matrix_override = true;
+    }
+  }
+}
 void part_apply_state(Object *object, const float* velocity, const float* angular) {
   Object* chassis = as_part(object);
   auto* rec = record(chassis);
@@ -3419,7 +3518,8 @@ void advance_chassis_tick() {
     }
     rec.engine_running = false;
     rec.render_blend = false;
-    if (rec.config->native_kind != "car" || rec.state.parent ||
+    if (rec.external_motion || rec.config->native_kind != "car" ||
+        rec.state.parent ||
         (rec.physics_suspended && !rec.physics_pending_placement))
       continue;
     auto *node = gameref_get(chassis);

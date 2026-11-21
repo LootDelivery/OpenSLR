@@ -30,4 +30,28 @@ std::optional<RoadRoute> race_query_route(const RpkIndex&, void*, const RoadPoin
                                           const RoadPoint&);
 const RoadRoute* race_last_route(void* ground);
 const RoadRoute* race_plot_route();
+
+// --- U2-B ambient traffic ---------------------------------------------------
+// GroundRef traffic natives: addTrafficN/P/Car, remTrafficCar,
+// notifyTrafficCar, delTraffic, setTrafficCarBehaviour and the halt calls.
+// Every car the traffic runtime creates is driven through external motion, so
+// the physics step never simulates it; the runtime owns the pose.
+void register_traffic_natives(Jvm&, RpkIndex&, SectionMachine&);
+// One step. `seconds` is the bounded, pause-aware simulation delta; the halt
+// clock advances by the same amount, or by `clock_seconds` when that is
+// non-negative (additive, so a caller with its own time base stays consistent).
+void race_traffic_tick(Jvm&, float seconds, double clock_seconds = -1);
+
+// Road closures (`haltTrafficPath`/`haltTrafficCross`/`clearHalts`).
+void race_halt_path(const RpkIndex&, void*, const RoadPoint&, const RoadPoint&);
+void race_halt_cross(const RpkIndex&, void*, const RoadPoint&, float seconds);
+void race_clear_halts(void*);
+// Lifecycle, called from GameRef removal and from the wholesale scene reset.
+void race_traffic_forget(void*);
+void race_traffic_reset();
+// The traffic id a car is registered under, 0 when it is not traffic.
+int race_traffic_pointer(Object*);
+// Diagnostics: resident count and the nth resident of one ground.
+int race_traffic_count(void* ground);
+Object* race_traffic_car_at(void* ground, int index);
 }  // namespace slrr

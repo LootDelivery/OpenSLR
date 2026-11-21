@@ -328,6 +328,36 @@ Deviations from #180, each against the recovered native body:
 | Runtime | No route native is called by the `--bench-map ValoCity --bench-drive` path: it enters the map through `Track.StartMap`, not through `City.startRace`/`RaceSetup`, and no traffic is spawned. Calls are therefore proven at the native boundary in the suite (`[Ф-runtime]`), not by a stock script (`[Ф-код]` only). The career/street callers stay in the untested list of this block. |
 | Status | **Ported** |
 
+### U2-B. Ambient traffic
+
+| Field | Content |
+|---|---|
+| Upstream files | `src/resources/traffic_runtime.cpp` (population and registration model, event queue, `race_traffic_tick`) and the external-motion hunks of `part_runtime.cpp` (`part_set_external_motion`, `part_animate_external_wheels`, the inline-wheel list) |
+| Our files | new `src/resources/traffic_runtime.cpp` (830), `tests/test_traffic_runtime.cpp` (289), `src/resources/part_runtime.cpp` (+101/−4), `include/slrr/part_runtime.hpp`, `include/slrr/race_runtime.hpp`, `src/resources/race_runtime.cpp` (hooks in `race_forget`/`race_reset`/`register_race_natives`), `src/boot/mainloop.cpp`, `CMakeLists.txt`, `assets/progress/native-coverage.*` |
+| Problem | The ten `GroundRef` traffic natives were unbound and nothing moved a car that is not the player: `addTrafficN` is called by the map with the stock `cars/traffic/*.rpk` templates, but no runtime consumed the requests, so the road graph from U2-A had no user. |
+| Population | `addTrafficN(type, n, lenBegin, lenEnd, wheelBase)` merges the weight of a template instead of appending a duplicate; `addTrafficP(type, pos, n, …)` keeps one position seed until the tick satisfies it; `addTrafficCar(car, pos)` attaches a car the caller already owns and never takes it over; `delTraffic` drops the ground's population and every registration. The instance cap is `traffic_density × 100` (the slider is 0…1 and the install ships 0.2, so 20 cars). |
+| Lifecycle | One `Registration` per live car, keyed by a never-recycled id and holding both `(ground, ground_incarnation)` and `(car, car_incarnation)`, so a `GameRef` re-created on the same address is detected instead of being driven. Owned cars are retired (and destroyed) when they pass 260 m from the player, script-owned ones at 400 m; both are retired when their lane is closed by `haltTrafficPath`. `race_forget` runs from `gameref_remove`, `race_traffic_reset` from `gameref_clear`, so no entry outlives its ground. |
+| Movement | U2-A's `traffic_edges()` is the lane set: each car owns `(edge, along)` and advances `cruise` (15…35 km/h, `1/3.6` from the shipped units) with an 0.8 m/s² acceleration limit and a 4 m/s² brake limit, crossing into a random unblocked successor edge at the end of its lane. Spacing to the car ahead on the same lane is a slowdown only — no impulses and no contact resolution. `publish` puts the chassis on the graph point (tyre contact), takes the height from the scene floor when there is a hit, and gives it a yaw-only pose. |
+| Wheels | Traffic templates install no rim parts, so their wheels exist only as CFG `wheel`+`render` lines. `render_part` now records those as `InlineWheel`s; `dynamics_wheels` gives them a contact point and the nominal traffic suspension (0.25 m spring, 0.1 m static sag at the loaded corner, 0.65 critical damping) instead of leaving the body on its shell, `pose_wheels` places them on the parked frame and `part_animate_external_wheels` spins and steers them from the distance the runtime advanced. |
+| External motion | `part_set_external_motion(car, true)` makes `advance_chassis_tick` skip the chassis, so the physics step never simulates a traffic car; `part_park_chassis` still loads the springs, which is what keeps the pose on the road. The player car is untouched: the inline branch is gated on “no rim part in the slot”, so a car with installed rims keeps its previous path. |
+| Safe spawn | The lane spot is chosen before anything is allocated: the candidate must be off a crossing, longer than 15 m, in the 45…160 m band around the player, more than 12 m from any other resident, and unblocked. Nothing is created when the ground has no TRC graph, when no candidate is found in 96 tries, or when `part_create` refuses the template, and the spawn budget is two cars per tick. |
+| Natives | `addTrafficN`, `addTrafficP`, `addTrafficCar`, `remTrafficCar`, `notifyTrafficCar`, `delTraffic`, `setTrafficCarBehaviour`, `haltTrafficCross`, `haltTrafficPath`, `clearHalts`. `car_add`/`car_rem` events are queued during the tick and delivered afterwards through `handleEvent` with a GC root scope, never from inside the native call. |
+| Main loop | `race_traffic_tick(jvm, sim_seconds)` runs immediately after `part_physics_advance` in the Physics perf scope, so a paused or warped game moves traffic by exactly the bounded simulation step and the halt clock uses the same time base. |
+
+Deviations from #180 and from the recovered engine:
+
+| Topic | #180 / recovered engine | Ours |
+|---|---|---|
+| Driving | `drive.native_traffic` takes throttle/brake through the vehicle physics; the recovered `traffic_car_frame_update` @ 0x577FA0 also integrates a real body | The pose is published by the runtime and the physics body is skipped, because this tree's drive model is built around one controlled vehicle. Deferred to U2-F |
+| Signal phases | Cars stop at red/yellow inside the traffic step | Not in U2-B; only script halts are honoured. U2-C |
+| Streaming | `streamed_hidden` marks a car hidden while it is out of the streamed set | This tree has no such flag, so cars are created and retired by distance instead of being hidden and re-shown |
+| Race bots | The same registry feeds the race brain, and `set_traffic_mode` switches a car between ambient and racing | The registry is shared and ready, but the commands are U2-D |
+| Font/UI, sounds, debug overlay | Upstream adds overlay counters and route ribbons | Not ported; `RenderRef.plotRoute` keeps its signature and returns 0 |
+
+| Tests | `test_traffic_runtime`, 4/4 pass: template registration (merge by type, junk refused, seeds, `delTraffic`), car lifecycle (idempotent attach, `remTrafficCar`, re-attach under a new id, death with the ground), road binding (snap to a crossing, project back onto the lane, flat pose, graphless ground registers but never places), and halt/idle behaviour (`haltTrafficCross`/`haltTrafficPath`/`clearHalts`, three no-op ticks without a world, reset). Movement needs the frame loop, so it is covered by the in-game run below and not by the suite. |
+| Runtime | `--bench-map ValoCity --bench-time 40 --bench-drive 20` with `SLRR_TRAFFIC_LOG=1`: 20 cars resident at `cap=20` from nine stock templates, moving along their lane at 4.9…6.3 m/s with `along` and the world pose advancing together (edge 1050, `along` 353→458 m, pos −229,955 → −208,1057), `total=26 dropped=6` at t=20, i.e. cars that fall behind the player are retired and replaced instead of accumulating. `drive done`, exit 0. Window captures at the same moment show a taxi and two sedans on the carriageway next to the player. With the spawn band forced out of range (no traffic at all) the player frame at t=10 is identical to the traffic run, so ambient traffic does not perturb the player body. |
+| Status | **Ported**, physics driving, signals, race brain and native vehicle assembly still open |
+
 ## Deferred and rejected
 
 Deferred items have a reason and a place in
@@ -336,7 +366,7 @@ concrete incompatibility.
 
 | Item | Upstream | Status | Why |
 |---|---|---|---|
-| Roads / traffic / race AI | #180 | **Partially ported** | U2-A (graph, route queries) is in; traffic, signals, race brain, ROC and native vehicle assembly are the remaining U2 blocks. |
+| Roads / traffic / race AI | #180 | **Partially ported** | U2-A (graph, route queries) and U2-B (ambient traffic: natives, lifecycle, movement, external wheel animation) are in; signals, race brain, ROC and native vehicle assembly are the remaining U2 blocks. |
 | Vehicle contacts / dynamics | #205 + #48 | **Deferred** | Upstream replaced the single-car loop with a `ContactVehicle` architecture (shared 120 Hz substeps, mass/inertia ownership, wheel loss, flaps). A subsystem port, not a fix. Phase 2. |
 | RPK descriptor/property cache | #146 | **Deferred** | Changes `by_type_id` to lo16 and `find_entry` semantics plus payload/RSD caches and a `generation()`; must be designed against the B4.1.2 strict-resolution contract. Phase 3.1. |
 | GC finalizer/heap lookup | #200 | **Deferred** | 172 lines of `gc.cpp`; needs its own reachability/finalizer evidence against `VM_GC.md`. Phase 3.2. |

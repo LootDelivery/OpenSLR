@@ -15,6 +15,7 @@
 
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/race_runtime.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/object.hpp"
 #include "slrr/osd_registry.hpp"
@@ -772,6 +773,9 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     perf::Scope scope(perf::Zone::Physics);
     sim_seconds = jvm.advance_sim_time(dt);
     part_physics_advance(sim_seconds);
+    // Traffic moves on the same bounded, pause-aware simulation step; its
+    // halt clock advances by that step as well, so a paused game is still.
+    race_traffic_tick(jvm, static_cast<float>(sim_seconds));
   }
   scene_ambience_tick(sim_seconds);
   scene_triggers_tick(jvm);
