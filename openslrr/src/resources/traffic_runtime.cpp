@@ -31,6 +31,7 @@
 #include "slrr/frame_profiler.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/section_machine.hpp"
+#include "slrr/traffic_streaming.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -81,6 +82,10 @@ struct Registration {
   // Edge the car came from, so the pose can fillet a junction instead of
   // snapping to the new lane's chord direction.
   size_t entry = 0;
+  // When this module created the car. A car younger than the minimum lifetime
+  // is not retired for being far away, so a spot cannot be filled and emptied
+  // in a loop while the player is moving.
+  double born = 0;
   float along = 0, speed = 0, cruise = 0;
   // Last published frame, for the discontinuity diagnostic.
   bool posed = false;
@@ -569,70 +574,128 @@ void publish(Registration &r, const RoadRoutes &graph, float at) {
   r.posed_road_y = road_y;
   r.posed_yaw = gameref_get(r.car) ? gameref_get(r.car)->ypr[0] : 0;
 }
-// Where a car may appear. Measured on the shipped HUD: the minimap's scale bar
-// is 37 px for "50 m" and the map window is ~215 x 140 px, i.e. about 290 m wide
-// and 190 m tall around the player, so its half-width is ~145 m. The chase
-// camera looks along the car and shows the road for a few hundred metres.
-// Hence: never closer than `kSpawnNear` (180 m, clear of the map's half-width)
-// in any direction, and never inside the forward cone closer than
-// `kSpawnAhead`, so a new car only enters the view by being approached. Both are
-// distance rules on the graph, not on the camera frame: a car that exists
-// behind the player is never hidden or removed just because the player turns.
-constexpr float kSpawnNear = 180.f;
-constexpr float kSpawnAhead = 260.f;
-// A spawn must sit inside the retire radius with room to live: 240 m in, 300 m
-// out. Without that hysteresis a car created at the edge of the band was retired
-// on the next frame and the population churned instead of settling.
-constexpr float kSpawnFar = 240.f;
-constexpr float kRetireOwned = 300.f;
+// Streaming policy (U2-B.2). The old ring asked one question — how far is this
+// point from the player — and answered with a band whose far end (240 m) sat
+// inside the forward cone it forbade below 260 m, so the road ahead was never
+// populated. The replacement measures the lane network the player can reach:
+//
+//   * the population target comes from the reachable lane length
+//     (`stream_target_count`), not from a fixed twenty;
+//   * a candidate is a lane position reachable by driving, not on a junction
+//     chord, not over the lane's own capacity and `min_gap` from the cars
+//     already standing on that lane;
+//   * the only forward exclusion is the pop-in bubble, which grows with the
+//     player's speed and collapses to `min_bubble` when standing still;
+//   * spawn (260 m) and retire (330 m) radii differ and a car has a minimum
+//     lifetime, so nothing is filled and emptied in a loop.
+StreamRules stream_rules(float density) {
+  StreamRules rules;
+  // The budget stays `density * 100` as a hard guard on how many cars this
+  // system may own; the population itself comes from the lane length.
+  rules.budget = std::isfinite(density)
+                     ? int(std::clamp(density, 0.f, 1.f) * 100)
+                     : 0;
+  return rules;
+}
+// A car this module did not create still occupies its lane, so the scheduler
+// sees it; only the budget and the retirement rules care about the owner.
 constexpr float kRetireScripted = 400.f;
-// Find a free spot on a lane before anything is allocated. The candidate is
-// rejected when it is blocked, too short, occupied, inside the minimap or in
-// front of the camera, or outside the band the streaming policy wants around
-// the player.
-bool place(Registration &r, const RoadRoutes &graph, const Population &p,
-           const RoadPoint &focus, const RoadPoint &forward) {
+constexpr double kMinLifetime = 6.;
+// An edge that was just emptied stays empty for a moment, so a car is not
+// destroyed and immediately re-created in the same place as the player passes.
+constexpr double kEdgeCooldown = 4.;
+std::unordered_map<size_t, double> edge_cooldown;
+// Lanes the player can drive to: the player's own lane and its opposite
+// direction (so oncoming traffic on the same street counts), then everything
+// reachable forward through junctions. A lane across a wall is not reachable
+// even when it is a few metres away.
+std::unordered_set<size_t> reachable(const RoadRoutes &graph, size_t from) {
   const auto &edges = graph.traffic_edges();
-  if (edges.empty())
-    return false;
-  for (int attempt = 0; attempt < 96; ++attempt) {
-    size_t edge =
-        std::min<size_t>(size_t(random() * edges.size()), edges.size() - 1);
-    const auto &e = edges[edge];
-    if (blocked(p, e) || e.crossing || e.next.empty() || e.length < 15)
+  std::unordered_set<size_t> seen;
+  std::vector<size_t> queue;
+  auto push = [&](size_t edge) {
+    if (edge < edges.size() && seen.insert(edge).second) queue.push_back(edge);
+  };
+  push(from);
+  if (from < edges.size())
+    for (size_t i = 0; i < edges.size(); ++i)
+      if (edges[i].from == edges[from].to && edges[i].to == edges[from].from)
+        push(i);
+  for (size_t cursor = 0; cursor < queue.size() && queue.size() < 512; ++cursor)
+    for (size_t next_edge : edges[queue[cursor]].next) push(next_edge);
+  return seen;
+}
+// Snapshot of the lane network for the scheduler, including the cars already
+// standing on each lane.
+void build_stream_view(const RoadRoutes &graph, const StreamRules &rules,
+                       size_t player_edge, const RoadPoint &focus, float heading,
+                       float speed, void *ground, StreamView &view) {
+  const auto &edges = graph.traffic_edges();
+  view = StreamView{};
+  view.player = focus;
+  view.heading = heading;
+  view.speed = speed;
+  const auto lanes_near = reachable(graph, player_edge);
+  const RoadPoint forward{-std::sin(heading), 0, -std::cos(heading)};
+  std::unordered_map<size_t, std::vector<float>> residents;
+  for (const auto &entry : registrations) {
+    const auto &r = entry.second;
+    if (r.ground != ground || !r.visible || r.unplaced || r.edge >= edges.size())
       continue;
-    float at = std::clamp(random() * e.length, 5.f, e.length - 5);
+    residents[r.edge].push_back(r.along);
+  }
+  view.lanes.reserve(lanes_near.size());
+  for (size_t edge : lanes_near) {
+    const auto &e = edges[edge];
+    if (e.points.empty())
+      continue;
+    StreamLane lane;
+    lane.edge = edge;
+    lane.length = e.length;
+    lane.crossing = e.crossing;
+    lane.reachable = true;
+    // Distance to the nearest sampled point of the lane, then how much of the
+    // lane lies in front of the player.
+    float best = std::numeric_limits<float>::infinity();
+    size_t best_index = 0;
+    for (size_t i = 0; i < e.points.size(); i += 4) {
+      const float d = road_distance(e.points[i], focus);
+      if (d < best) {
+        best = d;
+        best_index = i;
+      }
+    }
+    lane.distance = best;
+    // Coarse polyline for measuring a candidate position for real.
+    const int sample_count =
+        std::clamp(int(e.length / 16.f) + 1, 2, 24);
     RoadRoute line;
     line.points = e.points;
-    auto candidate = road_at(line, at);
-    float distance = road_distance(candidate, focus);
-    if (distance < kSpawnNear || distance > kSpawnFar)
-      continue;
-    // Forward cone: a spot the player is looking at is a visible pop-in even at
-    // 200 m, so it is only allowed once it is past the camera's useful range.
-    if (distance < kSpawnAhead) {
-      const float ahead = ((candidate[0] - focus[0]) * forward[0] +
-                           (candidate[2] - focus[2]) * forward[2]) /
-                          std::max(distance, .001f);
-      if (ahead > .5f)
-        continue;
+    line.length = e.length;
+    lane.samples.reserve(size_t(sample_count));
+    for (int i = 0; i < sample_count; ++i)
+      lane.samples.push_back(
+          road_at(line, e.length * float(i) / float(sample_count - 1)));
+    const RoadPoint &mid = e.points[best_index];
+    const float dx = mid[0] - focus[0], dz = mid[2] - focus[2];
+    const float len = std::sqrt(dx * dx + dz * dz);
+    lane.dot = len > 1e-3f ? (dx * forward[0] + dz * forward[2]) / len : 0.f;
+    auto found = residents.find(edge);
+    if (found != residents.end()) {
+      lane.residents = found->second;
+      std::sort(lane.residents.begin(), lane.residents.end());
     }
-    bool occupied = false;
-    for (const auto &entry : registrations)
-      if (entry.first != r.id && entry.second.visible &&
-          road_distance(candidate, position(entry.second.car)) < 12) {
-        occupied = true;
-        break;
-      }
-    if (occupied)
-      continue;
-    r.edge = edge;
-    r.entry = edge;
-    r.along = at;
-    r.unplaced = false;
-    return true;
+    // Only the part of the lane that is inside the spawn circle counts towards
+    // the target, and junction chords never do: a long lane whose nearest point
+    // is close still contributes only the chord through the circle.
+    if (!lane.crossing && lane.distance < rules.spawn_radius) {
+      const float radius = rules.spawn_radius;
+      const float half = std::sqrt(std::max(0.f, radius * radius -
+                                                   lane.distance * lane.distance));
+      view.lane_metres += std::min(lane.length, 2.f * half);
+    }
+    view.lanes.push_back(std::move(lane));
   }
-  return false;
 }
 // Register a car that already exists. `owned` marks the cars this module
 // created and may destroy.
@@ -655,6 +718,7 @@ int32_t add_car(const RpkIndex &rpk, void *ground, Object *car, Object *where,
   r.ground_incarnation = g->incarnation;
   r.car = static_cast<Object *>(c->key);
   r.car_incarnation = c->incarnation;
+  r.born = clock_seconds;
   r.owned = owned;
   r.notify = owned;
   r.cruise = (15 + random() * 20) / 3.6f;
@@ -1094,9 +1158,12 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
   // convention the traffic pose uses (yaw = atan2(-dx, -dz)), so the forward
   // axis is (-sin, 0, -cos).
   float focus_yaw = 0.f;
+  float focus_speed = 0.f;
   if (focus_car)
-    if (auto *n = gameref_get(focus_car))
+    if (auto *n = gameref_get(focus_car)) {
       focus_yaw = n->ypr[0];
+      focus_speed = std::hypot(n->vel[0], n->vel[2]);
+    }
   const RoadPoint forward{-std::sin(focus_yaw), 0, -std::cos(focus_yaw)};
   // Profiling knobs, not gameplay settings: `SLRR_TRAFFIC_DENSITY` overrides
   // the shipped slider so one build can be measured at several populations,
@@ -1115,8 +1182,13 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
   std::vector<void *> ground_keys;
   for (const auto &e : populations)
     ground_keys.push_back(e.first);
-  int spawn_budget = 2;
+  // One car per maintenance pass: a long deficit fills over several passes
+  // instead of dropping a burst into a single frame.
+  int spawn_budget = 1;
   static double logged = -1;
+  static double next_pass = 0;
+  static int last_target = 0;
+  static const char *last_refused = "";
   for (void *key : ground_keys) {
     if (!world || !focus_car || !belongs(key, world) || seconds == 0)
       continue;
@@ -1129,14 +1201,40 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
     if (!graph || !p || graph->traffic_edges().empty())
       continue;
     const auto &edges = graph->traffic_edges();
+    const StreamRules rules = stream_rules(density);
     std::vector<int32_t> ids;
     for (const auto &e : registrations)
       if (e.second.ground == key)
         ids.push_back(e.first);
     std::sort(ids.begin(), ids.end());
-    // 1. Retire stale, over-cap and out-of-range entries. A car whose GameRef
+    // Population target for the network around the player, from the slider and
+    // the reachable lane length. A straight street holds more cars than the same
+    // radius of city blocks, and the number is a target, not a counter.
+    //
+    // The view walks every reachable lane, so it is rebuilt on the same quarter
+    // second cadence as the population pass and not once per frame: the player
+    // does not outrun a 260 m radius in 250 ms at any speed this game reaches.
+    static StreamView view;
+    static int target = 0;
+    static double view_at = -1e9;
+    static void *view_ground = nullptr;
+    const auto player_lane = graph->traffic_project(
+        focus, focus_car ? &forward : nullptr);
+    const float slider = std::isfinite(density) ? std::clamp(density, 0.f, 1.f) : 0.f;
+    if (!player_lane)
+      target = 0;
+    else if (key != view_ground || clock_seconds - view_at >= .25) {
+      build_stream_view(*graph, rules, player_lane->edge, focus, focus_yaw,
+                        focus_speed, key, view);
+      target = stream_target_count(view, rules, slider);
+      view_at = clock_seconds;
+      view_ground = key;
+    }
+    if (!player_lane) view.lanes.clear();
+    // 1. Retire stale, out-of-range and blocked entries. A car whose GameRef
     //    was re-created on the same address fails the incarnation check.
     int visible = 0;
+    int owned_count = 0;
     int64_t t = prof_now();
     for (auto id : ids) {
       auto it = registrations.find(id);
@@ -1153,27 +1251,37 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       if (!r.visible)
         continue;
       const float distance = road_distance(position(r.car), focus);
-      // The cap is an ambient-traffic budget: a script-owned car (police scout,
-      // race bot) is not counted against it and is not retired to make room.
-      const bool over = r.owned && visible >= cap;
-      const bool far = distance > (r.owned ? kRetireOwned : kRetireScripted);
+      // The retire radius is wider than the spawn radius, so a car created at
+      // the inner edge of the band does not leave it on the next frame.
+      // A script-owned car (police scout, race bot) is not counted against the
+      // budget and is never retired to make room for ambient traffic.
+      const bool young = clock_seconds - r.born < kMinLifetime;
+      const bool far =
+          distance > (r.owned ? rules.retire_radius : kRetireScripted);
+      // Over target: only cars already outside the spawn radius may go, and
+      // only by a margin, so the population settles instead of oscillating.
+      const bool over = r.owned && distance > rules.spawn_radius &&
+                        owned_count >= target + 4;
       const bool closed =
           r.owned && !r.unplaced && r.edge < edges.size() && blocked(*p, edges[r.edge]);
       if (frozen)
         continue;
-      if (r.owned && (over || far || closed)) {
+      if (r.owned && (closed || ((far || over) && !young))) {
+        if (r.edge < edges.size())
+          edge_cooldown[r.edge] = clock_seconds + kEdgeCooldown;
         queue(r, false);
         r.visible = false;
         remove(id);
         if (profiling()) ++prof().despawns;
         continue;
       }
-      if (far) {
+      if (far && !r.owned) {
         queue(r, false);
         r.visible = false;
         continue;
       }
-      if (r.owned) ++visible;
+      ++visible;
+      if (r.owned) ++owned_count;
     }
     prof_add(kProfRetire, t);
     if (profiling()) {
@@ -1260,28 +1368,56 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       prof_add(kProfWheels, tw);
     }
     prof_add(kProfDrive, t);
-    // 3. Fill the population: positioned requests first, then the template
-    //    weights. The road spot is chosen before a car is allocated.
-    for (auto &seed : p->seeds) {
-      while (!frozen && seed.remaining > 0 && visible < cap && spawn_budget > 0) {
-        t = prof_now();
-        auto projected = graph->traffic_project(seed.position);
-        prof_add(kProfProject, t);
-        if (!projected || blocked(*p, edges[projected->edge]))
+    // 3. Fill the population from the scheduler, four times a second. The
+    //    spot is chosen before anything is allocated, so a network with no room
+    //    costs a few random draws and nothing else.
+    if (!frozen && !view.lanes.empty() && clock_seconds >= next_pass &&
+        owned_count < target && spawn_budget > 0) {
+      next_pass = clock_seconds + .25;
+      while (spawn_budget > 0 && owned_count < target) {
+        // A positioned request (addTrafficP) is satisfied first, in the same
+        // placement policy as the templates.
+        const Model *selected = nullptr;
+        std::vector<Seed>::iterator seed_at = p->seeds.end();
+        for (auto it = p->seeds.begin(); it != p->seeds.end(); ++it)
+          if (it->remaining > 0) {
+            seed_at = it;
+            selected = &it->model;
+            break;
+          }
+        if (!selected)
+          selected = weighted_model(*p);
+        if (!selected)
           break;
-        Registration candidate;
         t = prof_now();
-        const bool found = place(candidate, *graph, *p, focus, forward);
+        uint32_t draw = uint32_t(random() * 4294967295.f);
+        StreamSpot spot = stream_pick_spot(view, rules, draw);
+        // An edge that was just emptied keeps its cooldown: destroying a car and
+        // putting another one in the same place is the churn U2-B.1 removed.
+        for (int retry = 0; spot.valid && retry < 4; ++retry) {
+          auto cool = edge_cooldown.find(spot.edge);
+          if (cool == edge_cooldown.end() || cool->second <= clock_seconds) break;
+          spot = stream_pick_spot(view, rules, draw);
+        }
+        if (spot.valid) {
+          auto cool = edge_cooldown.find(spot.edge);
+          if (cool != edge_cooldown.end() && cool->second > clock_seconds)
+            spot.valid = false;
+        }
         prof_add(kProfSearch, t);
-        if (!found)
+        last_refused = spot.valid ? "" : spot.refused;
+        if (profiling()) {
+          ++prof().attempts;
+          if (!spot.valid) ++prof().failures;
+        }
+        if (!spot.valid)
           break;
         --spawn_budget;
         t = prof_now();
-        auto *made = create_on_graph(vm, *resources, key, *graph, seed.model.type,
-                                     candidate.edge, candidate.along);
+        auto *made = create_on_graph(vm, *resources, key, *graph, selected->type,
+                                     spot.edge, spot.along);
         prof_add(kProfCreate, t);
         if (profiling()) {
-          ++prof().attempts;
           if (made) {
             ++prof().creates;
             ++prof().spawns;
@@ -1290,53 +1426,25 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
           }
         }
         if (!made) {
-          seed.remaining = 0;
+          if (seed_at != p->seeds.end()) seed_at->remaining = 0;
           break;
         }
-        ++visible;
-        --seed.remaining;
-        if (auto it2 = registrations.find(next_id - 1);
-            it2 != registrations.end())
+        ++owned_count;
+        if (seed_at != p->seeds.end()) --seed_at->remaining;
+        if (auto it2 = registrations.find(race_traffic_pointer(made));
+            it2 != registrations.end()) {
           log_spawn(it2->second, focus, forward);
-      }
-    }
-    std::erase_if(p->seeds, [](const Seed &seed) { return seed.remaining <= 0; });
-    for (int attempt = 0; !frozen && visible < cap && spawn_budget > 0 &&
-                         attempt < cap * 3;
-         ++attempt) {
-      const Model *selected = weighted_model(*p);
-      if (!selected)
-        break;
-      Registration candidate;
-      t = prof_now();
-      const bool found = place(candidate, *graph, *p, focus, forward);
-      prof_add(kProfSearch, t);
-      if (profiling()) {
-        ++prof().attempts;
-        if (!found) ++prof().failures;
-      }
-      if (!found)
-        continue;
-      --spawn_budget;
-      t = prof_now();
-      auto *created = create_on_graph(vm, *resources, key, *graph,
-                                      selected->type, candidate.edge,
-                                      candidate.along);
-      prof_add(kProfCreate, t);
-      if (profiling()) {
-        if (created) {
-          ++prof().creates;
-          ++prof().spawns;
-        } else {
-          ++prof().create_failures;
+          // Keep the view current, so a second car in the same pass cannot be
+          // put next to this one.
+          for (auto &lane : view.lanes)
+            if (lane.edge == it2->second.edge) {
+              lane.residents.push_back(it2->second.along);
+              std::sort(lane.residents.begin(), lane.residents.end());
+              break;
+            }
         }
       }
-      if (!created)
-        continue;
-      ++visible;
-      if (auto it2 = registrations.find(race_traffic_pointer(created));
-          it2 != registrations.end())
-        log_spawn(it2->second, focus, forward);
+      std::erase_if(p->seeds, [](const Seed &seed) { return seed.remaining <= 0; });
     }
     if (tracing() && clock_seconds - logged >= 1) {
       logged = clock_seconds;
@@ -1350,12 +1458,16 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
           break;
         }
       }
+      last_target = target;
       std::fprintf(stderr,
-                   "[traffic] t=%.1f ground=0x%x visible=%d cap=%d total=%zu "
-                   "dropped=%zu models=%zu seeds=%zu",
+                   "[traffic] t=%.1f ground=0x%x visible=%d owned=%d target=%d "
+                   "cap=%d lane_m=%.0f spacing=%.0f total=%zu dropped=%zu "
+                   "models=%zu seeds=%zu refused=%s",
                    clock_seconds, gameref_get(key) ? gameref_get(key)->type_id : 0,
-                   visible, cap, spawned_total, dropped_total, p->models.size(),
-                   p->seeds.size());
+                   visible, owned_count, last_target, cap, view.lane_metres,
+                   stream_spacing(std::isfinite(density) ? density : 0.f, rules),
+                   spawned_total, dropped_total, p->models.size(), p->seeds.size(),
+                   last_refused && *last_refused ? last_refused : "-");
       if (auto found = registrations.find(first); found != registrations.end()) {
         const auto &r = found->second;
         auto pos = position(r.car);

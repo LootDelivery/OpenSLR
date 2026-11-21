@@ -367,10 +367,13 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   allocating anything (45…160 m from the player, off a crossing, ≥15 m long,
   ≥12 m from another car), and drives each owned car along its directed edge
   at 15…35 km/h with a 0.8 m/s² ramp, a 4 m/s² brake limit and a same-lane gap
-  rule that only slows down. The cap is `traffic_density × 100` (the shipped
-  slider is 0.2, so 20 cars); a car is created 180…240 m from the player and
-  retired beyond 300 m (script-owned ones beyond 400 m), so the population
-  neither accumulates nor churns. The pose is published by the runtime —
+  rule that only slows down. `traffic_density × 100` is now only a hard budget
+  (the shipped 0.2 allows 20 cars); the population itself is a target computed
+  from the lane length the player can reach, `lane_metres / spacing`, with
+  `spacing` running from 200 m at density 0 to 45 m at density 1. A car is
+  created inside 260 m of the player, anywhere around them, and retired beyond
+  330 m (script-owned ones beyond 400 m) after a six second minimum lifetime,
+  so the population neither accumulates nor churns. The pose is published by the runtime —
   `part_set_external_motion` makes the physics step skip the chassis — and the
   template's CFG wheel renders are spun and steered by
   `part_animate_external_wheels`, so a car with no rim parts still rests on its
@@ -392,13 +395,16 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   for a `RaceSetup`/`Track`/`ROC` section, and re-enables the population for
   `Valocity`/`City`. Script-owned cars (police scouts, race bots) are never in
   that set — they are attached with `addTrafficCar` and stay with their owner.
-- Spawn placement is a visibility rule, not a camera hack: a candidate must be
-  180…240 m away and, while closer than 260 m, must not sit inside the forward
-  cone. The numbers come from the HUD: the minimap's scale bar is 37 px for
-  "50 m" on a ~215 × 140 px window, so the map covers ~290 m (~145 m half-width)
-  around the player. Ambient cars are not drawn on that map (it is a baked tile
-  map with the player sprite), so a police marker appearing behind the player is
-  the police script's own marker, not an ambient spawn.
+- Spawn placement is the `traffic_streaming` scheduler, not a ring: a candidate
+  is a lane position that is reachable by driving (the player's lane, its
+  opposite direction, then everything forward through junctions), not a
+  junction chord, not over the lane's own capacity (`length / 32 m`) and at
+  least `min_gap` 26 m from the cars already standing on that lane. The only
+  forward exclusion is a pop-in bubble, `speed × 1.4 s + 25 m` clamped to 90 m,
+  so a parked player gets traffic 25 m ahead and a fast one does not. Nothing is
+  created within 14 m of the player in any direction. The forward sector is
+  therefore open, which is the whole point: the road ahead fills up to the spawn
+  radius instead of staying empty.
 - `PhysicsRef.setStatic(0)` releases a script body to the free-body solver
   (`src/resources/part_runtime.cpp:advance_free_bodies`), which reuses the
   loose-body car and scene contacts and publishes pose and velocities.

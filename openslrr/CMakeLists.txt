@@ -75,6 +75,7 @@ add_executable(slrr_host
   src/resources/road_routes.cpp
   src/resources/race_runtime.cpp
   src/resources/traffic_runtime.cpp
+  src/resources/traffic_streaming.cpp
   src/resources/scene_instances.cpp
   src/resources/scene_ambience.cpp
   src/resources/scene_triggers.cpp

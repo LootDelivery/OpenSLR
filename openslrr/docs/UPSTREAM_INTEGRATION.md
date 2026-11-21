@@ -413,6 +413,40 @@ Two things the profile already changed:
 * The first `race_traffic_tick` of a map builds the road graph (≈430 ms) and
   that showed up as a 450 ms first tick; it is once per map load, not per frame.
 
+### U2-B.2. Streaming, and what the freezes were
+
+U2-B.1 answered "where may a car appear" with one distance band, and forbade the
+forward cone below 260 m while the band's far end was 240 m. The forward road was
+therefore never populated; the player reported exactly that, and the trace
+agreed: after U2-B.1 every spawn sat behind or beside the car.
+
+The replacement is a population scheduler, `traffic_streaming.cpp`, with the pure
+decision half separated from the runtime so it can be tested without a game:
+
+| Part | Rule |
+|---|---|
+| Target | `reachable lane metres inside 260 m / spacing`, spacing 200 m at density 0 and 45 m at density 1 (the shipped 0.2 therefore asks for the original game's ~20 cars). The lane length is the part of each lane that actually falls inside the circle, junction chords excluded, so a target follows the streets the player has, not a fixed count. `traffic_density × 100` stays only as a hard budget: 100 cars at the maximum. |
+| Candidate | A lane position, not a point in space. Reachable by driving: the player's own lane, the opposite direction of the same street, then everything forward through junctions (bounded BFS). Junction chords are never used. |
+| Spacing | At most one car per 32 m of lane, and no car within 26 m of a car already on that lane. |
+| Pop-in bubble | A spot closer than `speed × 1.4 s + 25 m` (clamped to 90 m) in front of the player is refused and nothing is created within 14 m in any direction. Standing still the bubble is 25 m, so a parked player still sees traffic; at 30 m/s it is 67 m. Behind the player the bubble does not apply, which is what keeps a street the player has just driven through alive. |
+| Hysteresis | Spawn inside 260 m, retire beyond 330 m, minimum lifetime 6 s, and a lane that was just emptied is left alone for 4 s. Over-target retirement only applies to cars already outside the spawn radius and only by a margin, so the population settles instead of oscillating. |
+| Cadence | The view and the target are rebuilt four times a second (a 260 m radius is not outrun in 250 ms) and one car at most is created per pass, so a long deficit fills over several passes instead of in one frame. |
+| Boundaries | Script-owned cars (police scouts, race rivals) occupy their lane in the view but are never counted against the budget and are never retired to make room. The race-section policy from U2-B.1 is unchanged. |
+
+| Point | Content |
+|---|---|
+| Files | `include/slrr/traffic_streaming.hpp`, `src/resources/traffic_streaming.cpp` (scheduler), `src/resources/traffic_runtime.cpp` (view building, reachability, cadence, retirement), `tests/test_traffic_streaming.cpp` |
+| Tests | `test_traffic_streaming`, 15/15: population on every side of a standing player, cars ahead of a moving player, headway at speed, the collapsed bubble when parked, junctions never used, unreachable lanes skipped, target from lane length, budget cap, lane capacity, gap to existing cars, determinism, curved-lane distance measured on the lane, player clearance, refusal with a reason, slider-to-spacing mapping. `test_traffic_runtime` still 6/6, all other suites unchanged. |
+| Runtime | ValoCity, noon, pedestrians at the slider maximum. Density 1.0: 100 resident cars held against a target of 100, 131 spawns and 31 retirements in 60 s of routed driving, spawn distances 15…260 m with 47 % ahead, 18 % behind, 34 % to the side. Density 0.2: 20 cars, 32 spawns, 40 % ahead. Standing still at density 1.0: 117 spawns, 39 ahead, 49 behind, 29 to the side, 31…260 m. |
+| Cost | The scheduler made the spawn search almost free: `place` calls fell from 87 271 to 133 in a 60 s run because the candidate list is built once per pass instead of 96 random lanes per attempt, and the search stage went from 656 ms to 0.09 ms per minute. The cached view took the traffic tick from 0.99 to 0.75 ms per frame with 100 cars. |
+
+The freezes the player felt were not in the traffic tick. Profiling with the
+frame zones and a call-stack sampler found a stop-the-world GC sweep of
+83…134 ms, whose finalizers and inline destruction ran inside the pause; that
+fix is described in the commit and in the summary below. What remains over 40 ms
+is `present`, the main thread waiting for the render thread while the city draws
+~6000 calls, which happens with traffic disabled as well.
+
 ## Deferred and rejected
 
 Deferred items have a reason and a place in
