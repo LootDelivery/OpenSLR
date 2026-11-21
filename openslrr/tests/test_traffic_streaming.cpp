@@ -41,6 +41,22 @@ StreamLane straight(size_t edge, float length, float start, float distance,
   return lane;
 }
 
+// A street crossing the player's axis: `offset` metres to the side, running
+// perpendicular, `start` metres ahead of the player's line.
+StreamLane crossing_street(size_t edge, float length, float start, float offset,
+                           float dot = 0.f) {
+  StreamLane lane;
+  lane.edge = edge;
+  lane.length = length;
+  lane.distance = offset;
+  lane.dot = dot;
+  const int count = std::max(2, int(length / 16.f) + 1);
+  for (int i = 0; i < count; ++i)
+    lane.samples.push_back(
+        RoadPoint{offset + length * float(i) / float(count - 1), 0, -start});
+  return lane;
+}
+
 StreamView view_with(const std::vector<StreamLane>& lanes, float speed = 0.f,
                      float heading = 0.f) {
   StreamView view;
@@ -65,9 +81,11 @@ StreamRules rules() {
 //    decides, not a ring around the player.
 SLRR_TEST(standing_player_is_populated_all_around) {
   const auto r = rules();
-  StreamView view = view_with({straight(1, 200, 40, 0, 1),      // ahead
-                               straight(2, 200, 40, 0, -1),     // behind
-                               straight(3, 120, 30, 60, 0.2f)}); // side street
+  // The player stands in the middle of a street, with a cross street 60 m to
+  // the side: a real junction, not three lanes that happen to start nearby.
+  StreamView view = view_with({straight(1, 600, 0, 0, 1),            // ahead
+                               straight(2, 600, 0, 0, -1),           // behind
+                               crossing_street(3, 400, 0, 60, .2f)}); // side
   uint32_t random = 0x12345;
   int ahead = 0, behind = 0, side = 0;
   // The lanes fill up (one car per `per_car_metres`), so the loop stops accepting
@@ -83,10 +101,10 @@ SLRR_TEST(standing_player_is_populated_all_around) {
         else ++side;
       }
   }
-  // Each lane holds one car per `per_car_metres`, so the three lanes can hold
-  // twelve cars in total; every direction has to be used.
-  SLRR_REQUIRE(ahead >= 4);
-  SLRR_REQUIRE(behind >= 4);
+  // Every direction has to be used, and none of the three may be starved just
+  // because the scheduler draws towards the nearest lane.
+  SLRR_REQUIRE(ahead >= 2);
+  SLRR_REQUIRE(behind >= 3);
   SLRR_REQUIRE(side >= 2);
   std::puts("PASS a standing player gets traffic ahead, behind and beside");
 }
@@ -95,7 +113,7 @@ SLRR_TEST(standing_player_is_populated_all_around) {
 //    front of them, which the U2-B.1 policy never did.
 SLRR_TEST(driving_fills_the_road_ahead) {
   const auto r = rules();
-  StreamView view = view_with({straight(1, 400, 60, 0, 1), straight(2, 400, 60, 0, -1)},
+  StreamView view = view_with({straight(1, 600, 0, 0, 1), straight(2, 600, 0, 0, -1)},
                               /*speed=*/15.f);
   uint32_t random = 0x9e3779b9;
   int ahead = 0, behind = 0;
@@ -125,10 +143,10 @@ SLRR_TEST(driving_fills_the_road_ahead) {
   std::printf("  ahead=%d behind=%d (each lane fills to the spawn radius)\n", ahead,
               behind);
   (void)refusals;
-  // Only the first ~200 m of the lane is inside the spawn radius, and the
-  // minimum gap leaves about seven slots there: ahead fills up to the radius,
-  // which is exactly what "not forbidden" has to mean.
-  SLRR_REQUIRE(ahead >= 5);
+  // The usable band ahead runs from the front clearance (160 m) to the spawn
+  // radius (260 m), which leaves room for a few cars at the minimum gap; the
+  // point is that the sector is filled at all, not that it is unbounded.
+  SLRR_REQUIRE(ahead >= 2);
   std::puts("PASS traffic keeps being created ahead of a moving player");
 }
 
@@ -136,9 +154,10 @@ SLRR_TEST(driving_fills_the_road_ahead) {
 //    bubble grows with speed and nothing appears ahead inside it.
 SLRR_TEST(fast_player_keeps_headway) {
   StreamRules r = rules();
-  StreamView view = view_with({straight(1, 600, 20, 0, 1)}, /*speed=*/30.f);
+  StreamView view = view_with({straight(1, 600, 0, 0, 1)}, /*speed=*/30.f);
   const float bubble = stream_bubble(view, r);
-  SLRR_REQUIRE(bubble > 60.f);
+  SLRR_REQUIRE(bubble > 80.f);
+  const float clearance = std::max(bubble, r.front_clear);
   uint32_t random = 0xabcdef01;
   int picked = 0;
   for (int i = 0; i < 50; ++i) {
@@ -146,34 +165,46 @@ SLRR_TEST(fast_player_keeps_headway) {
     if (!spot.valid) continue;
     ++picked;
     const float distance = stream_spot_distance(view.lanes[0], spot.along, view.player);
-    SLRR_REQUIRE(distance >= bubble);
+    SLRR_REQUIRE(distance >= clearance);
     view.lanes[0].residents.push_back(spot.along);
   }
-  SLRR_REQUIRE(picked >= 5);
+  SLRR_REQUIRE(picked >= 2);
   std::puts("PASS a fast player never gets a car inside the speed-dependent bubble");
 }
 
-// 4. Standing still the bubble collapses, so a parked player still sees traffic
-//    arrive instead of an empty street.
+// 4. The speed term works where the fixed clearance does not already dominate:
+//    the bubble grows with speed and saturates at `max_bubble`, so a fast
+//    player's street is filled further out than a parked one's.
 SLRR_TEST(parked_player_still_gets_ahead_traffic) {
   StreamRules r = rules();
-  StreamView parked = view_with({straight(1, 600, 10, 0, 1)}, 0.f);
-  StreamView moving = view_with({straight(1, 600, 10, 0, 1)}, 30.f);
+  // A short fixed clearance, so the test is about the speed term and not about
+  // the shipped 160 m.
+  r.front_clear = 10.f;
+  r.min_bubble = 25.f;
+  r.max_bubble = 200.f;
+  StreamView parked = view_with({straight(1, 600, 0, 0, 1)}, 0.f);
+  StreamView moving = view_with({straight(1, 600, 0, 0, 1)}, 30.f);
   SLRR_REQUIRE(stream_bubble(parked, r) < stream_bubble(moving, r));
   SLRR_REQUIRE(stream_bubble(parked, r) <= r.min_bubble + .001f);
-  // Draw until one spot lands inside the distance a moving player would refuse:
-  // that is the whole point of scaling the bubble with speed.
+  SLRR_REQUIRE(std::fabs(stream_min_spawn_distance(1.f, moving, r) -
+                         (30.f * r.headway + r.min_bubble)) < .01f);
+  SLRR_REQUIRE(stream_min_spawn_distance(1.f, parked, r) <
+               stream_min_spawn_distance(1.f, moving, r));
+  // Saturation: a very fast player does not push the bubble to infinity.
+  StreamView blazing = view_with({straight(1, 600, 0, 0, 1)}, 400.f);
+  SLRR_REQUIRE(stream_bubble(blazing, r) <= r.max_bubble + .001f);
+  // And the parked player is still served: the street fills at 25 m.
   uint32_t random = 0x5f3759df;
-  bool close_spot = false;
-  for (int i = 0; i < 40 && !close_spot; ++i) {
+  int picked = 0;
+  for (int i = 0; i < 30; ++i) {
     StreamSpot spot = stream_pick_spot(parked, r, random);
     if (!spot.valid) continue;
-    const float distance =
-        stream_spot_distance(parked.lanes[0], spot.along, parked.player);
-    close_spot = distance < stream_bubble(moving, r);
+    ++picked;
+    SLRR_REQUIRE(stream_spot_distance(parked.lanes[0], spot.along, parked.player) >=
+                 r.min_bubble);
     parked.lanes[0].residents.push_back(spot.along);
   }
-  SLRR_REQUIRE(close_spot);
+  SLRR_REQUIRE(picked >= 2);
   std::puts("PASS a parked player gets traffic closer than a moving one");
 }
 
@@ -187,7 +218,7 @@ SLRR_TEST(junction_chords_are_never_used) {
   SLRR_REQUIRE(!spot.valid);
   SLRR_REQUIRE(std::string(spot.refused) == "junction");
   // Adding one usable lane is enough.
-  view.lanes.push_back(straight(3, 150, 30, 0, 1));
+  view.lanes.push_back(straight(3, 300, 0, 0, 1));
   bool used_lane = false;
   for (int i = 0; i < 20; ++i) {
     StreamSpot picked = stream_pick_spot(view, r, random);
@@ -258,8 +289,8 @@ SLRR_TEST(lane_capacity_is_respected) {
 // 10. Spacing: no new car within `min_gap` of one already standing on its lane.
 SLRR_TEST(gap_to_existing_traffic_is_kept) {
   const auto r = rules();
-  StreamView view = view_with({straight(1, 600, 30, 0, 1)});
-  view.lanes[0].residents.push_back(300.f);
+  StreamView view = view_with({straight(1, 800, 0, 0, 1)});
+  view.lanes[0].residents.push_back(200.f);
   uint32_t random = 0x1234abcd;
   int accepted = 0;
   for (int i = 0; i < 40; ++i) {
@@ -270,7 +301,7 @@ SLRR_TEST(gap_to_existing_traffic_is_kept) {
     ++accepted;
     view.lanes[0].residents.push_back(spot.along);
   }
-  SLRR_REQUIRE(accepted > 5);
+  SLRR_REQUIRE(accepted >= 2);
   std::puts("PASS a new car keeps the minimum gap to cars already on the lane");
 }
 
@@ -278,7 +309,7 @@ SLRR_TEST(gap_to_existing_traffic_is_kept) {
 //     hidden state, so a second run cannot invent duplicates.
 SLRR_TEST(same_inputs_give_the_same_spot) {
   const auto r = rules();
-  const StreamView view = view_with({straight(1, 300, 30, 0, 1), straight(2, 300, 30, 0, -1)});
+  const StreamView view = view_with({straight(1, 600, 0, 0, 1), straight(2, 600, 0, 0, -1)});
   uint32_t a = 0xfeedbeef, b = 0xfeedbeef;
   const StreamSpot first = stream_pick_spot(view, r, a);
   const StreamSpot second = stream_pick_spot(view, r, b);
@@ -306,7 +337,10 @@ SLRR_TEST(same_inputs_give_the_same_spot) {
 // 12. The distance is measured on the lane, not to its nearest point: a lane that
 //     curves back is rejected even though the player stands close to one end.
 SLRR_TEST(curved_lane_distance_is_real) {
-  const auto r = rules();
+  StreamRules r = rules();
+  // This test is about measuring distance on the lane, so the clearance is set
+  // low enough that near spots are legal.
+  r.front_clear = 45.f;
   StreamLane hairpin;
   hairpin.edge = 1;
   hairpin.length = 400;
@@ -341,7 +375,7 @@ SLRR_TEST(curved_lane_distance_is_real) {
 // 13. Nothing is created on the player: the clearance holds in every direction.
 SLRR_TEST(player_clearance_holds) {
   const auto r = rules();
-  StreamView view = view_with({straight(1, 300, 2, 0, 1), straight(2, 300, 2, 0, -1)});
+  StreamView view = view_with({straight(1, 700, 0, 0, 1), straight(2, 700, 0, 0, -1)});
   uint32_t random = 0x0badf00d;
   int picked = 0;
   for (int i = 0; i < 60; ++i) {
@@ -355,7 +389,7 @@ SLRR_TEST(player_clearance_holds) {
     for (auto& lane : view.lanes)
       if (lane.edge == spot.edge) lane.residents.push_back(spot.along);
   }
-  SLRR_REQUIRE(picked > 5);
+  SLRR_REQUIRE(picked >= 4);
   std::puts("PASS no car is created on top of the player");
 }
 
@@ -388,6 +422,75 @@ SLRR_TEST(slider_maps_to_spacing) {
               shipped, dense);
 }
 
+// 16. The player must not see a car appear. Every accepted spot has to respect
+//     the clearance of its own direction: far ahead, further to the side, and
+//     clear behind. This is the property the road test broke: a crossing street
+//     beside the car has `dot` near zero, and the old "bubble, but only ahead"
+//     rule let cars materialise ten metres away in plain sight.
+SLRR_TEST(nothing_appears_in_plain_sight) {
+  const auto r = rules();
+  StreamView view = view_with({straight(1, 900, 0, 0, 1),             // ahead
+                               straight(2, 900, 0, 0, -1),            // behind
+                               crossing_street(3, 500, 0, 60, 0.f),   // left
+                               crossing_street(4, 500, 0, 70, 0.f)},  // right
+                              /*speed=*/20.f);
+  uint32_t random = 0x51ed270b;
+  const float head_x = -std::sin(view.heading);
+  const float head_z = -std::cos(view.heading);
+  int picked = 0;
+  for (int i = 0; i < 120; ++i) {
+    StreamSpot spot = stream_pick_spot(view, r, random);
+    if (!spot.valid) continue;
+    for (auto& lane : view.lanes) {
+      if (lane.edge != spot.edge) continue;
+      const RoadPoint at = stream_lane_point(lane, spot.along);
+      const float dx = at[0] - view.player[0];
+      const float dz = at[2] - view.player[2];
+      const float flat = std::sqrt(dx * dx + dz * dz);
+      const float dot = flat > 1e-3f ? (dx * head_x + dz * head_z) / flat : 0.f;
+      const float distance = stream_spot_distance(lane, spot.along, view.player);
+      const float required =
+          std::max(r.min_player_distance, stream_min_spawn_distance(dot, view, r));
+      SLRR_REQUIRE(distance >= required);
+      // The three zones ask for genuinely different distances, so a car cannot
+      // slip through a corner of the cone.
+      if (dot > .35f) SLRR_REQUIRE(distance >= r.front_clear);
+      if (dot < -.35f) SLRR_REQUIRE(distance >= r.rear_clear);
+      if (std::fabs(dot) <= .35f) SLRR_REQUIRE(distance >= r.side_clear);
+      lane.residents.push_back(spot.along);
+    }
+    ++picked;
+  }
+  SLRR_REQUIRE(picked >= 6);
+  std::puts("PASS every spawn respects the clearance of its own direction");
+}
+
+// 17. A limited budget packs the streets the player is on before it reaches a
+//     side street two hundred metres away. The runtime keeps the lane list
+//     nearest first, and the scheduler draws towards the front of it, so with
+//     two equally usable lanes the first one takes most of the cars. Without
+//     that bias a hundred cars spread over seven kilometres of reachable lane
+//     and the slider did nothing visible.
+SLRR_TEST(budget_draws_towards_the_nearest_lanes) {
+  const auto r = rules();
+  // Geometrically identical lanes, so the only difference is their order: the
+  // runtime sorts by distance, this list therefore starts with the near street.
+  StreamView view = view_with({straight(1, 900, 0, 0, 1), straight(2, 900, 0, 0, 1)});
+  uint32_t random = 0xc2b2ae35;
+  int near = 0, far = 0;
+  for (int i = 0; i < 200; ++i) {
+    const StreamSpot spot = stream_pick_spot(view, r, random);
+    if (!spot.valid) continue;
+    if (spot.edge == 1) ++near; else ++far;
+  }
+  SLRR_REQUIRE(near + far == 200);
+  std::printf("  near=%d far=%d of 200 draws\n", near, far);
+  // A uniform draw would split them 100/100; the bias has to be clear.
+  SLRR_REQUIRE(near >= 130);
+  SLRR_REQUIRE(far > 0);
+  std::puts("PASS the budget is drawn towards the nearest lanes");
+}
+
 int main() {
   const standalone::Test tests[] = {standing_player_is_populated_all_around,
                                     driving_fills_the_road_ahead,
@@ -403,6 +506,8 @@ int main() {
                                     curved_lane_distance_is_real,
                                     player_clearance_holds,
                                     saturated_network_refuses_with_a_reason,
-                                    slider_maps_to_spacing};
+                                    slider_maps_to_spacing,
+                                    nothing_appears_in_plain_sight,
+                                    budget_draws_towards_the_nearest_lanes};
   return standalone::run("traffic_streaming", tests);
 }

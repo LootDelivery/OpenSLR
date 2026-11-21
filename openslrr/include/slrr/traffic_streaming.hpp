@@ -70,23 +70,40 @@ struct StreamRules {
   // react. Standing still it collapses to `min_bubble`, so a parked player still
   // gets traffic around them instead of an empty street.
   float headway = 1.4f;
-  float min_bubble = 25.f;
-  float max_bubble = 90.f;
-  // Nothing is created this close to the player in any direction, so a car
-  // never materialises on the bumper or beside the door.
-  float min_player_distance = 14.f;
+  float min_bubble = 45.f;
+  float max_bubble = 110.f;
+  // The player has to be unable to see a car appear. A three zone clearance
+  // replaces the old "bubble, but only strictly ahead": a spot on a crossing
+  // street beside the player has `dot` near zero, so the bubble never covered
+  // it and cars materialised ten metres away in plain sight.
+  //
+  //   ahead  (dot >  0.35)  at least `max(front_clear, bubble)` metres away
+  //   side   (|dot| <= .35) at least `side_clear`
+  //   behind (dot < -0.35)  at least `rear_clear`
+  //
+  // The bubble still grows with speed inside the front zone, so a fast player
+  // gets his spawns further out than a crawling one.
+  float front_clear = 160.f;
+  float side_clear = 105.f;
+  float rear_clear = 60.f;
+  // Absolute floor, whatever the zone says: never on the bumper, never beside
+  // the door.
+  float min_player_distance = 45.f;
   // Spawn and retire distances form the hysteresis band: a car created inside
   // `spawn_radius` is not retired until it leaves `retire_radius`.
   float spawn_radius = 260.f;
   float retire_radius = 330.f;
   // Desired spacing between cars, linearly from the slider: a light city keeps
-  // ~200 m of lane per car, the shipped maximum ~45 m. The shipped slider sits
-  // at 0.2, which reproduces the original game's ~20 cars; the maximum is what
-  // the network around the player can actually hold up to the budget.
+  // ~200 m of lane per car, the shipped maximum ~26 m, so the streets around
+  // the player queue up instead of holding one car per block. The shipped
+  // slider sits at 0.2.
   float spacing_min = 200.f;  // at density 0
-  float spacing_max = 45.f;   // at density 1
-  // Hard guard: the most cars this system will ever own, from the slider.
-  int budget = 100;
+  float spacing_max = 26.f;   // at density 1
+  // Hard guard: the most cars this system will ever own, from the slider. A car
+  // costs about thirteen draw calls, so the ceiling is a budget as much as a
+  // population: eighty packed cars look denser than a hundred spread over every
+  // side street and cost a fifth less.
+  int budget = 80;
   // A lane may not hold more than one car per this many metres.
   float per_car_metres = 32.f;
   // Keep clear of the ends, where the lane meets a junction.
@@ -111,6 +128,12 @@ struct StreamSpot {
 // as a sequence, so the caller stays deterministic under a fixed seed. Callers
 // must add the chosen car to `view` before asking again, or a repeated call can
 // return the same spot.
+//
+// Lanes are expected nearest first (the runtime sorts by `StreamLane::distance`)
+// and the draw is biased towards the front of the list, so a limited budget
+// packs the streets around the player before it reaches across the district.
+// Without that bias a hundred cars were spread over seven kilometres of
+// reachable lane, which is why the slider felt like it did nothing.
 StreamSpot stream_pick_spot(const StreamView& view, const StreamRules& rules,
                             uint32_t& random);
 
@@ -124,5 +147,9 @@ float stream_spot_distance(const StreamLane& lane, float along,
 // so the trace can print what the policy decided without duplicating the maths.
 float stream_spacing(float density, const StreamRules& rules);
 float stream_bubble(const StreamView& view, const StreamRules& rules);
+// How far a spot with this direction (`dot` against the player's heading) has to
+// be from the player before a car may be created there.
+float stream_min_spawn_distance(float dot, const StreamView& view,
+                                const StreamRules& rules);
 
 }  // namespace slrr

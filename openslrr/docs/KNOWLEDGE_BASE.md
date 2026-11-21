@@ -398,13 +398,20 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
 - Spawn placement is the `traffic_streaming` scheduler, not a ring: a candidate
   is a lane position that is reachable by driving (the player's lane, its
   opposite direction, then everything forward through junctions), not a
-  junction chord, not over the lane's own capacity (`length / 32 m`) and at
-  least `min_gap` 26 m from the cars already standing on that lane. The only
-  forward exclusion is a pop-in bubble, `speed × 1.4 s + 25 m` clamped to 90 m,
-  so a parked player gets traffic 25 m ahead and a fast one does not. Nothing is
-  created within 14 m of the player in any direction. The forward sector is
-  therefore open, which is the whole point: the road ahead fills up to the spawn
-  radius instead of staying empty.
+  junction chord, not over the lane's own capacity (`length / per_car_metres`)
+  and at least `min_gap` from the cars already standing on that lane. Spacing
+  and gap come from the slider (40 m / 30 m at density 0, 20 m / 16 m at
+  density 1).
+- A car must not be seen to appear, so the clearance is per direction and is
+  measured to the spot: 160 m ahead (or a speed bubble, whichever is larger),
+  105 m to the side, 60 m behind, 45 m absolute. The earlier rule applied the
+  bubble only to spots strictly ahead, which let a crossing street beside the
+  car, whose `dot` is near zero, spawn ten metres away in plain sight.
+- Lanes are sorted nearest first and the scheduler draws towards the front of
+  the list, so the budget packs the street the player is on before a side
+  street 200 m away. Measured at noon with the player standing still: density
+  0.2 gives 6 cars within 140 m and 3 ahead within 220 m, density 1.0 gives 37
+  and 15.
 - `PhysicsRef.setStatic(0)` releases a script body to the free-body solver
   (`src/resources/part_runtime.cpp:advance_free_bodies`), which reuses the
   loose-body car and scene contacts and publishes pose and velocities.

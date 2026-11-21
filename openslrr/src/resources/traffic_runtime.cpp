@@ -590,11 +590,14 @@ void publish(Registration &r, const RoadRoutes &graph, float at) {
 //     lifetime, so nothing is filled and emptied in a loop.
 StreamRules stream_rules(float density) {
   StreamRules rules;
-  // The budget stays `density * 100` as a hard guard on how many cars this
-  // system may own; the population itself comes from the lane length.
-  rules.budget = std::isfinite(density)
-                     ? int(std::clamp(density, 0.f, 1.f) * 100)
-                     : 0;
+  const float d = std::isfinite(density) ? std::clamp(density, 0.f, 1.f) : 0.f;
+  // The slider controls how tightly the streets around the player are packed,
+  // not just how many cars exist somewhere. A car costs about thirteen draw
+  // calls, so the ceiling drops from a hundred to eighty: the same or better
+  // visible density, a fifth less geometry.
+  rules.budget = int(std::lround(d * 80.f));
+  rules.min_gap = 30.f - 14.f * d;
+  rules.per_car_metres = 40.f - 20.f * d;
   return rules;
 }
 // A car this module did not create still occupies its lane, so the scheduler
@@ -696,6 +699,14 @@ void build_stream_view(const RoadRoutes &graph, const StreamRules &rules,
     }
     view.lanes.push_back(std::move(lane));
   }
+  // Nearest first: the scheduler draws towards the front of the list, so the
+  // budget packs the streets the player is on before it reaches a side street
+  // two hundred metres away. Sorting here, once per rebuild, keeps the picker
+  // itself free of geometry.
+  std::sort(view.lanes.begin(), view.lanes.end(),
+            [](const StreamLane &a, const StreamLane &b) {
+              return a.distance < b.distance;
+            });
 }
 // Register a car that already exists. `owned` marks the cars this module
 // created and may destroy.
@@ -1458,15 +1469,33 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
           break;
         }
       }
+      // What the player actually sees: how many cars stand within 140 m, and
+      // how many of those are ahead inside 220 m. This is the number that tells
+      // whether a density setting looks dense, which a global count cannot.
+      int near_count = 0, ahead_count = 0;
+      for (auto id : ids) {
+        auto snapshot = registrations.find(id);
+        if (snapshot == registrations.end() || !snapshot->second.visible)
+          continue;
+        const auto at = position(snapshot->second.car);
+        const float dx = at[0] - focus[0];
+        const float dz = at[2] - focus[2];
+        const float d = std::sqrt(dx * dx + dz * dz);
+        if (d <= 140.f) ++near_count;
+        if (d <= 220.f && d > .5f &&
+            (dx * forward[0] + dz * forward[2]) / d > .3f)
+          ++ahead_count;
+      }
       last_target = target;
       std::fprintf(stderr,
                    "[traffic] t=%.1f ground=0x%x visible=%d owned=%d target=%d "
                    "cap=%d lane_m=%.0f spacing=%.0f total=%zu dropped=%zu "
-                   "models=%zu seeds=%zu refused=%s",
+                   "models=%zu seeds=%zu near=%d ahead=%d refused=%s",
                    clock_seconds, gameref_get(key) ? gameref_get(key)->type_id : 0,
                    visible, owned_count, last_target, cap, view.lane_metres,
                    stream_spacing(std::isfinite(density) ? density : 0.f, rules),
                    spawned_total, dropped_total, p->models.size(), p->seeds.size(),
+                   near_count, ahead_count,
                    last_refused && *last_refused ? last_refused : "-");
       if (auto found = registrations.find(first); found != registrations.end()) {
         const auto &r = found->second;

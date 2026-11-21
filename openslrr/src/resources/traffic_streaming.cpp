@@ -46,6 +46,14 @@ float stream_bubble(const StreamView& view, const StreamRules& rules) {
   return std::clamp(reach + rules.min_bubble, rules.min_bubble, rules.max_bubble);
 }
 
+float stream_min_spawn_distance(float dot, const StreamView& view,
+                                const StreamRules& rules) {
+  if (dot > .35f)
+    return std::max(rules.front_clear, stream_bubble(view, rules));
+  if (dot < -.35f) return rules.rear_clear;
+  return rules.side_clear;
+}
+
 int stream_target_count(const StreamView& view, const StreamRules& rules,
                         float density) {
   if (rules.budget <= 0)
@@ -66,12 +74,17 @@ StreamSpot stream_pick_spot(const StreamView &view, const StreamRules &rules,
     spot.refused = "no lanes";
     return spot;
   }
-  const float bubble = stream_bubble(view, rules);
   // A bounded number of draws: a busy network still yields a spot, an empty or
   // saturated one gives up instead of scanning the whole graph.
+  const float head_x = -std::sin(view.heading);
+  const float head_z = -std::cos(view.heading);
   for (int attempt = 0; attempt < 48; ++attempt) {
+    // Biased draw: the list is nearest first, and squaring the uniform turns a
+    // uniform sweep of the district into a sweep of the streets the player is
+    // standing on, spilling outwards as those fill up.
+    const float draw = unit(random);
     const size_t index =
-        std::min<size_t>(size_t(unit(random) * float(view.lanes.size())),
+        std::min<size_t>(size_t(draw * draw * float(view.lanes.size())),
                          view.lanes.size() - 1);
     const StreamLane &lane = view.lanes[index];
     if (lane.crossing) {
@@ -109,19 +122,26 @@ StreamSpot stream_pick_spot(const StreamView &view, const StreamRules &rules,
     }
     const float along = low + unit(random) * (high - low);
     // The lane's own nearest point can be much closer than the chosen position
-    // on a long street, so the radius and the bubble are checked against the
+    // on a long street, so the radius and the clearance are checked against the
     // spot, not against the lane.
+    const RoadPoint at = stream_lane_point(lane, along);
     const float spot_distance = stream_spot_distance(lane, along, view.player);
     if (spot_distance > rules.spawn_radius) {
       spot.refused = "spot too far";
       continue;
     }
-    if (spot_distance < rules.min_player_distance) {
-      spot.refused = "on top of the player";
-      continue;
-    }
-    if (spot_distance < bubble && lane.dot > 0.f) {
-      spot.refused = "too close ahead";
+    // Direction of the spot itself, not of the lane: a lane that runs past the
+    // player towards the horizon has one "dot" for the whole curve, and the old
+    // rule let its near end, standing beside the car, through.
+    const float dx = at[0] - view.player[0];
+    const float dz = at[2] - view.player[2];
+    const float flat = std::sqrt(dx * dx + dz * dz);
+    const float dot = flat > 1e-3f ? (dx * head_x + dz * head_z) / flat : 0.f;
+    const float required =
+        std::max(rules.min_player_distance,
+                 stream_min_spawn_distance(dot, view, rules));
+    if (spot_distance < required) {
+      spot.refused = "too close to the player";
       continue;
     }
     bool crowded = false;
