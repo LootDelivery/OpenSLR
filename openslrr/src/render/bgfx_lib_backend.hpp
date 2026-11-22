@@ -476,6 +476,7 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::TextureHandle reflection_ggx_[2]{};
   bgfx::FrameBufferHandle reflection_ggx_fb_[2][6][6]{};
   int reflection_ggx_level_ = 0;
+  int reflection_ggx_face_ = 0;
   int reflection_ggx_write_ = 0;
   bool reflection_ggx_ready_ = false;
   // The cube the materials sample for rough reflections.

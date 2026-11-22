@@ -2538,67 +2538,75 @@ void LibBgfxBackend::build_ggx_cube() {
     if (!bgfx::isValid(source)) return;
     static const bx::Vec3 axes[6] = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
     static const bx::Vec3 ups[6] = {{0,1,0}, {0,1,0}, {0,0,-1}, {0,0,1}, {0,1,0}, {0,1,0}};
-    const int level = reflection_ggx_level_;
-    const uint16_t target = static_cast<uint16_t>(kReflectionGgxSize >> level);
-    // The width of a level matches the box-filtered mip it replaces -- 0.02
-    // doubling per level is the angular size of 2^level texels of the capture --
-    // so the mip a material selects keeps the softness it has today and gains
-    // the GGX lobe shape instead of the box average. A PBR material with a real
-    // roughness will want the chain to reach 1.0, which is what the last level
-    // is for once material roughness becomes physical.
-    const float roughness = std::min(0.02f * static_cast<float>(1 << level), 1.f);
-    if (level == 0) {
-      // Roughness 0 is the capture itself; a copy is exact and free compared to
-      // convolving 512 across 6 faces.
-      for (int face = 0; face < 6; ++face) {
-        const auto fb = reflection_ggx_fb_[reflection_ggx_write_][level][face];
-        if (!bgfx::isValid(fb)) continue;
-        const auto view = static_cast<uint16_t>(kReflectionPrefilterView + level * 6 + face);
-        bgfx::TextureRegion source_region, destination_region;
-        source_region.init(source, 0, 0, kReflectionGgxSize, kReflectionGgxSize);
-        source_region.z = static_cast<uint16_t>(face);
-        destination_region.init(reflection_ggx_[reflection_ggx_write_], 0, 0,
-                                kReflectionGgxSize, kReflectionGgxSize);
-        destination_region.mip = 0;
-        destination_region.z = static_cast<uint16_t>(face);
-        bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
-        bgfx::setViewRect(view, 0, 0, kReflectionGgxSize, kReflectionGgxSize);
-        bgfx::blit(view, destination_region, source_region);
-      }
-      if (++reflection_ggx_level_ == kReflectionGgxLevels) {
-        reflection_ggx_level_ = 0;
-        reflection_ggx_write_ ^= 1;
-        reflection_ggx_ready_ = true;
-      }
-      return;
-    }
-    for (int face = 0; face < 6; ++face) {
-      const auto fb = reflection_ggx_fb_[reflection_ggx_write_][level][face];
-      if (!bgfx::isValid(fb)) continue;
+    // A whole level is six faces, and a full-screen convolution of six faces is
+    // far more work than the rest of the frame: at 256 squared with twenty taps
+    // it measured 1.7 ms a frame, which is not a price a reflection that is only
+    // 20 degrees wide should cost. The chain is therefore refreshed a face at a
+    // time and the cube being read is only swapped when every face of every
+    // level has been built, so a lobe that is 20 ms old is invisible while the
+    // cost per frame drops by the number of faces it no longer draws.
+    static const int faces_per_frame = std::clamp(
+        refl_env_int("SLRR_REFL_GGX_FACES", 1), 1, 6);
+    for (int n = 0; n < faces_per_frame; ++n) {
+      const int level = reflection_ggx_level_;
+      const int face = reflection_ggx_face_;
+      const int side = reflection_ggx_write_;
+      const uint16_t target = static_cast<uint16_t>(kReflectionGgxSize >> level);
       const auto view = static_cast<uint16_t>(kReflectionPrefilterView + level * 6 + face);
-      bgfx::setViewFrameBuffer(view, fb);
-      bgfx::setViewRect(view, 0, 0, target, target);
-      bgfx::setViewClear(view, BGFX_CLEAR_COLOR, 0x000000ff, 0.f);
-      bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
-      const bx::Vec3 F = axes[face];
-      const bx::Vec3 R = bx::normalize(bx::cross(F, ups[face]));
-      const bx::Vec3 U = bx::normalize(bx::cross(R, F));
-      const float right[4] = {R.x, R.y, R.z, 0.f};
-      const float up[4] = {U.x, U.y, U.z, 0.f};
-      const float fwd[4] = {F.x, F.y, F.z, 0.f};
-      const float params[4] = {roughness, 12.f + 8.f * level, 0.f, 0.f};
-      bgfx::setUniform(u_refl_right_, right);
-      bgfx::setUniform(u_refl_up_, up);
-      bgfx::setUniform(u_refl_fwd_, fwd);
-      bgfx::touch(view);
-      // draw_fullscreen passes hiz_params into u_hizParams, which is where this
-      // shader reads the roughness and the sample count.
-      draw_fullscreen(view, prefilter_program_, source, params, u_scene_reflection_);
-    }
-    if (std::getenv("SLRR_REFL_TRACE"))
-      std::fprintf(stderr, "[refl-ggx] level=%d target=%d roughness=%.2f samples=%.0f\n",
-                   level, int(target), roughness, 12.f + 8.f * level);
-    if (++reflection_ggx_level_ == kReflectionGgxLevels) {
+      // The width of a level matches the box-filtered mip it replaces -- 0.02
+      // doubling per level is the angular size of 2^level texels of the capture
+      // -- so the mip a material selects keeps the softness it has today and
+      // gains the GGX lobe shape instead of the box average. A PBR material
+      // with a real roughness will want the chain to reach 1.0, which is what
+      // the last level is for once material roughness becomes physical.
+      const float roughness = std::min(0.02f * static_cast<float>(1 << level), 1.f);
+      const auto fb = reflection_ggx_fb_[side][level][face];
+      if (level == 0) {
+        // Roughness 0 is the capture itself; a copy is exact and free compared
+        // to convolving 512 across 6 faces.
+        if (bgfx::isValid(fb)) {
+          bgfx::TextureRegion source_region, destination_region;
+          source_region.init(source, 0, 0, kReflectionGgxSize, kReflectionGgxSize);
+          source_region.z = static_cast<uint16_t>(face);
+          destination_region.init(reflection_ggx_[side], 0, 0,
+                                  kReflectionGgxSize, kReflectionGgxSize);
+          destination_region.mip = 0;
+          destination_region.z = static_cast<uint16_t>(face);
+          bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
+          bgfx::setViewRect(view, 0, 0, kReflectionGgxSize, kReflectionGgxSize);
+          bgfx::blit(view, destination_region, source_region);
+        }
+      } else if (bgfx::isValid(fb)) {
+        bgfx::setViewFrameBuffer(view, fb);
+        bgfx::setViewRect(view, 0, 0, target, target);
+        bgfx::setViewClear(view, BGFX_CLEAR_COLOR, 0x000000ff, 0.f);
+        bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
+        const bx::Vec3 F = axes[face];
+        const bx::Vec3 R = bx::normalize(bx::cross(F, ups[face]));
+        const bx::Vec3 U = bx::normalize(bx::cross(R, F));
+        const float right[4] = {R.x, R.y, R.z, 0.f};
+        const float up[4] = {U.x, U.y, U.z, 0.f};
+        const float fwd[4] = {F.x, F.y, F.z, 0.f};
+        const float params[4] = {roughness, 12.f + 8.f * level, 0.f, 0.f};
+        bgfx::setUniform(u_refl_right_, right);
+        bgfx::setUniform(u_refl_up_, up);
+        bgfx::setUniform(u_refl_fwd_, fwd);
+        bgfx::touch(view);
+        // draw_fullscreen passes hiz_params into u_hizParams, which is where
+        // this shader reads the roughness and the sample count.
+        draw_fullscreen(view, prefilter_program_, source, params, u_scene_reflection_);
+      }
+      if (std::getenv("SLRR_REFL_TRACE") && face == 0 &&
+          std::fprintf(stderr, "[refl-ggx] level=%d face=%d target=%d roughness=%.2f "
+                       "samples=%.0f per_frame=%d\n",
+                       level, face, int(target), roughness, 12.f + 8.f * level,
+                       faces_per_frame)) {
+      }
+      // Publish only a cube whose every level and face was built from the same
+      // generation; a half-refreshed cube would mix two moments of the world.
+      if (++reflection_ggx_face_ < 6) continue;
+      reflection_ggx_face_ = 0;
+      if (++reflection_ggx_level_ < kReflectionGgxLevels) continue;
       reflection_ggx_level_ = 0;
       reflection_ggx_write_ ^= 1;
       reflection_ggx_ready_ = true;

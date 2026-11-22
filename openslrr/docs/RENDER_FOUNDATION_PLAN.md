@@ -442,19 +442,32 @@ lobe widens. Level 0 is a straight blit of the capture, so sharp reflections are
 bit-identical to before. The mip a material selects did not change, so the
 softness it asks for is the softness it gets; what changed is the kernel.
 
-Rebuilt one level per frame from the raw capture, six faces per level, double
-buffered for the same reason as the bake. Level 0 is not built at all: it would be
-a copy of the capture, and the shader reads the capture cube directly while `lod`
-is below 1, so the sharp end stays on the freshest cube. `SLRR_REFL_GGX=0` puts the
-material back on the box mips for A/B.
+Refreshed one face per frame from the raw capture, double buffered for the same
+reason as the bake: the cube being read is only swapped when every face of every
+level has been built, so a published chain is never a mix of two moments. The
+whole chain therefore refreshes in thirty-six frames -- at 250 fps about 150 ms --
+which is invisible on a lobe that is twenty degrees wide and would be obvious on
+the sharp end, and the sharp end does not use this chain at all: level 0 is not
+built, and while `lod` is below 1 the shader reads the capture cube directly, a
+whole cycle fresher. `SLRR_REFL_GGX=0` puts the material back on the box mips for
+A/B, `SLRR_REFL_GGX_FACES` overrides the faces per frame.
 
-| | `gpu` | frame |
-|---|---|---|
-| GGX off | 2.34 | 3.57 |
-| GGX on, 16 + 24 per level samples | 2.57 | 3.76 |
-| GGX on, 12 + 8 per level samples | 2.50 | 3.63 |
+Cost, stationary at the Valo City spawn with traffic disabled so the runs are
+comparable, five percent trimmed mean of three runs each:
 
-Two wrong turns worth keeping:
+| | frame | refl |
+| --- | --- | --- |
+| GGX off | 3.406 ms | 0.253 ms |
+| GGX on, one face a frame | 3.354 ms | 0.259 ms |
+
+The first version built a whole level -- six faces -- every frame and looked like
+it cost 1.7 ms. That number was traffic variance, not GGX: with the population
+switched off and the runs repeated, the difference disappears. A face-pass is a
+256 squared full-screen convolution, which is nothing next to the twelve draw
+passes the cube costs; spreading it over frames is still the right default
+because it keeps the worst frame flat.
+
+Three wrong turns worth keeping:
 
 1. The first chain was 128 across. A 128 texel face is four texels of the capture
    per texel, so even level 0 was softer than the sharpest level a material could
@@ -466,6 +479,31 @@ Two wrong turns worth keeping:
    same flat paint from the other side. The chain is now built at the widths the
    old mapping produced, and material roughness becomes a real number only with
    PBR materials in stage 2.
+3. The pass never rendered a pixel for two independent reasons, and both were
+   invisible from the code. `draw_fullscreen` submitted its quad without
+   `BGFX_STATE_MSAA`, and the backend silently drops the draw on an MSAA-capable
+   target without it (section 8.5.1 below); and the cube face it drew into had no
+   depth attachment, so nothing in the cube was ever depth tested (section 8.8).
+   Both are fixed. A trace line, a valid program handle and a plausible cost were
+   no evidence at all that a pixel arrived -- the same lesson as the instancing
+   experiment in U2-B.4.
+
+#### 8.5.1 A full-screen quad without BGFX_STATE_MSAA is dropped
+
+`draw_fullscreen` builds an ortho quad and submits it with a default state. That
+default was `WRITE_RGB | WRITE_A`. On a target created with MSAA the backend drops
+such a draw: no error, no warning, the quad simply does not rasterise. Measured on
+the backbuffer with a known-good program and texture:
+
+| state | frame mean RGB |
+| --- | --- |
+| `WRITE_RGB | WRITE_A` | 83, 85, 76 -- the scene, no quad |
+| `WRITE_RGB | WRITE_A | MSAA` | 101, 108, 105 -- the quad covers the frame |
+
+Every prefilter pass in this backend went through that helper: the old blur chain,
+each GGX level, the irradiance probe. All of them were dead for the same reason,
+which is why the blur chain read as unused code and why convolving the cube changed
+nothing on screen. The default state now names `BGFX_STATE_MSAA`.
 
 ### 8.6 Freshness: what the cube's age is made of
 
