@@ -1840,6 +1840,10 @@ void LibBgfxBackend::destroy_reflections() {
       cube = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(reflection_depth_)) bgfx::destroy(reflection_depth_);
+    for (auto& depth : reflection_cube_depth_) {
+      if (bgfx::isValid(depth)) bgfx::destroy(depth);
+      depth = BGFX_INVALID_HANDLE;
+    }
     reflection_write_ = 0;
     reflection_depth_ = BGFX_INVALID_HANDLE;
     for (auto& cube : reflection_bake_cube_) {
@@ -2030,6 +2034,25 @@ void LibBgfxBackend::update_reflections(const float* eye) {
         destroy_reflections();
         return;
       }
+      // The cube faces need their own depth attachment: sharing the capture's
+      // depth buffer made bgfx reject the framebuffer outright, and a face
+      // without depth is not depth tested at all.
+      //
+      // One buffer per face, shared by the bake and by the moving layer that
+      // composites onto it. A car drawn in the moving layer is then tested
+      // against the baked world of the same face, which is the difference
+      // between a car behind a garage wall and a car in front of it. The order
+      // inside a frame makes this safe: the moving layer runs before the bake,
+      // so it sees the previous cycle's depth, and every bake view clears the
+      // buffer before it draws, so a car's depth never survives into the bake.
+      for (int face = 0; face < 6; ++face) {
+        reflection_cube_depth_[face] = bgfx::createTexture2D(size, size, false, 1,
+            bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT);
+        if (!bgfx::isValid(reflection_cube_depth_[face])) {
+          destroy_reflections();
+          return;
+        }
+      }
       for (int cube_index = 0; cube_index < 2; ++cube_index) {
         auto& cube = reflection_cubes_[cube_index];
         {
@@ -2070,16 +2093,30 @@ void LibBgfxBackend::update_reflections(const float* eye) {
           // whole chain from mip 0 of every face, and the faces are written
           // over two frames -- running it per face kept rebuilding the chain
           // from a mix of fresh and stale sides, which made the body flicker.
-          bgfx::Attachment attachment;
-          attachment.init(cube, bgfx::Access::Write, uint16_t(face), 1, 0,
-                          face == 5 ? BGFX_ATTACHMENT_AUTO_GEN_MIPS
-                                    : BGFX_ATTACHMENT_NONE);
+          // Colour *and* depth. A cube face used to be a colour-only
+          // framebuffer, and with no depth attachment bound the GPU runs no
+          // depth test at all: every draw passes and the face is painted in
+          // submission order. That is why the garage walls let trees, bridge
+          // pylons and whole buildings through in the paint while the same
+          // scene looked right on screen, and why driving a few metres only
+          // changed it through culling and never through occlusion. Each face
+          // owns one of the shared depth buffers, so the bake and the moving
+          // layer of that face test against the same world.
+          bgfx::Attachment attachment[2];
+          attachment[0].init(cube, bgfx::Access::Write, uint16_t(face), 1, 0,
+                             face == 5 ? BGFX_ATTACHMENT_AUTO_GEN_MIPS
+                                       : BGFX_ATTACHMENT_NONE);
+          // BGFX_ATTACHMENT_NONE explicitly: Attachment::init defaults the
+          // flags to AUTO_GEN_MIPS, and a depth attachment is rejected
+          // outright when it carries them.
+          attachment[1].init(reflection_cube_depth_[face], bgfx::Access::Write,
+                             0, 1, 0, BGFX_ATTACHMENT_NONE);
           // Indexed by the cube being built, not by the write slot. Using the
           // write slot made both iterations deposit into the same entry, so
           // one of the two cubes never got framebuffers -- it stayed empty and
           // the material alternated between a real map and a blank one.
           reflection_face_fb_[cube_index][face] =
-              bgfx::createFrameBuffer(1, &attachment, false);
+              bgfx::createFrameBuffer(2, attachment, false);
         }
       }
       for (int cube_index = 0; cube_index < 2; ++cube_index) {
@@ -2092,12 +2129,20 @@ void LibBgfxBackend::update_reflections(const float* eye) {
           return;
         }
         for (int face = 0; face < 6; ++face) {
-          bgfx::Attachment attachment;
-          attachment.init(cube, bgfx::Access::Write, uint16_t(face), 1, 0,
-                          face == 5 ? BGFX_ATTACHMENT_AUTO_GEN_MIPS
-                                    : BGFX_ATTACHMENT_NONE);
+          // Same depth attachment as the per-frame capture: a baked face is
+          // the whole static world, and without depth it is a stack of
+          // surfaces in submission order rather than a picture of a street.
+          bgfx::Attachment attachment[2];
+          attachment[0].init(cube, bgfx::Access::Write, uint16_t(face), 1, 0,
+                             face == 5 ? BGFX_ATTACHMENT_AUTO_GEN_MIPS
+                                       : BGFX_ATTACHMENT_NONE);
+          // BGFX_ATTACHMENT_NONE explicitly: Attachment::init defaults the
+          // flags to AUTO_GEN_MIPS, and a depth attachment is rejected
+          // outright when it carries them.
+          attachment[1].init(reflection_cube_depth_[face], bgfx::Access::Write,
+                             0, 1, 0, BGFX_ATTACHMENT_NONE);
           reflection_bake_fb_[cube_index][face] =
-              bgfx::createFrameBuffer(1, &attachment, false);
+              bgfx::createFrameBuffer(2, attachment, false);
         }
       }
       reflection_bake_size_ = size;
@@ -2168,9 +2213,14 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       if (!bgfx::isValid(target)) return;
       bgfx::setViewFrameBuffer(view, target);
       bgfx::setViewRect(view, 0, 0, size, size);
-      // The moving layer starts from a copy of the bake, so its colour comes
-      // from there and only the depth needs clearing.
-      bgfx::setViewClear(view, mode == 2 ? BGFX_CLEAR_DEPTH
+      // The moving layer starts from a copy of the bake: its colour and, when a
+      // bake exists, its depth both come from there. Clearing depth and drawing
+      // the cars over the finished picture is what put a car that is parked
+      // behind a garage inside the reflection; keeping the baked depth makes
+      // the cars depth test against the static world like any other geometry.
+      const bool baked_depth = mode == 2 && reflection_bake_ready_ &&
+                               reflection_bake_world_ == reflection_world_;
+      bgfx::setViewClear(view, mode == 2 ? (baked_depth ? BGFX_CLEAR_NONE : BGFX_CLEAR_DEPTH)
                                          : (BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH),
                          0x577493ff, 0.f);
       bgfx::setViewTransform(view, view_mtx, proj);

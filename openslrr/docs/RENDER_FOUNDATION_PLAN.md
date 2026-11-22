@@ -532,3 +532,54 @@ Not yet confirmed as the whole story. The other way a surface can fail to occlud
 in the cube is the moving layer: it clears depth and draws cars over the baked
 environment, so a car behind a wall is composited into the reflection anyway.
 That one needs a depth texture out of the bake and is not addressed here.
+
+### 8.8 The cube had no depth buffer at all
+
+Every reflection cube face was a framebuffer with exactly one attachment: the
+colour face. With no depth attachment bound the GPU performs no depth test --
+there is nothing to compare against -- so every draw passes and a face is a
+stack of surfaces in submission order. The main view was never affected because
+it renders into the scene framebuffer, which has colour and depth.
+
+This is the whole "reflections are see-through" family, and it explains each
+observation better than the alternatives did:
+
+* The garage façade let trees, bridge pylons and whole buildings through. They
+  were drawn after the wall and simply landed on top of it.
+* Driving a few metres only changed the picture through culling, never through
+  occlusion. Culling was the only thing that could still remove an object.
+* The bridge "followed the car" in the sense that it never got hidden by
+  anything: whatever was submitted last won, regardless of distance.
+* The earlier attempts to look for a blend or pass-0 problem kept finding real
+  but secondary defects, because the depth test that was supposed to order the
+  two never ran.
+
+Fix: each face gets its own `D24S8` depth texture, shared by the baked world and
+by the moving layer that composites cars onto it, so a car is depth tested
+against the same geometry the bake drew. Two details matter:
+
+* `Attachment::init` defaults its flags to `BGFX_ATTACHMENT_AUTO_GEN_MIPS`, and
+  bgfx rejects a depth attachment that carries them. The framebuffer is then
+  invalid and nothing renders into the face -- a black cube, no error printed.
+  The depth attachment must name `BGFX_ATTACHMENT_NONE`.
+* The moving layer used to clear depth and draw over the finished bake, which is
+  what put a car parked behind a garage inside the reflection. It now keeps the
+  baked depth. The order inside a frame makes this safe: the moving layer runs
+  before the bake, so it reads the depth of the previous cycle, and every bake
+  view clears its buffer before drawing, so car depth never survives into the
+  bake. A face is at most one cycle (about 16 ms) stale, which is a sub-metre
+  move of the probe.
+
+Cost, stationary at density 0.3, Valo City spawn, 5% trimmed mean:
+
+| | frame | refl |
+| --- | --- | --- |
+| colour-only faces | 3.315 ms | 0.307 ms |
+| colour + depth | 3.149 ms | 0.296 ms |
+
+Six 512² depth textures are 6 MB. The measurement says the depth test costs
+nothing here; the capture is still draw bound.
+
+`SLRR_REFL_DYN=0` now gives a clean comparison for the static world, and the dump
+panels (`SLRR_REFL_DUMP=2`) show the difference immediately: the façade face has
+no pylons, no trees and no other buildings in it.

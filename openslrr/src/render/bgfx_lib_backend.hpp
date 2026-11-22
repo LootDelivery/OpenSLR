@@ -405,6 +405,13 @@ class LibBgfxBackend final : public IRenderBackend {
       BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE}};
   size_t reflection_write_ = 0;
   bgfx::TextureHandle reflection_depth_ = BGFX_INVALID_HANDLE;
+  // One depth buffer per cube face, shared by the two cubes and by the
+  // moving layer drawn onto the bake. A face without one is not depth
+  // tested at all, which is what put every culled-in object on top of the
+  // garage wall in the paint.
+  std::array<bgfx::TextureHandle, 6> reflection_cube_depth_{{
+      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
+      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE}};
   bgfx::TextureHandle reflection_color_ = BGFX_INVALID_HANDLE;
   bgfx::FrameBufferHandle reflection_capture_ = BGFX_INVALID_HANDLE;
   // Prefilter chain (stage 2.2): every cube mip is filtered from the level
