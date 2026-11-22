@@ -456,18 +456,18 @@ fix is described in the commit and in the summary below. What remains over 40 ms
 is `present`, the main thread waiting for the render thread while the city draws
 ~6000 calls, which happens with traffic disabled as well.
 
-### U2-B.4. Batching ambient traffic
+### U2-B.4. Batching ambient traffic — measured, implemented, rejected
 
-Scope: the cars this module creates and the fake racers the career scripts build
-from the traffic templates. Cars from `cars/racers` stay out on purpose — their
-tuning combinations are open-ended and the racer path is not implemented yet, so
-there is nothing stable to batch on.
+Scope was to be the cars this module creates and the fake racers the career
+scripts build from the traffic templates; cars from `cars/racers` stay out on
+purpose — their tuning combinations are open-ended, so there is nothing stable to
+batch on.
 
 The concern raised before starting was that traffic cars carry per-car textures,
-so the batch key would be unique per car. Measured, that is true only for the
-painted body group: wheels, tyres, glass, chrome, lights and interiors share
-textures across cars of the same model, and those are the majority of submits.
-The draw-group probe (`SLRR_BATCH_PROBE=1`) reports, at density 1.0 with 100 cars:
+so the batch key would be unique per car. That is true only for the painted body
+group: wheels, tyres, glass, chrome, lights and interiors share textures across
+cars of the same model. The draw-group probe (`SLRR_BATCH_PROBE=1`, kept in this
+tree) reports at density 1.0 with 100 cars:
 
 | Metric | Value |
 |---|---|
@@ -476,27 +476,47 @@ The draw-group probe (`SLRR_BATCH_PROBE=1`) reports, at density 1.0 with 100 car
 | groups with more than one member | 70, covering 1197 submits |
 | submits a grouping pass would save | **83 %** |
 
-A group here is (geometry, material branch, bound textures, view) — exactly the
-key an instanced submit would use, and it already separates the painted body,
-because the key includes the bound diffuse texture handle.
+## What was built and why it is gone
 
-Expected gain, using the measured cost of a submit (~0.8 µs at 100 cars, from
-3619 → 5809 draws costing 244 → 172 fps): about 0.7…1.0 ms per frame at 100 cars,
-i.e. most of what the traffic population costs to draw.
+The instanced path was implemented and reverted in `bcbc4f1b`. It worked — the
+CPU cost of the world pass roughly halved and 2100 of 6250 draws disappeared —
+but the GPU paid more for the same triangles:
 
-Work it needs:
+| Parked, same view, density 1.0, deterministic traffic | draws | `world` | **gpu** | fps |
+|---|---|---|---|---|
+| per-part submits (current) | 6258 | 1.12 ms | **3.59 ms** | 178.1 |
+| instanced submits | 4151 | 0.61 ms | **5.77 ms** | 172.8 |
 
-1. an instanced variant of the vehicle vertex shader (per-instance world matrix
-   and tint, like `vs_mesh_inst.sc` does for static props), sharing the existing
-   `fs_vehicle.sc` material code;
-2. a grouping pass over the collected vehicle instances, keyed as the probe does,
-   producing one `bgfx::setInstanceDataBuffer` submit per group instead of one
-   `draw_instance` per part;
-3. the same grouping in the passes that draw cars again — shadows and the dynamic
-   reflection capture — or they will keep the old cost;
-4. per-instance values that are not material state (tint, fade, light flags) move
-   into the instance attributes; anything that changes a uniform per car cannot
-   be batched and has to stay a separate submit.
+The routed run agrees (gpu 4.47 → 5.85 ms). The frame is decided by the GPU on
+this content, so the trade is a loss: ~0.5 ms of CPU for ~2 ms of GPU.
+
+Two lessons are worth keeping:
+
+1. **Instancing is not free on the GPU in this renderer.** The same geometry, the
+   same triangles and fewer draws still cost more, which points at how the driver
+   handles one small geometry replayed many times per draw. The measurement has to
+   be the GPU number, not the draw count.
+2. `bgfx::allocInstanceDataBuffer` **clamps** the request to what is left of the
+   transient buffer and still returns a pointer when nothing is left. The first
+   implementation wrote a whole group into the clamped slice, which corrupted the
+   buffers of the draws that followed: cars collapsed into sheets, lost their
+   bodies and wheels, or left only a shadow. Any future batching must bound the
+   request with `getAvailInstanceDataBuffer` and chunk the group, the way
+   `draw_prop_batches` does.
+
+## What is left to try for the GPU cost
+
+The population policy (100 cars over a 460 m band, filled in bursts) is what the
+GPU cost scales with, not the submit count. The levers that remain, in order of
+expected effect:
+
+1. per-part distance culling — a car 300 m away does not need its interior, glass
+   or wheel detail drawn, which removes draws *and* triangles instead of just
+   merging them;
+2. a lower default budget on the density slider, which is already the only knob
+   that scales the population (`budget = density * 100`);
+3. model LOD, deferred by instruction.
+
 
 ## Deferred and rejected
 
