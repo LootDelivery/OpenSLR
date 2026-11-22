@@ -379,9 +379,14 @@ Switches, all measurement: `SLRR_REFL_BAKE=0` restores the per-frame capture,
 sets the moving layer cadence, `SLRR_REFL_BAKE_DIST` and `SLRR_REFL_BAKE_REFRESH`
 set when the bake is redone.
 
-The bake follows the camera by default: a face costs 0.15 ms of main thread, so
-one face per frame keeps the whole cube no more than six frames old, which at
-driving speed is a couple of metres. A distance threshold was tried first and the
+The bake follows the camera by default: a face costs 0.15-0.25 ms of main thread,
+so the cube is refreshed continuously. Its cadence is expressed in **milliseconds,
+not frames**, and this is the one thing a measurement on an uncapped frame rate
+hides completely. With vsync on, a frame is 16 ms, so a six-frame cycle is a tenth
+of a second old and the user could see the reflections updating late; the same six
+frames at 250 fps are 24 ms and look instant. The cycle now gets as many faces per
+frame as it needs to stay under 32 ms: one at 250 fps, three at 144, four at 60.
+The moving layer is gated the same way, at most every 16 ms. A distance threshold was tried first and the
 user could see the reflections standing still between rebakes. Continuous costs
 about 0.25 ms of frame time against the old per-frame capture and is still 0.25 ms
 cheaper than it:

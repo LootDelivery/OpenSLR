@@ -1862,6 +1862,15 @@ static int s_refl_generation = 0;
 static int s_refl_published_generation = 0;
 static unsigned s_refl_frame = 0;
 static unsigned s_refl_dyn_frame = 0;
+// Smoothed frame duration and a monotonic clock in milliseconds, so capture
+// cadence can be expressed in time instead of frames.
+static double s_refl_frame_ms = 16.0;
+static double s_refl_now_ms = 0.0;
+static double s_refl_dyn_ms = 0.0;
+static std::chrono::steady_clock::time_point s_refl_last_call{};
+
+static constexpr double kReflectionCycleMs = 32.0;
+static constexpr double kReflectionDynamicMs = 16.0;
 static unsigned s_refl_published_frame = 0;
 
 static int refl_env_int(const char* name, int fallback)
@@ -1888,6 +1897,15 @@ static bool refl_dynamic_enabled()
 void LibBgfxBackend::update_reflections(const float* eye) {
     perf::Scope perf_scope(perf::Zone::Reflections);
     ++s_refl_frame;
+    const auto now = std::chrono::steady_clock::now();
+    if (s_refl_last_call != std::chrono::steady_clock::time_point{}) {
+      const double since_ms =
+          std::chrono::duration<double, std::milli>(now - s_refl_last_call).count();
+      if (since_ms > 0.2 && since_ms < 250.0)
+        s_refl_frame_ms = s_refl_frame_ms * 0.9 + since_ms * 0.1;
+      s_refl_now_ms += since_ms;
+    }
+    s_refl_last_call = now;
     // SLRR_REFL_FREEZE=1 stops capturing and publishing once the first cube is
     // out, so the material keeps sampling one frozen map. If the flicker stops
     // with it, the cause is per-frame publication rather than the buffer swap.
@@ -2271,87 +2289,66 @@ void LibBgfxBackend::update_reflections(const float* eye) {
     // the parallax box to be wrong. One face per frame: a whole bake is a few
     // milliseconds and would hitch, and the published cube keeps being sampled
     // while the next one is built.
+    // The static environment is baked continuously and the cadence is expressed
+    // in milliseconds, not frames. With vsync a frame is 16 ms, so a six-frame
+    // bake cycle is a tenth of a second old and the reflections visibly update
+    // late; at 250 fps the same six frames are 24 ms and the lag is invisible.
+    // The cycle therefore gets as many faces per frame as it needs to never be
+    // older than kReflectionCycleMs.
     const bool bake_enabled = refl_bake_enabled();
-    static const float rebake_metres =
-        static_cast<float>(std::max(0, refl_env_int("SLRR_REFL_BAKE_DIST", 0)));
-    // The static world streams in after the first frames, and a bake taken
-    // before it lands is an empty room with sky in it. Until the ground props
-    // are there, the per-frame capture keeps running as it always did.
     const bool world_ready = scene_instances_has_ground_props();
+    const double frame_ms = std::max(1.0, s_refl_frame_ms);
     if (bake_enabled && world_ready) {
       const std::array<float, 3> origin{eye[0], eye[1] + .8f, -eye[2]};
-      const float dx = origin[0] - reflection_bake_origin_[0];
-      const float dy = origin[1] - reflection_bake_origin_[1];
-      const float dz = origin[2] - reflection_bake_origin_[2];
-      // Content streams in after the first bake too, and a bake that is a
-      // second old is not worth defending: it is one face per frame.
-      static const uint32_t refresh_frames = static_cast<uint32_t>(
-          std::max(0, refl_env_int("SLRR_REFL_BAKE_REFRESH", 120)));
-      // Distance 0 means the bake follows the camera continuously, one
-      // face per frame: a face costs 0.15 ms and the cube is never more
-      // than six frames old, which is what stops reflections from
-      // standing still while the car moves.
-      const bool stale = refresh_frames > 0u &&
-                         s_refl_frame - reflection_bake_frame_ > refresh_frames;
-      const bool due = !reflection_bake_ready_ ||
-          reflection_bake_world_ != static_cast<const void*>(reflection_world_) ||
-          stale || rebake_metres <= 0.f ||
-          dx * dx + dy * dy + dz * dz > rebake_metres * rebake_metres;
-      if (due || reflection_bake_face_ != 0) {
-        if (reflection_bake_face_ == 0) reflection_origin_ = origin;
+      const int faces = std::clamp(
+          static_cast<int>(std::ceil(static_cast<double>(face_count) * frame_ms /
+                                     kReflectionCycleMs)), 1, static_cast<int>(face_count));
+      for (int i = 0; i < faces; ++i) {
         const int face = reflection_bake_face_;
+        reflection_origin_ = origin;
         const auto bake_start = std::chrono::steady_clock::now();
         capture_face(face, reflection_bake_fb_[reflection_bake_write_][face],
                      static_cast<uint16_t>(kReflectionBakeView + face), 1);
-        const auto bake_end = std::chrono::steady_clock::now();
         s_refl_bake_ms += std::chrono::duration<double, std::milli>(
-            bake_end - bake_start).count();
+            std::chrono::steady_clock::now() - bake_start).count();
         ++s_refl_bake_faces;
-        if (++reflection_bake_face_ == static_cast<int>(face_count)) {
-          reflection_bake_face_ = 0;
-          reflection_bake_write_ ^= 1;
-          ++reflection_bake_passes_;
-          reflection_bake_frame_ = s_refl_frame;
-          // A bake with no props in it was taken before the world landed; keep
-          // the per-frame capture in charge until a bake has content.
-          reflection_bake_ready_ = reflection_bake_batches_ > 0;
-          reflection_bake_world_ = reflection_world_;
-          reflection_bake_origin_ = reflection_origin_;
-          reflection_bake_box_min_ = reflection_box_min_;
-          reflection_bake_box_max_ = reflection_box_max_;
-          reflection_bake_box_valid_ = reflection_box_valid_;
-          // The material samples the bake with the box it was captured under.
-          reflection_sample_origin_ = reflection_bake_origin_;
-          reflection_env_valid_ = true;
-          reflection_env_world_ = reflection_world_;
-          reflection_ready_ = true;
-          std::fprintf(stderr, "[refl-bake] frame=%u pass=%d batches=%d face_ms=%.2f origin=%.2f %.2f %.2f\n",
-                       s_refl_frame, reflection_bake_passes_,
-                       reflection_bake_batches_,
+        if (++reflection_bake_face_ < static_cast<int>(face_count)) continue;
+        reflection_bake_face_ = 0;
+        reflection_bake_write_ ^= 1;
+        ++reflection_bake_passes_;
+        reflection_bake_frame_ = s_refl_frame;
+        // A bake with no props in it was taken before the world landed; keep the
+        // per-frame capture in charge until a bake has content.
+        reflection_bake_ready_ = reflection_bake_batches_ > 0;
+        reflection_bake_world_ = reflection_world_;
+        reflection_bake_origin_ = origin;
+        reflection_bake_box_min_ = reflection_box_min_;
+        reflection_bake_box_max_ = reflection_box_max_;
+        reflection_bake_box_valid_ = reflection_box_valid_;
+        // The material samples the bake with the box it was captured under.
+        reflection_sample_origin_ = reflection_bake_origin_;
+        reflection_env_valid_ = true;
+        reflection_env_world_ = reflection_world_;
+        reflection_ready_ = true;
+        if (std::getenv("SLRR_REFL_TRACE"))
+          std::fprintf(stderr,
+                       "[refl-bake] frame=%u pass=%d batches=%d face_ms=%.2f "
+                       "faces_per_frame=%d frame_ms=%.2f origin=%.2f %.2f %.2f\n",
+                       s_refl_frame, reflection_bake_passes_, reflection_bake_batches_,
                        s_refl_bake_faces ? s_refl_bake_ms / s_refl_bake_faces : 0.0,
-                       reflection_bake_origin_[0], reflection_bake_origin_[1],
-                       reflection_bake_origin_[2]);
-          s_refl_bake_ms = 0.0;
-          s_refl_bake_faces = 0;
-        }
+                       faces, frame_ms, origin[0], origin[1], origin[2]);
+        s_refl_bake_ms = 0.0;
+        s_refl_bake_faces = 0;
       }
       // SLRR_REFL_DYN=0 leaves the baked environment alone: no moving layer,
-      // which is how the static part is judged on its own. Otherwise the moving
-      // layer is captured in the same frame as a bake face: they own separate
-      // view ranges, and gating one on the other left the capture cube empty
-      // whenever the bake happened to be mid-pass.
+      // which is how the static part is judged on its own.
       if (!refl_dynamic_enabled()) return;
     }
 
-    // The moving layer is refreshed once every SLRR_REFL_DYN_INTERVAL frames, and
-    // the gate counts frames since the last pass rather than taking a modulus of
-    // the frame number: a modulus resonates with the six-frame bake cycle and can
-    // reject every single pass. The published cube stays valid between refreshes;
-    // only the reflections of moving objects lag.
-    static const unsigned dyn_interval =
-        static_cast<unsigned>(std::max(1, refl_env_int("SLRR_REFL_DYN_INTERVAL", 2)));
-    if (s_refl_frame - s_refl_dyn_frame < dyn_interval) return;
-    s_refl_dyn_frame = s_refl_frame;
+    // The moving layer is refreshed at most every kReflectionDynamicMs for the
+    // same reason: a frame count is not a duration.
+    if (s_refl_now_ms - s_refl_dyn_ms < kReflectionDynamicMs) return;
+    s_refl_dyn_ms = s_refl_now_ms;
 
     // With the bake ready, the per-frame pass is only the moving layer on top of
     // it. Without the bake it is the whole environment, as before.
