@@ -246,3 +246,44 @@ the policy in 3.3 they come in, and at 23 draws per car a 150 m radius would add
 Still to measure: how many cars fall inside a 40 m and a 60 m radius around the
 player in city traffic, which sets the size of the dynamic layer; and the shadow
 pass cost, which needs the overlay toggles.
+
+### 8.1 Density sweep and the population near the player
+
+Same camera, pedestrians off, population frozen, mean of 35 one-second samples:
+
+| density | cars | draws | `flush` | `world` | `gpu` | frame | fps |
+|---|---|---|---|---|---|---|---|
+| 0.0 | 0 | 2925 | 2.14 | 0.45 | 2.65 | 2.66 | 376 |
+| 0.2 | 20 | 3373 | 1.98 | 0.53 | 2.64 | 2.65 | 377 |
+| 0.5 | 50 | 3997 | 2.04 | 0.58 | 2.78 | 2.93 | 342 |
+| 1.0 | 100 | 5174 | 2.54 | 0.76 | 3.04 | 3.87 | 261 |
+
+Marginal cost: 22.5 draws per car, about 0.3 ms of GPU for the step from 0 to 100
+cars, and the frame only starts to follow above ~4000 draws. At 20 cars the scene
+is not draw bound at all, which is why 0.0 and 0.2 measure the same.
+
+The traffic log counts every visible car within 140 m (`near`) and within 340 m in
+front (`ahead`). At density 1.0 in city traffic: **`near` = 10-12, `ahead` = 29-32,
+`total` = 100**. So only ~11 cars sit inside a 140 m radius of the player.
+
+That changes the estimate for 3.3: putting the other cars into the capture is
+cheap. Eleven cars at 22.5 draws, each appearing in one or two of the six faces,
+is roughly 250-400 draws, against the 1708 the static city already costs. The
+policy "exclude the controlled car, include the rest" is affordable even with the
+capture as it is today; the dynamic layer of the hybrid is a size question for
+chrome quality, not for cost.
+
+### 8.2 Shadows today (reported by the user, confirmed in the code)
+
+What exists is not a shadow system to optimise, it is three unrelated things:
+
+| Source | How it is produced | Limit |
+|---|---|---|
+| map / trees | cached map shadow texture, `bgfx_shadows.cpp` | about 10 m around the object, no building shadows at all |
+| player and rival cars | one shadow map per car: bodies with `(flags & 9) == 8` are drawn white into a small target and the ground is multiplied by it | only bodies that carry those flags |
+| ambient traffic | flat `kocsiarnyek` decal quad, never a caster | a blob under the car |
+
+The frame only spends 0.10 ms of main thread on `shadows`, so nothing here is
+worth optimising. Stage 5 replaces it: building shadows need a real shadow map
+with a cascade or a budget, traffic needs to cast instead of wearing a decal, and
+the cached map texture goes away.
