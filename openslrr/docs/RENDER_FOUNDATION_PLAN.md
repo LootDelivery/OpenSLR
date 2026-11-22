@@ -316,6 +316,21 @@ was, and the frame is faster than before this work started. Objects drawn per fa
 fall from ~800 to ~55, and the counts stay directional: no cars at all in the up
 and down faces.
 
+One regression came out of the cull and is worth recording, because it is the
+kind of thing a measurement does not catch. The asphalt vanished from the paint.
+The ground and the road are drawn as one world-space mesh whose bounding box spans
+the map and sits at the world origin, so against a 150 m face every plane rejects
+it while the road is exactly what the face shows. Ground and sky are now exempt
+from the sphere test, and the up face, the only face that cannot see the ground,
+skips it.
+
+Keeping the ground costs 2289 draws in the capture, which is most of what is left
+in it. With traffic included and the faces culled, the capture is 6160 draws and
+0.87 ms, and the frame is 5.03 ms instead of 4.21 ms before any of this work. So
+traffic in the reflections costs 851 draws and about 0.8 ms on this camera; the
+rest of the capture is the static world drawn five times, which is exactly what
+the baked probe removes in stage 1.
+
 What is left is the same gap in the **main view**, which still draws the cars
 behind the player: the cost of traffic scales with the whole population instead of
 with what is on screen, which is why moving the camera changed `draws` so little
