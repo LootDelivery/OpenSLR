@@ -6,6 +6,12 @@ content keeps working.
 
 ## What must happen first (prerequisites)
 
+The frame itself also has to change shape before PBR is affordable: the city is
+currently rendered more than once per frame and every car is submitted as ~23
+separate draws. Probes, material sorting and parallel encoding are planned in
+[RENDER_FOUNDATION_PLAN.md](RENDER_FOUNDATION_PLAN.md), which also records the
+measured frame budget those stages are meant to move.
+
 1. **GFX-1: present program link failure** (see BACKLOG.md).
    The dead present path blocks the offscreen scene target, and the scene
    target is the backbone of everything PBR needs:
