@@ -18,8 +18,8 @@ Columns follow the integration protocol: upstream PR, upstream files, our
 files, problem, adaptation, tests, result, status.
 
 This file is one direction only (upstream -> here). The other direction -- what
-this tree has that upstream does not, with the files that carry it and the traps
-an integrator has to know -- is `UPSTREAM_HANDOFF.md`.
+this tree changed relative to upstream's `d1c719d`, file by file, with the
+fifty-three files both sides touched since -- is `UPSTREAM_DIFF.md`.
 
 ## U1-A. Player constructor (#228)
 
