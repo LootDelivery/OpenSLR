@@ -52,12 +52,11 @@ struct EnhancedGraphics {
   // Diffuse ambient from the same capture the reflections use, instead of one
   // flat colour for the whole car.
   //
-  // Off by default, and not because the idea is wrong. Its chain still has open
-  // defects: the probe comes out flat instead of graded, so it cannot show the
-  // sky above and the street below, and its level moves with each capture, which
-  // is visible as an ambient that pumps while driving. See
-  // docs/RENDER_FOUNDATION_PLAN.md 8.10 before switching it on.
-  bool irradiance_probe = false;
+  // On by default since the probe's basis, sampling and level were settled; see
+  // docs/RENDER_FOUNDATION_PLAN.md 8.14 for the two defects and the test that
+  // caught them. What is left is taste -- how much of the ambient the probe takes
+  // over, and how strongly -- and that is what the two values below are for.
+  bool irradiance_probe = true;
   // How much of the ambient comes from the probe instead of the flat colour.
   // 1.0 is physically what the environment gives -- and it makes a car's sides
   // noticeably dimmer than the roof, because a vertical surface sees half sky
