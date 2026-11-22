@@ -1837,15 +1837,6 @@ void LibBgfxBackend::update_reflections(const float* eye) {
     // with it, the cause is per-frame publication rather than the buffer swap.
     static const int freeze_at = refl_env_int("SLRR_REFL_FREEZE", 0);
     if (freeze_at > 0 && s_refl_published_generation >= freeze_at) return;
-    // A cube is still captured whole in one frame -- six faces at once, because
-    // splitting them makes the auto-generated mip chain mix fresh and stale
-    // sides and the body flickers. What is throttled is the cadence: each face
-    // walks the live scene graph, so six of them every frame cost about a
-    // millisecond of main-thread time for a 512 cube that no one can tell apart
-    // when it refreshes at 30 Hz instead of 60. SLRR_REFL_REFRESH=1 restores the
-    // old every-frame cadence for a comparison.
-    static const int refresh = std::max(1, refl_env_int("SLRR_REFL_REFRESH", 2));
-    if (refresh > 1 && (s_refl_frame % static_cast<uint32_t>(refresh)) != 0) return;
     if (!eye || !reflection_scene_ || !host_enhanced_graphics().dynamic_reflections) {
       reflection_world_ = nullptr;
       reflection_face_ = 0;
