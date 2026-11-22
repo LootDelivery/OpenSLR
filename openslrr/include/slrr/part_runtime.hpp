@@ -48,6 +48,10 @@ bool part_car_script_pos(void *key, float *x, float *y, float *z);
 bool part_lamp_lit(void *part, uint32_t flags, bool preview);
 // Render node or one of its parents, when that node is an installed part.
 Object *part_render_owner(void *key);
+// The car an installed part belongs to. Doors, hood and trunk are records of
+// their own, so part_render_owner stops at the part; this walks on to the first
+// record whose native kind is "car".
+Object *part_render_car(void *key);
 // World height of the tyre contact under a car. The camera's `move` spring
 // hangs on this point; `look` stays on the chassis origin.
 bool part_car_ground(void *key, float *y);

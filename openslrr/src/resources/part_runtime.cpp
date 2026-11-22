@@ -1684,6 +1684,17 @@ Object *part_render_owner(void *key) {
   }
   return nullptr;
 }
+Object *part_render_car(void *key) {
+  for (int depth = 0; key && depth < 64; ++depth) {
+    auto *node = static_cast<Object *>(key);
+    if (auto *rec = record(node); rec && rec->config->native_kind == "car")
+      return canonical(node);
+    auto *ref = gameref_get(key);
+    if (!ref) return nullptr;
+    key = ref->parent;
+  }
+  return nullptr;
+}
 bool part_destroy(Object *part) {
   part = canonical(part);
   auto *rec = record(part);

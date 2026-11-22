@@ -2086,17 +2086,21 @@ void LibBgfxBackend::update_reflections(const float* eye) {
           const float d2 = dx * dx + dy * dy + dz * dz;
           if (d2 >= nearest) continue;
           nearest = d2;
-          subject = part_render_owner(object.key);
+          subject = part_render_car(object.key);
         }
       }
+      int self_skipped = 0, cars_drawn = 0;
       for (const auto& object : objects) {
         // The driver belongs to the car the probe is on, and that car is kept
         // out of the cubemap because it is the environment the car reflects. In
         // the car inspection mode he is rendered and, at arm's length from the
         // probe, fills several faces. Pedestrians are environment and stay in,
         // so this is keyed on the driver himself and not on being a character.
+        // Doors, hood and trunk are records of their own, so this has to be the
+        // car the part belongs to and not the part's own record.
         const bool self = subject && object.vehicle_material &&
-                          part_render_owner(object.key) == subject;
+                          part_render_car(object.key) == subject;
+        if (self) ++self_skipped;
         if (object.sky || self || part_is_driver_render(object.key) ||
             (object.gpu_skin && object.skin.empty()) ||
             !instance_meshes_.contains(object.geometry.get()))
@@ -2112,8 +2116,12 @@ void LibBgfxBackend::update_reflections(const float* eye) {
         const float dz = object.transform[14] - origin_z;
         const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (dist > 12.f && extent > 0.f && extent / dist * 128.f < 4.f) continue;
+        if (object.vehicle_material) ++cars_drawn;
         draw_instance(reflection_view, object, object.transform.data(), false, 0);
       }
+      if (std::getenv("SLRR_REFL_TRACE"))
+        std::fprintf(stderr, "[refl-trace] face=%d subject=%p skipped=%d cars=%d\n",
+                     face, subject, self_skipped, cars_drawn);
       std::vector<SceneBatch> reflection_batches;
       scene_instances_collect_batches(&frustum, reflection_batches, reflection_origin_.data());
       draw_prop_batches(reflection_view, reflection_batches, false);
