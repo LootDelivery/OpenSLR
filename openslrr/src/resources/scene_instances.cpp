@@ -1967,6 +1967,12 @@ void complete_skin(SceneInstance& instance) {
 }
 }  // namespace
 
+bool scene_instance_in_frustum(const SceneInstance &instance,
+                               const SceneFrustum &frustum) {
+  if (!instance.geometry) return false;
+  return character_in_view(instance, frustum);
+}
+
 void scene_instances_frame_cache(bool enabled) {
   g_frame_cache = enabled;
   g_frame_world_valid = false;

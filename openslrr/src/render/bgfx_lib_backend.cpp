@@ -2089,8 +2089,16 @@ void LibBgfxBackend::update_reflections(const float* eye) {
           subject = part_render_car(object.key);
         }
       }
-      int self_skipped = 0, cars_drawn = 0;
+      int self_skipped = 0, cars_drawn = 0, culled = 0;
       for (const auto& object : objects) {
+        // Objects are collected for every view without a frustum test, so a face
+        // would otherwise draw the whole population of the world: eleven cars at
+        // twenty-two draws each, six times over. Reject what this face cannot
+        // see before anything else.
+        if (!scene_instance_in_frustum(object, frustum)) {
+          ++culled;
+          continue;
+        }
         // The driver belongs to the car the probe is on, and that car is kept
         // out of the cubemap because it is the environment the car reflects. In
         // the car inspection mode he is rendered and, at arm's length from the
@@ -2120,8 +2128,8 @@ void LibBgfxBackend::update_reflections(const float* eye) {
         draw_instance(reflection_view, object, object.transform.data(), false, 0);
       }
       if (std::getenv("SLRR_REFL_TRACE"))
-        std::fprintf(stderr, "[refl-trace] face=%d subject=%p skipped=%d cars=%d\n",
-                     face, subject, self_skipped, cars_drawn);
+        std::fprintf(stderr, "[refl-trace] face=%d subject=%p culled=%d skipped=%d cars=%d\n",
+                     face, subject, culled, self_skipped, cars_drawn);
       std::vector<SceneBatch> reflection_batches;
       scene_instances_collect_batches(&frustum, reflection_batches, reflection_origin_.data());
       draw_prop_batches(reflection_view, reflection_batches, false);

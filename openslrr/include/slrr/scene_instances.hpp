@@ -84,6 +84,10 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
                                      std::vector<SceneBatch>& out,
                                      const float* reflection_origin = nullptr);
 std::vector<SceneInstance> scene_instances_collect_root(void *root);
+// Sphere test of one instance against a frustum. Collected objects are not
+// culled by scene_instances_collect, because the same list feeds every view and
+// the per-car shadow maps; a view that wants only what it can see asks here.
+bool scene_instance_in_frustum(const SceneInstance &instance, const SceneFrustum &frustum);
 // The renderer encloses one flush in this scope. Inside it, collections of
 // the active world reuse a single snapshot of its render objects instead of
 // walking and posing them again for every view (camera, shadow, reflection).
