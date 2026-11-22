@@ -801,10 +801,18 @@ the size of a probe face, which is why thirty-two taps are enough there.
 The material's sharp end still reads the capture itself, which is a whole cycle
 fresher than the convolved levels, and that is deliberate.
 
-Still open: a cycle is thirty-six faces, so the published cube mixes captures up
-to about a third of a second apart and the chain lags the world by that much.
-`SLRR_REFL_GGX_FACES` raises the faces per frame and shortens both, at a cost that
-has not been measured yet. The ambient probe is off by default: it still
-integrates to a near constant instead of a gradient (`SLRR_ENV_DEBUG=9` draws it
-unmixed and the whole body reads one value), and its level moves with each
-capture, which pumps while driving.
+Level 0 is a blit again. Drawing it through the prefilter costs 512 squared times
+twelve taps -- more than every other level together -- to reproduce a face that is
+already in the source cube. The four black faces that made the blit look guilty
+were the first generation, so the copy came back and the cycle got cheaper.
+
+A cycle is thirty-six faces at three a frame rather than one. Measured with
+traffic off, three runs each: frame 7.6-7.9 ms with the chain against 7.0-7.8
+without, which is noise, because a cycle is about two million taps spread over its
+frames. The published cube is therefore twelve dynamic frames old instead of
+thirty-six, and freshness is the one thing this chain cannot fake.
+
+The ambient probe is off by default. It still integrates to a near constant
+instead of a gradient (`SLRR_ENV_DEBUG=9` draws it unmixed and the whole body reads
+one value), and its level moves with each capture, which pumps while driving. It
+is the next piece of stage 1b, not a shipped feature.
