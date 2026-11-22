@@ -75,6 +75,11 @@ class LibBgfxBackend final : public IRenderBackend {
   // One view per pyramid level, after the world and the reflection faces.
   static constexpr uint16_t kHizView = 110;
   static constexpr int kHizLevels = 16;
+  // Reflection views. The capture and its seed blit run one below each other so
+  // the blit lands first, and the bake has its own range because it can be
+  // captured in the same frame as the moving layer.
+  static constexpr uint16_t kReflectionCaptureView = 130;
+  static constexpr uint16_t kReflectionBakeView = 150;
 
  public:
   const char* name() const override { return "bgfx"; }

@@ -379,6 +379,30 @@ Switches, all measurement: `SLRR_REFL_BAKE=0` restores the per-frame capture,
 sets the moving layer cadence, `SLRR_REFL_BAKE_DIST` and `SLRR_REFL_BAKE_REFRESH`
 set when the bake is redone.
 
+The bake follows the camera by default: a face costs 0.15 ms of main thread, so
+one face per frame keeps the whole cube no more than six frames old, which at
+driving speed is a couple of metres. A distance threshold was tried first and the
+user could see the reflections standing still between rebakes. Continuous costs
+about 0.25 ms of frame time against the old per-frame capture and is still 0.25 ms
+cheaper than it:
+
+| | draws | `refl` | `gpu` | frame |
+|---|---|---|---|---|
+| per-frame capture | 4852 | 0.40 | 3.49 | 3.79 |
+| bake follows the camera | 4309 | 0.29 | 3.21 | 3.56 |
+| bake every 8 m | 4511 | 0.18 | 3.18 | 3.77 |
+
+Two more traps from this step, both of the same kind -- a frame id or a frame
+count shared between two passes that can now run in the same frame:
+
+1. The bake and the moving layer were writing through the same view ids, so on a
+   frame that did both the last `setViewFrameBuffer` won and the other face was
+   never written. They now own separate ranges (`kReflectionBakeView`,
+   `kReflectionCaptureView`).
+2. The moving layer's cadence gate took a modulus of the frame number, which
+   resonates with the six-frame bake cycle: the pass was rejected on every frame it
+   could have run. It now counts frames since the last pass instead.
+
 Three things this cost, all of them found by looking at the cube rather than at
 the frame time, which is why `SLRR_REFL_DUMP=2` now forces the face panels on so a
 bench run can photograph them:
