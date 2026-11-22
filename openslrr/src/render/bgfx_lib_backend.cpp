@@ -2218,6 +2218,15 @@ void LibBgfxBackend::update_reflections(const float* eye) {
           if (o.gpu_skin) ++gpu;
           if (part_render_car(o.key)) ++carrec;
         }
+      // Pass 1 of the capture follows pass 0. A section whose material flags put
+      // it in the blended pass -- storefront glass, and on some maps the wall
+      // panels themselves -- is drawn by the main view and was missing from the
+      // cube, because a capture drew pass 0 only. The hole it left is what made
+      // a garage read as glass in the paint: the frame and the trim were there,
+      // the panel was not, and the city behind it showed through. A blended
+      // surface cannot be drawn before the opaque world it sits in front of, so
+      // the list is collected here and drawn after the prop batches.
+      std::vector<const SceneInstance*> blended_objects;
       for (const auto& object : objects) {
         // A bake is the static world only, and the moving layer is the other way
         // round. Anything that can move belongs to one and not the other: a car
@@ -2280,6 +2289,7 @@ void LibBgfxBackend::update_reflections(const float* eye) {
         if (dist > 12.f && extent > 0.f && extent / dist * 128.f < 4.f) continue;
         if (object.vehicle_material) ++cars_drawn;
         ++drawn;
+        blended_objects.push_back(&object);
         draw_instance(view, object, object.transform.data(), false, 0);
       }
       if (std::getenv("SLRR_REFL_TRACE"))
@@ -2295,6 +2305,16 @@ void LibBgfxBackend::update_reflections(const float* eye) {
         if (face == 0) reflection_bake_batches_ = static_cast<int>(reflection_batches.size());
         draw_prop_batches(view, reflection_batches, false);
       }
+      // Last, so the blended sections sit on top of everything opaque they
+      // should sit on top of, exactly as the main view orders them.
+      int blended_drawn = 0;
+      for (const auto* object : blended_objects) {
+        draw_instance(view, *object, object->transform.data(), false, 1);
+        ++blended_drawn;
+      }
+      if (std::getenv("SLRR_REFL_TRACE"))
+        std::fprintf(stderr, "[refl-blend] face=%d mode=%d objects=%d\n",
+                     face, mode, blended_drawn);
     };
 
     // Stage 1: the static world is captured once into its own cube and only

@@ -495,3 +495,40 @@ make the cube perfect.
 
 Rough mips stay a few frames behind the sharp ones. That is deliberate: a GGX lobe
 that is 20 degrees wide hides a 20 ms trail, while a mirror at `lod` 0 does not.
+
+### 8.7 The capture drew pass 0 only: surfaces missing from the cube
+
+`draw_instance` renders a mesh in two passes, split by material flags: pass 0 is
+opaque, pass 1 is every section the main view blends (v4 glass with
+`0x40000000` and `material_type & 4`; v3 sections with both `alphaOpacity` and
+`0x100`). The main world loop runs both passes, in order, so a storefront or a
+wall panel with an alpha flag is drawn on top of the opaque world it belongs to.
+
+The reflection capture called `draw_instance(..., pass 0)` and nothing else. So
+in the cube those sections did not exist at all. On a building whose walls sit in
+the blended pass, the frame, the trim and the roof were all there while the panel
+between them was a hole, and the city behind the building showed through it --
+which reads as "the garage is see-through in the mirror" rather than "the garage
+is missing", because enough of the building is opaque to look present.
+
+The capture now collects the objects it drew and replays pass 1 after the prop
+batches, which is the order the main view uses (opaque, then blended, so the two
+cannot hide each other). The moving layer gets the same treatment, which is also
+what puts other cars' windows back in the paint.
+
+Cost, stationary at density 0.3, Valo City spawn, 5% trimmed mean:
+
+| | frame | refl |
+| --- | --- | --- |
+| before | 3.315 ms | 0.307 ms |
+| after | 3.085 ms | 0.299 ms |
+
+Two objects have blended sections in view there, so the pass is free at this
+location; it is bounded by the number of blended objects the face keeps, not by
+the object count. `SLRR_REFL_TRACE` prints `[refl-blend]` per face with that
+number.
+
+Not yet confirmed as the whole story. The other way a surface can fail to occlude
+in the cube is the moving layer: it clears depth and draws cars over the baked
+environment, so a car behind a wall is composited into the reflection anyway.
+That one needs a depth texture out of the bake and is not addressed here.
