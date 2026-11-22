@@ -411,9 +411,6 @@ void remove(int32_t id) {
   auto r = found->second;
   queue(r, false);
   registrations.erase(found);
-  // The car is leaving, so its draws must stop being marked as streamed even
-  // when the object itself outlives this module (a script kept a reference).
-  scene_instances_set_streamed(r.car, false);
   if (auto *n = gameref_get(r.car); n && n->incarnation == r.car_incarnation) {
     if (r.owned) {
       part_set_external_motion(r.car, false);
@@ -809,9 +806,6 @@ int32_t add_car(const RpkIndex &rpk, void *ground, Object *car, Object *where,
   r.born = clock_seconds;
   // Start invisible and dissolve in: see kFadeIn and fs_vehicle.sc.
   scene_instances_set_fade(r.car, 0.f);
-  // Opt the car's draws into instancing (U2-B.4). Only cars this module creates
-  // do this: racer cars never join a batch.
-  scene_instances_set_streamed(r.car, true);
   r.owned = owned;
   r.notify = owned;
   r.cruise = (15 + random() * 20) / 3.6f;

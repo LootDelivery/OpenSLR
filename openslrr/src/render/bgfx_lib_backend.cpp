@@ -261,12 +261,6 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     vehicle_program_ = bgfx::createProgram(
         bgfx::createEmbeddedShader(k_vehicle, rt, "vs_vehicle"),
         bgfx::createEmbeddedShader(k_vehicle, rt, "fs_vehicle"), true);
-    // Same fragment shader, instanced vertex path: the material logic is shared,
-    // so paint, glass, chrome, reflections and the streaming fade behave
-    // identically whether a car is drawn on its own or in a batch.
-    vehicle_inst_program_ = bgfx::createProgram(
-        bgfx::createEmbeddedShader(k_vehicle, rt, "vs_vehicle_inst"),
-        bgfx::createEmbeddedShader(k_vehicle, rt, "fs_vehicle"), true);
     s_mix_ = bgfx::createUniform("s_vehicleMix", bgfx::UniformType::Sampler);
     s_env_ = bgfx::createUniform("s_vehicleEnv", bgfx::UniformType::Sampler);
     s_bake_ = bgfx::createUniform("s_vehicleBake", bgfx::UniformType::Sampler);
@@ -478,8 +472,6 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     }
     if (bgfx::isValid(vehicle_program_)) bgfx::destroy(vehicle_program_);
     vehicle_program_ = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(vehicle_inst_program_)) bgfx::destroy(vehicle_inst_program_);
-    vehicle_inst_program_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(shadow_program_)) bgfx::destroy(shadow_program_);
     shadow_program_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(shadow_recv_)) bgfx::destroy(shadow_recv_);
@@ -2253,43 +2245,10 @@ void LibBgfxBackend::refresh_distance_fog(const float render_eye[3]) {
   fog_enabled_ = true;
 }
 
-// U2-B.4: the key an instanced submit can merge on. Everything that ends up in a
-// uniform for the vehicle material has to be part of it, or two cars with
-// different paint would share a draw: geometry, paint slot and texture, the body
-// colour, the dissolve factor, the light flags, the texture replacements and the
-// pass. Material kinds and the rest come from the geometry, so the same geometry
-// implies them.
-static uint64_t streamed_batch_key(const SceneInstance& instance, int pass) {
-  uint64_t h = 1469598103934665603ull;
-  auto mix = [&h](uint64_t v) {
-    h ^= v;
-    h *= 1099511628211ull;
-  };
-  mix(reinterpret_cast<uintptr_t>(instance.geometry.get()));
-  mix(uint64_t(instance.color));
-  mix(uint64_t(std::lround(std::clamp(instance.fade, 0.f, 1.f) * 16.f)));
-  mix(uint64_t(instance.light_flags));
-  mix(uint64_t(instance.paint_slot + 1));
-  for (const char c : instance.paint_texture) mix(uint64_t(static_cast<unsigned char>(c)));
-  for (const auto& replacement : instance.texture_replacements) {
-    mix(replacement.first);
-    for (const char c : replacement.second)
-      mix(uint64_t(static_cast<unsigned char>(c)));
-  }
-  mix(uint64_t(pass));
-  return h;
-}
-
 void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
     perf::Scope perf_scope(perf::Zone::World);
     draw_prop_batches(view_id, prop_batches_, false);
-    // Batching can be switched off to compare a run against the plain path.
-    static const bool batch_streamed = [] {
-      const char* v = std::getenv("SLRR_TRAFFIC_BATCH");
-      return !(v && v[0] == '0');
-    }();
-    for (int pass = 0; pass < 2; ++pass) {
-      std::unordered_map<uint64_t, std::vector<const SceneInstance*>> batches;
+    for (int pass = 0; pass < 2; ++pass)
       for (const auto& instance : instances_) {
         if (instance.sky) continue;
         // The mesh stays resident, so a pedestrian walking into view does not
@@ -2304,40 +2263,8 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
                               cull_view_[10] * z + cull_view_[14];
           if (ahead < -1.f) continue;
         }
-        if (!batch_streamed || !instance.streamed || !instance.vehicle_material) {
-          draw_instance(view_id, instance, instance.transform.data(), false, pass);
-          continue;
-        }
-        batches[streamed_batch_key(instance, pass)].push_back(&instance);
+        draw_instance(view_id, instance, instance.transform.data(), false, pass);
       }
-      // One instanced submit per group. A group of one is drawn the normal way:
-      // instancing would only add a buffer upload for nothing.
-      for (const auto& entry : batches) {
-        const std::vector<const SceneInstance*>& group = entry.second;
-        if (group.size() < 2) {
-          draw_instance(view_id, *group.front(), group.front()->transform.data(),
-                        false, pass);
-          continue;
-        }
-        const bgfx::InstanceDataBuffer* buffer = nullptr;
-        bgfx::InstanceDataBuffer allocated;
-        bgfx::allocInstanceDataBuffer(&allocated, static_cast<uint32_t>(group.size()),
-                                       16 * sizeof(float));
-        if (allocated.data) {
-          for (size_t i = 0; i < group.size(); ++i)
-            std::memcpy(allocated.data + i * allocated.stride,
-                        group[i]->transform.data(), 16 * sizeof(float));
-          buffer = &allocated;
-        }
-        if (!buffer) {
-          for (const SceneInstance* one : group)
-            draw_instance(view_id, *one, one->transform.data(), false, pass);
-          continue;
-        }
-        draw_instance(view_id, *group.front(), group.front()->transform.data(),
-                      false, pass, false, buffer);
-      }
-    }
   }
   void LibBgfxBackend::draw_previews()
 {
