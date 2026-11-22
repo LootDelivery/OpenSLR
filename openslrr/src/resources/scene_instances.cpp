@@ -1970,7 +1970,36 @@ void complete_skin(SceneInstance& instance) {
 bool scene_instance_in_frustum(const SceneInstance &instance,
                                const SceneFrustum &frustum) {
   if (!instance.geometry) return false;
-  return character_in_view(instance, frustum);
+  const auto &info = instance.geometry->info;
+  const float scale = instance.geometry->position_scale > 0.f
+      ? instance.geometry->position_scale : 0.01f;
+  float local[3], half[3];
+  for (int axis = 0; axis < 3; ++axis) {
+    local[axis] = (info.bbox_min[axis] + info.bbox_max[axis]) * .5f * scale;
+    half[axis] = (info.bbox_max[axis] - info.bbox_min[axis]) * .5f * scale;
+  }
+  local[2] = -local[2];
+  const auto &m = instance.transform;
+  float centre[3];
+  for (int axis = 0; axis < 3; ++axis)
+    centre[axis] = m[axis] * local[0] + m[4 + axis] * local[1] + m[8 + axis] * local[2] +
+                   m[12 + axis];
+  // The matrix carries its own scale, and a road tile or a bridge uses it.
+  const float sx = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+  const float sy = std::sqrt(m[4] * m[4] + m[5] * m[5] + m[6] * m[6]);
+  const float sz = std::sqrt(m[8] * m[8] + m[9] * m[9] + m[10] * m[10]);
+  const float radius =
+      std::hypot(std::hypot(half[0] * sx, half[1] * sy), half[2] * sz) + 1.f;
+  // A bounding sphere is a bad proxy for a mesh that covers the whole view: the
+  // map ground has its box centre a kilometre away, so against a 150 m cube face
+  // every plane rejects it while the mesh is exactly what the face shows. Large
+  // meshes are few, so they are never culled; the test is for props and cars.
+  if (radius > 40.f) return true;
+  for (const auto &plane : frustum)
+    if (plane[0] * centre[0] + plane[1] * centre[1] + plane[2] * centre[2] + plane[3] <
+        -radius)
+      return false;
+  return true;
 }
 
 void scene_instances_frame_cache(bool enabled) {

@@ -2095,7 +2095,22 @@ void LibBgfxBackend::update_reflections(const float* eye) {
         // would otherwise draw the whole population of the world: eleven cars at
         // twenty-two draws each, six times over. Reject what this face cannot
         // see before anything else.
-        if (!scene_instance_in_frustum(object, frustum)) {
+        //
+        // Ground and sky are never rejected by the sphere test. They are most of
+        // what a reflection is made of, and for them a bounding sphere is a poor
+        // proxy: the road mesh spans the whole map with its box centred at the
+        // world origin, so every plane of a 150 m face rejects it while the road
+        // is exactly what the face shows. Culling it took the asphalt out of the
+        // paint, which is how this rule was found. The up face is the one face
+        // that cannot see the ground at all, and the ground is the most expensive
+        // thing in the capture, so it is skipped there.
+        const bool ground = object.geometry && object.geometry->ground_polygons;
+        const bool scenery = object.sky || ground;
+        if (!scenery && !scene_instance_in_frustum(object, frustum)) {
+          ++culled;
+          continue;
+        }
+        if (ground && face == 2) {
           ++culled;
           continue;
         }
