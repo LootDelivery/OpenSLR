@@ -22,6 +22,7 @@ SAMPLERCUBE(s_sceneReflection3, 7);
 SAMPLERCUBE(s_sceneReflection4, 8);
 uniform vec4 u_dynamicReflection;
 uniform vec4 u_envFilter; // x = prefilter spread, y = legacy weight
+uniform vec4 u_envLod;    // x = 1 physical roughness mapping, y = bias, z = cap
 uniform vec4 u_irrParams; // x = probe ready, y = scale
 uniform vec4 u_reflectionProbe;
 uniform vec4 u_reflectionBoxMin;
@@ -69,7 +70,26 @@ vec3 envPrefilter(vec3 dir, float radius)
     // material asks for is the softness it gets. What changed is the kernel --
     // a GGX lobe instead of an area average, which is what makes a highlight
     // fall off instead of breaking into patches.
-    float lod = clamp(radius * 14.0, 0.0, 4.0);
+    // Which level of the chain this material asks for.
+    //
+    // The old mapping was roughEnv*1.68, and roughEnv is 1 - specularExponent/24
+    // -- a normalisation for fresnel and occlusion, not a roughness. It put car
+    // paint at about 0.3, below the first level of the chain, so the material read
+    // the sharp capture and the GGX levels were only ever reached by rubber. That
+    // is why switching the chain on changed nothing to look at.
+    //
+    // Physical mapping: a Blinn-Phong exponent corresponds to a GGX roughness of
+    // about sqrt(2/(e+2)), and level m of the chain stands for roughness
+    // 0.02 * 2^m, so the level is log2(roughness/0.02). Paint with an exponent of
+    // 20 to 60 lands on levels 3 to 4, chrome on 1 to 2, a mirror below half and
+    // keeps reading the capture itself.
+    float lod;
+    if (u_envLod.x > 0.5) {
+        float alpha = sqrt(2.0 / (max(u_vehicleSpec.a, 1.0) + 2.0));
+        lod = clamp(log2(max(alpha, 0.02) / 0.02) + u_envLod.y, 0.0, u_envLod.z);
+    } else {
+        lod = clamp(radius * 14.0 + u_envLod.y, 0.0, u_envLod.z);
+    }
     // Level 0 of the prefiltered chain is the capture itself, and it is not
     // written: the sharp end reads the capture cube directly, which is a whole
     // cycle fresher than the convolved levels.

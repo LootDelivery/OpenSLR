@@ -304,6 +304,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     u_reflection_box_max_ = bgfx::createUniform("u_reflectionBoxMax", bgfx::UniformType::Vec4);
     u_dynamic_reflection_ = bgfx::createUniform("u_dynamicReflection", bgfx::UniformType::Vec4);
     u_env_filter_ = bgfx::createUniform("u_envFilter", bgfx::UniformType::Vec4);
+    u_env_lod_ = bgfx::createUniform("u_envLod", bgfx::UniformType::Vec4);
     u_local_light_ = bgfx::createUniform("u_localLight", bgfx::UniformType::Vec4);
     s_car_depth_ = bgfx::createUniform("s_carDepth", bgfx::UniformType::Sampler);
     u_car_depth_mtx_ = bgfx::createUniform("u_carDepthMtx", bgfx::UniformType::Mat4);

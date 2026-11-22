@@ -816,3 +816,51 @@ The ambient probe is off by default. It still integrates to a near constant
 instead of a gradient (`SLRR_ENV_DEBUG=9` draws it unmixed and the whole body reads
 one value), and its level moves with each capture, which pumps while driving. It
 is the next piece of stage 1b, not a shipped feature.
+
+### 8.11 Why the GGX chain looked like it did nothing
+
+Switching the chain on changed the refresh cadence of reflections on the door
+pillars and nothing else, and the reason is arithmetic rather than rendering. The
+material picked its level with
+
+    lod = clamp(reflection_spread * roughEnv * 0.12 * 14, 0, 4)
+        = roughEnv * 1.68            for the stock spread of 1.0
+    roughEnv = clamp(1 - specularExponent / 24, 0.15, 1)
+
+and it only reads the chain when `lod >= 1`, so it needs `roughEnv >= 0.6`, which
+needs `specularExponent <= 10`. Car paint sits at 20 to 60, which is `roughEnv`
+0.17 to 0.4 and `lod` 0.3 to 0.7: every paint pixel was reading mip 0 of the
+capture, the sharpest thing there is. Only rubber and very rough trim ever reached
+the chain, which is exactly where the change was visible.
+
+`roughEnv` was never a roughness. It is `1 - specularExponent/24`, a
+normalisation that the fresnel and occlusion terms share, and wiring a level index
+to it was the original mistake.
+
+The physical mapping replaces it. A Blinn-Phong exponent corresponds to a GGX
+roughness of about `sqrt(2/(e+2))`, and level m of the chain stands for roughness
+`0.02 * 2^m`, so
+
+    lod = clamp(log2(max(sqrt(2/(e+2)), 0.02) / 0.02), 0, cap)
+
+which gives exponent 1000 -> level 1.2, 200 -> 2.3, 60 -> 3.2, 24 -> 3.8, 8 ->
+4.5. Paint lands on the chain, chrome stays near level 1, and a mirror stays below
+half and keeps reading the capture.
+
+Measured on the car with the environment term alone (`SLRR_ENV_DEBUG=1`), high
+frequency energy over the body: 12.95 for the stock mapping, 9.53 at cap 4, 9.16
+at cap 3, 12.60 at cap 2. Cap 4 turns paint into flat pearl -- the reflected
+environment loses its shape entirely -- cap 2 keeps it, and the choice is taste
+rather than correctness, so both the mapping and the cap are on the F12 panel
+("Physical reflection roughness", "Reflection roughness cap"). The default is off,
+which is exactly the look the game shipped with; `SLRR_REFL_LOD` and
+`SLRR_REFL_LOD_CAP` override the panel for scripted A/B.
+
+Cost of the mapping: none that can be measured, frame 7.90 ms with the stock
+mapping against 7.95 ms physical, traffic off. Higher levels are smaller mips.
+
+The refresh cadence the user noticed on the pillars is the chain working as
+intended: a cube is only published when every face of every level comes from one
+generation, so a material reading the chain is up to one cycle behind, while glass
+and chrome read the capture itself and are only a few frames behind. The cycle was
+thirty-six faces, ninety-six at three faces a frame after 8.10.

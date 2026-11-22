@@ -396,6 +396,24 @@ void batch_probe_report() {
                                      ggx_ready ? 1.f : 0.f,
                                      static_cast<float>(kReflectionGgxLevels - 1)};
         bgfx::setUniform(u_env_filter_, env_filter);
+        // Roughness-to-level mapping for the reflection chain. The panel decides,
+        // and SLRR_REFL_LOD / SLRR_REFL_LOD_CAP override it so a script can
+        // photograph both variants from one binary.
+        static const int env_lod_mode = [] {
+          const char* e = std::getenv("SLRR_REFL_LOD");
+          return e ? std::atoi(e) : -1;
+        }();
+        static const float env_lod_cap = [] {
+          const char* e = std::getenv("SLRR_REFL_LOD_CAP");
+          return e ? std::strtof(e, nullptr) : -1.f;
+        }();
+        const bool physical = env_lod_mode >= 0 ? env_lod_mode != 0
+                                                : gfx.reflection_physical_roughness;
+        const float cap = env_lod_cap >= 0.f ? env_lod_cap
+                                             : gfx.reflection_roughness_cap;
+        const float spread = std::max(gfx.reflection_spread, 0.05f);
+        const float env_lod[4] = {physical ? 1.f : 0.f, std::log2(spread), cap, 0.f};
+        bgfx::setUniform(u_env_lod_, env_lod);
         bgfx::setUniform(u_dynamic_reflection_, reflection);
         // The diffuse probe. x says whether the material may use it at all:
         // until a whole generation has been integrated the shader keeps the

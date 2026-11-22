@@ -79,6 +79,14 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
   ImGui::Combo("Reflection normal", &enhanced.reflection_normal,
                "Authored\0Geometric\0Blend\0");
   ImGui::SliderFloat("Reflection blur", &enhanced.reflection_spread, 0.f, 3.f, "%.2f");
+  ImGui::Checkbox("Physical reflection roughness", &enhanced.reflection_physical_roughness);
+  ImGui::SetItemTooltip("Level of the reflection chain from a real GGX roughness "
+                        "instead of 1 - specularExponent/24. Off keeps paint on the "
+                        "sharp capture, which is why the GGX chain looked like it did "
+                        "nothing; on makes the blur follow the material.");
+  if (enhanced.reflection_physical_roughness)
+    ImGui::SliderFloat("Reflection roughness cap", &enhanced.reflection_roughness_cap,
+                       0.f, 4.f, "%.1f");
   ImGui::SliderFloat("Reflection strength", &enhanced.reflection_strength, 0.f, 1.f, "%.2f");
   ImGui::Checkbox("GGX prefilter", &enhanced.ggx_reflections);
   ImGui::Checkbox("Irradiance probe", &enhanced.irradiance_probe);

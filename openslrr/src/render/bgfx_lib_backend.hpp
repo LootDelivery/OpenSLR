@@ -371,6 +371,7 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_env_filter_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_env_lod_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE,u_vehicle_fade_=BGFX_INVALID_HANDLE,u_sun_diff_=BGFX_INVALID_HANDLE,u_sun_amb_=BGFX_INVALID_HANDLE,u_sun_spec_=BGFX_INVALID_HANDLE,u_sun_dir_=BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle shadow_program_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle shadow_recv_ = BGFX_INVALID_HANDLE;

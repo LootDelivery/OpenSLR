@@ -23,6 +23,19 @@ struct EnhancedGraphics {
   // direction, which is a perfect mirror and therefore shows every error in
   // the normal as a hard artefact.
   float reflection_spread = 1.0f;
+  // Which level of the reflection chain a material asks for.
+  //
+  // Off is the stock mapping, roughEnv * 1.68, where roughEnv is
+  // 1 - specularExponent/24 -- a normalisation for fresnel and occlusion, not a
+  // roughness. It puts car paint at about 0.3, below the first level of the
+  // chain, so paint reads the sharp capture and the GGX levels are only ever
+  // reached by rubber. On is the physical mapping, a Blinn-Phong exponent
+  // corresponding to a GGX roughness of sqrt(2/(e+2)) and level m standing for
+  // roughness 0.02 * 2^m, which puts paint at levels 3 to 4.
+  bool reflection_physical_roughness = false;
+  // Ceiling for that level. Four is what the mapping asks for on car paint and
+  // it reads as flat pearl; two keeps the shape of the reflected environment.
+  float reflection_roughness_cap = 3.0f;
   // Head-on reflectance floor; the rest of the range is Fresnel.
   float reflection_strength = 0.35f;
   // Sample the GGX-prefiltered cube instead of the box-filtered mips of the
