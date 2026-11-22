@@ -1009,6 +1009,8 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
 {
     ++frames_;
     batch_probe_begin_frame();
+    // One camera list per frame; see gameref_active_cameras.
+    gameref_cameras_frame_begin();
     if (!ready_) return;
     struct FrameCache {
       FrameCache() { scene_instances_frame_cache(true); }
@@ -1835,6 +1837,15 @@ void LibBgfxBackend::update_reflections(const float* eye) {
     // with it, the cause is per-frame publication rather than the buffer swap.
     static const int freeze_at = refl_env_int("SLRR_REFL_FREEZE", 0);
     if (freeze_at > 0 && s_refl_published_generation >= freeze_at) return;
+    // A cube is still captured whole in one frame -- six faces at once, because
+    // splitting them makes the auto-generated mip chain mix fresh and stale
+    // sides and the body flickers. What is throttled is the cadence: each face
+    // walks the live scene graph, so six of them every frame cost about a
+    // millisecond of main-thread time for a 512 cube that no one can tell apart
+    // when it refreshes at 30 Hz instead of 60. SLRR_REFL_REFRESH=1 restores the
+    // old every-frame cadence for a comparison.
+    static const int refresh = std::max(1, refl_env_int("SLRR_REFL_REFRESH", 2));
+    if (refresh > 1 && (s_refl_frame % static_cast<uint32_t>(refresh)) != 0) return;
     if (!eye || !reflection_scene_ || !host_enhanced_graphics().dynamic_reflections) {
       reflection_world_ = nullptr;
       reflection_face_ = 0;
@@ -2248,7 +2259,10 @@ void LibBgfxBackend::refresh_distance_fog(const float render_eye[3]) {
 void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
     perf::Scope perf_scope(perf::Zone::World);
     draw_prop_batches(view_id, prop_batches_, false);
-    for (int pass = 0; pass < 2; ++pass)
+    for (int pass = 0; pass < 2; ++pass) {
+      // Props and the OSD were drawn before this pass and share the vehicle
+      // uniforms, so the group-independent state is rebound on the first car.
+      vehicle_uniform_view_ = 0xffffffffu;
       for (const auto& instance : instances_) {
         if (instance.sky) continue;
         // The mesh stays resident, so a pedestrian walking into view does not
@@ -2265,6 +2279,7 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         }
         draw_instance(view_id, instance, instance.transform.data(), false, pass);
       }
+    }
   }
   void LibBgfxBackend::draw_previews()
 {

@@ -1000,17 +1000,39 @@ void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,
   }
 }
 
-std::vector<GameRefState*> gameref_active_cameras() {
-  std::vector<GameRefState*> out;
+namespace {
+std::vector<GameRefState*> g_cameras;
+uint64_t g_cameras_frame = 0;
+uint64_t g_cameras_built = 0;
+size_t g_cameras_refs = 0;
+bool g_cameras_valid = false;
+}  // namespace
+
+void gameref_cameras_frame_begin() {
+  ++g_cameras_frame;
+  g_cameras_valid = false;
+}
+
+const std::vector<GameRefState*>& gameref_active_cameras() {
+  // The reference map only changes between frames (scripts tick before the
+  // renderer flushes), so one build serves every caller in a frame. The size
+  // check is the cheap guard for a camera being created or destroyed.
+  if (g_cameras_valid && g_cameras_built == g_cameras_frame &&
+      g_cameras_refs == g_refs.size())
+    return g_cameras;
+  g_cameras.clear();
   for (auto& kv : g_refs) {
     if (kv.second.kind == GameRefKind::Camera && kv.second.cam_active)
-      out.push_back(&kv.second);
+      g_cameras.push_back(&kv.second);
   }
-  std::sort(out.begin(), out.end(),
+  std::sort(g_cameras.begin(), g_cameras.end(),
             [](const GameRefState* a, const GameRefState* b) {
               return a->cam_pri < b->cam_pri;
             });
-  return out;
+  g_cameras_built = g_cameras_frame;
+  g_cameras_refs = g_refs.size();
+  g_cameras_valid = true;
+  return g_cameras;
 }
 
 std::vector<GameRefState*> gameref_nodes_with_mesh() {

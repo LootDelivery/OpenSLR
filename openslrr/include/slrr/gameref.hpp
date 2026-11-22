@@ -250,7 +250,12 @@ struct DueTimer {
 };
 std::vector<DueTimer> gameref_poll_timers(float now_sec);
 
-std::vector<GameRefState*> gameref_active_cameras();
+// Built once per frame: the list covers every live ref, so building it per call
+// site (the scene camera, the backend, the debug overlay) walked the whole
+// reference map three times a frame. `gameref_cameras_frame_begin` is called by
+// the renderer at the start of a frame.
+void gameref_cameras_frame_begin();
+const std::vector<GameRefState*>& gameref_active_cameras();
 // Newest fullscreen camera. Catalog slots (viewport under 1×1) are skipped.
 GameRefState* fullscreen_script_camera();
 // system:0x33. Constructor params are "x,y,z,yaw,pitch,roll,...".
