@@ -41,6 +41,14 @@ struct MeshVertex {
   uint32_t rgba = 0xffffffffu;
 };
 
+// U2-B.4 measurement: how many vehicle submits a frame issues, and how many
+// distinct draw groups they fall into. A group is what instancing could merge:
+// same geometry, same material branch and the same bound texture. Enabled with
+// SLRR_BATCH_PROBE=1, silent otherwise.
+void batch_probe_begin_frame();
+void batch_probe_note(uint64_t key);
+void batch_probe_report();
+
 class LibBgfxBackend final : public IRenderBackend {
 
   // View 0 is the cached map shadow, followed by the vehicle shadow maps.

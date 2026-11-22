@@ -1008,6 +1008,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
   void LibBgfxBackend::flush()
 {
     ++frames_;
+    batch_probe_begin_frame();
     if (!ready_) return;
     struct FrameCache {
       FrameCache() { scene_instances_frame_cache(true); }
@@ -1442,6 +1443,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       }
       perf::set_render_sample(sample);
     }
+    batch_probe_report();
     {
       perf::Scope scope(perf::Zone::Present);
       bgfx::frame();

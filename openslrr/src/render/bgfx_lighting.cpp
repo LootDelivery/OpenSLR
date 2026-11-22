@@ -174,6 +174,62 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
     if (bgfx::isValid(u_fog_range_)) bgfx::setUniform(u_fog_range_, fog_range);
     if (bgfx::isValid(u_fog_eye_)) bgfx::setUniform(u_fog_eye_, fog_eye);
   }
+// U2-B.4 measurement. Counts vehicle submits per frame and the distinct groups
+// they belong to: a group is (geometry, material branch, bound texture, view),
+// which is exactly the key an instanced path would batch on.
+namespace {
+struct BatchProbe {
+  const bool enabled = std::getenv("SLRR_BATCH_PROBE") != nullptr;
+  std::unordered_map<uint64_t, int> groups;
+  int submits = 0, singles = 0, frames = 0;
+  std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+};
+BatchProbe &batch_probe() {
+  static BatchProbe probe;
+  return probe;
+}
+}  // namespace
+
+void batch_probe_begin_frame() {
+  auto &p = batch_probe();
+  if (!p.enabled) return;
+  p.groups.clear();
+  p.submits = 0;
+  p.singles = 0;
+  ++p.frames;
+}
+
+void batch_probe_note(uint64_t key) {
+  auto &p = batch_probe();
+  if (!p.enabled) return;
+  ++p.groups[key];
+  ++p.submits;
+}
+
+void batch_probe_report() {
+  auto &p = batch_probe();
+  if (!p.enabled) return;
+  const auto now = std::chrono::steady_clock::now();
+  const double dt = std::chrono::duration<double>(now - p.last).count();
+  if (dt < 1.) return;
+  int multi = 0, merged = 0;
+  for (const auto &entry : p.groups)
+    if (entry.second > 1) {
+      ++multi;
+      merged += entry.second;
+    }
+  const double rate = p.frames > 0 ? double(p.submits) / double(p.frames) : 0.;
+  (void)rate;
+  std::fprintf(stderr,
+               "[batch] submits=%d merged=%d groups=%zu (multi=%d) saved=%.0f%%\n",
+               p.submits, merged, p.groups.size(), multi,
+               p.submits > 0 ? 100. * double(p.submits - int(p.groups.size())) /
+                                   double(p.submits)
+                             : 0.);
+  p.last = now;
+  p.frames = 0;
+}
+
   void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials)
 {
     // preview alone means "an inset render", which uses a trimmed material.
@@ -353,6 +409,16 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
           state |= BGFX_STATE_BLEND_ALPHA;
         else
           state |= BGFX_STATE_WRITE_Z;
+        if (!preview) {
+          const uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(&part.geo)) ^
+                               (uint64_t(group.material_type) << 40) ^
+                               (uint64_t(base.idx) << 20) ^
+                               (uint64_t(group.texture_index) << 8) ^
+                               uint64_t(group.mix_index) ^
+                               (uint64_t(group.reflection_index) << 48) ^
+                               (uint64_t(view_id) << 56) ^ uint64_t(pass);
+          batch_probe_note(key);
+        }
         bgfx::setState(state);bgfx::submit(view_id,vehicle_program_);
       }
       return;

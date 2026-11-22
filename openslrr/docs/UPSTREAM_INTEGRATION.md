@@ -456,6 +456,48 @@ fix is described in the commit and in the summary below. What remains over 40 ms
 is `present`, the main thread waiting for the render thread while the city draws
 ~6000 calls, which happens with traffic disabled as well.
 
+### U2-B.4. Batching ambient traffic
+
+Scope: the cars this module creates and the fake racers the career scripts build
+from the traffic templates. Cars from `cars/racers` stay out on purpose — their
+tuning combinations are open-ended and the racer path is not implemented yet, so
+there is nothing stable to batch on.
+
+The concern raised before starting was that traffic cars carry per-car textures,
+so the batch key would be unique per car. Measured, that is true only for the
+painted body group: wheels, tyres, glass, chrome, lights and interiors share
+textures across cars of the same model, and those are the majority of submits.
+The draw-group probe (`SLRR_BATCH_PROBE=1`) reports, at density 1.0 with 100 cars:
+
+| Metric | Value |
+|---|---|
+| vehicle submits per frame | 1342…1360 |
+| distinct draw groups | 233 |
+| groups with more than one member | 70, covering 1197 submits |
+| submits a grouping pass would save | **83 %** |
+
+A group here is (geometry, material branch, bound textures, view) — exactly the
+key an instanced submit would use, and it already separates the painted body,
+because the key includes the bound diffuse texture handle.
+
+Expected gain, using the measured cost of a submit (~0.8 µs at 100 cars, from
+3619 → 5809 draws costing 244 → 172 fps): about 0.7…1.0 ms per frame at 100 cars,
+i.e. most of what the traffic population costs to draw.
+
+Work it needs:
+
+1. an instanced variant of the vehicle vertex shader (per-instance world matrix
+   and tint, like `vs_mesh_inst.sc` does for static props), sharing the existing
+   `fs_vehicle.sc` material code;
+2. a grouping pass over the collected vehicle instances, keyed as the probe does,
+   producing one `bgfx::setInstanceDataBuffer` submit per group instead of one
+   `draw_instance` per part;
+3. the same grouping in the passes that draw cars again — shadows and the dynamic
+   reflection capture — or they will keep the old cost;
+4. per-instance values that are not material state (tint, fade, light flags) move
+   into the instance attributes; anything that changes a uniform per car cannot
+   be batched and has to stay a separate submit.
+
 ## Deferred and rejected
 
 Deferred items have a reason and a place in
