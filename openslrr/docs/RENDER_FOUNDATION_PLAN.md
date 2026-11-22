@@ -428,3 +428,39 @@ Still open in stage 1: GGX prefiltering of the bake's mip chain and a separate
 irradiance probe for diffuse ambient. Both are additive to this structure: the
 cube already exists as an object with its own schedule, so they change how its mips
 are built, not how it is captured.
+
+### 8.5 Stage 1b: a GGX-prefiltered environment
+
+The cube's mips are a box filter, so a roughness lookup picked a level that was
+blurred by area. On chrome that is invisible; on semi-rough paint it turns a
+highlight into a flat patch and keeps the hard edges of whatever was bright.
+
+There is now a second cube whose levels are convolved with GGX: level `m` is built
+at the angular width of `2^m` texels of the capture, which is the width the
+box-filtered level used to have, and it takes 12 to 52 importance samples as the
+lobe widens. Level 0 is a straight blit of the capture, so sharp reflections are
+bit-identical to before. The mip a material selects did not change, so the
+softness it asks for is the softness it gets; what changed is the kernel.
+
+Rebuilt one level per frame from the raw capture, six faces per level, double
+buffered for the same reason as the bake. `SLRR_REFL_GGX=0` puts the material back
+on the box mips for A/B.
+
+| | `gpu` | frame |
+|---|---|---|
+| GGX off | 2.34 | 3.57 |
+| GGX on, 16 + 24 per level samples | 2.57 | 3.76 |
+| GGX on, 12 + 8 per level samples | 2.50 | 3.63 |
+
+Two wrong turns worth keeping:
+
+1. The first chain was 128 across. A 128 texel face is four texels of the capture
+   per texel, so even level 0 was softer than the sharpest level a material could
+   ask for, and the paint went flat red. The chain has to start at the capture's
+   own resolution or the low end is a loss.
+2. Roughness taken from `1 - specularExponent / 24` is not a GGX roughness: it was
+   tuned for the box-mip mapping and lands near 0.6-0.9 on ordinary paint. Feeding
+   it straight into `roughness * (levels - 1)` gave mip 4 of a small cube and the
+   same flat paint from the other side. The chain is now built at the widths the
+   old mapping produced, and material roughness becomes a real number only with
+   PBR materials in stage 2.
