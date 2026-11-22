@@ -205,15 +205,6 @@ class LibBgfxBackend final : public IRenderBackend {
 
 
   void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials = false);
-  // (view, pass, preview) whose group-independent vehicle uniforms are still
-  // bound. bgfx keeps uniform state per view, so they only need writing when a
-  // draw with different frame state, or a different program, went in between.
-  uint32_t vehicle_uniform_view_ = 0xffffffffu;
-  int vehicle_uniform_pass_ = -1;
-  bool vehicle_uniform_simple_ = false;
-  // The light the cached frame state was bound for. Two objects in one view can
-  // carry different SceneSuns, and then the sun uniforms have to be re-sent.
-  SceneSun vehicle_uniform_sun_{};
   void draw_prop_batches(uint16_t view_id, const std::vector<SceneBatch>& batches,
                          bool shadow, bool conservative = false);
   void refresh_distance_fog(const float render_eye[3]);

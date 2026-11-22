@@ -247,24 +247,6 @@ void batch_probe_report() {
       return slot < part.tex.size() && bgfx::isValid(part.tex[slot]) ? part.tex[slot] : white_tex_;
     };
     if (instance.vehicle_material && bgfx::isValid(vehicle_program_)) {
-      // Frame state for this view and pass is bound here rather than per
-      // group; a car shares it with every other car drawn after it.
-      // SLRR_VEHICLE_UNIFORM_CACHE=0 rebinds the frame state per draw, which is
-      // what the code did before the cache existed. Kept as the A/B switch.
-      static const bool cache_uniforms = [] {
-        const char* v = std::getenv("SLRR_VEHICLE_UNIFORM_CACHE");
-        return !(v && v[0] == '0');
-      }();
-      const bool bind_invariant = !cache_uniforms ||
-                                  vehicle_uniform_view_ != view_id ||
-                                  vehicle_uniform_pass_ != pass ||
-                                  vehicle_uniform_simple_ != simple ||
-                                  std::memcmp(&vehicle_uniform_sun_, &instance.lighting,
-                                              sizeof(SceneSun)) != 0;
-      vehicle_uniform_sun_ = instance.lighting;
-      vehicle_uniform_view_ = view_id;
-      vehicle_uniform_pass_ = pass;
-      vehicle_uniform_simple_ = simple;
       for (const auto& group : part.geo.groups) {
         auto base = texture(group.texture_index);
         const bool painted = instance.paint_slot >= 0 && group.texture_index == instance.paint_slot;
@@ -353,29 +335,22 @@ void batch_probe_report() {
         }
         // A spheremap ColorMixTex outputs texture.a times the env factor.
         if (color_mix_env) diffuse[3] = strength;
-        // Sun, ambient and the frame's local lights do not depend on the
-        // material group: they come from the scene and from the instance's
-        // world. bgfx keeps uniform state per view, so binding them once per
-        // (view, pass) instead of once per submit takes nine uniform writes off
-        // every drawn part, which in a city full of traffic is thousands a frame.
-        if (bind_invariant) {
-          const SceneSun sun = instance.lighting;
-          const float sun_d[4] = {sun.diffuse[0], sun.diffuse[1], sun.diffuse[2],
-                                  sun.set ? 1.f : 0.f};
-          const float sun_a[4] = {sun.ambient[0], sun.ambient[1], sun.ambient[2], 0.f};
-          const float sun_s[4] = {sun.specular[0], sun.specular[1], sun.specular[2],
-                                  sun.set ? 1.f : 0.f};
-          // Game direction is where the light travels. Toward it, with Z
-          // flipped into the same space as the rendered vertices.
-          const float sun_r[4] = {-sun.direction[0], -sun.direction[1],
-                                  sun.direction[2], sun.has_direction ? 1.f : 0.f};
-          bgfx::setUniform(u_sun_diff_, sun_d);
-          bgfx::setUniform(u_sun_amb_, sun_a);
-          bgfx::setUniform(u_sun_spec_, sun_s);
-          bgfx::setUniform(u_sun_dir_, sun_r);
-          const float no_light[4]{};
-          bgfx::setUniform(u_local_light_, simple ? no_light : local_light_.data());
-        }
+        const SceneSun sun = instance.lighting;
+        const float sun_d[4] = {sun.diffuse[0], sun.diffuse[1], sun.diffuse[2],
+                                sun.set ? 1.f : 0.f};
+        const float sun_a[4] = {sun.ambient[0], sun.ambient[1], sun.ambient[2], 0.f};
+        const float sun_s[4] = {sun.specular[0], sun.specular[1], sun.specular[2],
+                                sun.set ? 1.f : 0.f};
+        // Game direction is where the light travels. Toward it, with Z
+        // flipped into the same space as the rendered vertices.
+        const float sun_r[4] = {-sun.direction[0], -sun.direction[1],
+                                sun.direction[2], sun.has_direction ? 1.f : 0.f};
+        bgfx::setUniform(u_sun_diff_, sun_d);
+        bgfx::setUniform(u_sun_amb_, sun_a);
+        bgfx::setUniform(u_sun_spec_, sun_s);
+        bgfx::setUniform(u_sun_dir_, sun_r);
+        const float no_light[4]{};
+        bgfx::setUniform(u_local_light_, simple ? no_light : local_light_.data());
         bgfx::setUniform(u_diffuse_,diffuse);
         // U2-B.3: a streamed car dissolves in instead of popping. Everything
         // else draws at 1 and takes the untouched shader path.
@@ -387,12 +362,12 @@ void batch_probe_report() {
         map(u_base_uv_,group.base_map);map(u_mix_uv_,group.mix_map);map(u_env_uv_,group.reflection_map);
         bgfx::TextureHandle bake = white_tex_;
         float bake_u[4] = {0.f, static_cast<float>(group.base_map.channel), 1.f, 0.f};
-        const float bake_xf[4] = {1.f, 1.f, 0.f, 0.f};
+        float bake_xf[4] = {1.f, 1.f, 0.f, 0.f};
         if (transparent && color_mix) bake_u[3] = 1.f;
         // A switched-on lamp is the glow texture, not a surface in shade.
         if (instance.light_flags) bake_u[0] = 1.f;
         bgfx::setUniform(u_lightmap_, bake_u);
-        if (bind_invariant) bgfx::setUniform(u_lightmap_uv_, bake_xf);
+        bgfx::setUniform(u_lightmap_uv_, bake_xf);
         bgfx::setTexture(0,s_tex_,base);bgfx::setTexture(1,s_mix_,mix);
         // Global environment textures share the image cache with OSD, but
         // material UV transforms need the scene's wrapping sampler here.
@@ -414,15 +389,10 @@ void batch_probe_report() {
                                      static_cast<float>(gfx.reflection_normal),
                                      env_debug, gfx.reflection_strength};
         const float env_filter[4] = {gfx.reflection_spread, env_legacy, 0.f, 0.f};
-        // x selects the reflection source per group, so it stays per draw.
+        bgfx::setUniform(u_env_filter_, env_filter);
         bgfx::setUniform(u_dynamic_reflection_, reflection);
-        if (bind_invariant) {
-          bgfx::setUniform(u_env_filter_, env_filter);
-          // The cube and its parallax box are the same for every group, and the
-          // shader reads them only when u_dynamicReflection.x says so, so binding
-          // them once per pass cannot change what any group samples.
-          const auto cube = reflection_cubes_[reflection_write_ ^ 1];
-          if (bgfx::isValid(cube)) bgfx::setTexture(4, s_reflection_cube_, cube);
+        if (live_env) {
+          bgfx::setTexture(4, s_reflection_cube_, reflection_cubes_[reflection_write_ ^ 1]);
           const float probe[4] = {reflection_sample_origin_[0], reflection_sample_origin_[1],
               reflection_sample_origin_[2], reflection_box_valid_ ? 1.f : 0.f};
           const float low[4] = {reflection_box_min_[0], reflection_box_min_[1], reflection_box_min_[2], 0.f};
@@ -453,9 +423,6 @@ void batch_probe_report() {
       }
       return;
     }
-    // The mesh path writes the same sun and local-light uniforms, so the
-    // vehicle state has to be rebound after it.
-    vehicle_uniform_view_ = 0xffffffffu;
     auto draw=[&](uint32_t first,uint32_t count,uint16_t texture_index,uint32_t flags,const ScxGroup* group){
       // SCX3 alpha-blended sprites, including map markers, belong above
       // the opaque tiles. Their JPEG/PNG alpha is already premultiplied.

@@ -1009,8 +1009,6 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
 {
     ++frames_;
     batch_probe_begin_frame();
-    // One camera list per frame; see gameref_active_cameras.
-    gameref_cameras_frame_begin();
     if (!ready_) return;
     struct FrameCache {
       FrameCache() { scene_instances_frame_cache(true); }
@@ -2250,10 +2248,7 @@ void LibBgfxBackend::refresh_distance_fog(const float render_eye[3]) {
 void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
     perf::Scope perf_scope(perf::Zone::World);
     draw_prop_batches(view_id, prop_batches_, false);
-    for (int pass = 0; pass < 2; ++pass) {
-      // Props and the OSD were drawn before this pass and share the vehicle
-      // uniforms, so the group-independent state is rebound on the first car.
-      vehicle_uniform_view_ = 0xffffffffu;
+    for (int pass = 0; pass < 2; ++pass)
       for (const auto& instance : instances_) {
         if (instance.sky) continue;
         // The mesh stays resident, so a pedestrian walking into view does not
@@ -2270,7 +2265,6 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         }
         draw_instance(view_id, instance, instance.transform.data(), false, pass);
       }
-    }
   }
   void LibBgfxBackend::draw_previews()
 {
