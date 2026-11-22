@@ -892,3 +892,29 @@ Roughness 1.5 in this chain means a lobe of about 1.5 levels, and the levels are
 for an exponent of 60. The mapping is still the right one; the cap is a statement
 about how much reflected structure the paint should keep, and that is the artist's
 call, not the renderer's.
+
+### 8.13 Fifty milliseconds of age reads as a framerate drop
+
+With the chain finally reaching the paint, its age became the whole problem: the
+user described it as being switched from 60 to 28 frames, which is not lag but
+*stepping*. A cube published once every fifty milliseconds holds still for fifty
+milliseconds and then jumps, and the eye reads a stuttering reflection on a smooth
+body as a stuttering renderer.
+
+The fix was to stop spreading a cycle over frames. Thirty-six faces per gate is
+six blits and six small convolutions, and measured against six faces a frame the
+frame time does not move -- 8.43 and 8.66 ms against 9.12 and 8.82 -- while the
+cycle's age falls from 56 ms to 10, which is one gate. A whole chain costs 0.18 ms
+a frame on average against the chain switched off (8.60 against 8.42 over three
+runs each, traffic off) and 0.04 ms of that is the `refl` scope.
+
+The budget is clamped at thirty-six, so the cycle can never span two gates.
+`SLRR_REFL_AGE` prints the interval between publishes and is the number to watch:
+anything approaching a frame budget of a slow display is visible.
+
+What still bounds freshness from below is the capture, not the chain: the capture
+writes two faces a gate, so a whole cube is three gates (24 ms) old and assembled
+across three frames. Glass and chrome have exactly that age today and were never
+reported as laggy, so 24 ms is under the threshold. Reaching for less would mean
+changing the capture cadence itself, which is a separate step with its own risk:
+that cadence is what fixed reflections freezing in motion.

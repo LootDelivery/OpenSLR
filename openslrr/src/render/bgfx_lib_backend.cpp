@@ -2634,12 +2634,14 @@ void LibBgfxBackend::build_ggx_cube() {
     // two million taps spread over its frames -- so the cycle might as well be
     // twelve frames old instead of thirty-six. Freshness is the one thing this
     // chain cannot fake.
-    // Six faces a frame, which is the whole chain in six passes: measured cycle
-    // 103 ms at three and 50 ms at six, and the cost of six cannot be told from
-    // the cost of three (frame 7.39-7.66 ms against 7.21-7.90, traffic off). A
-    // cycle is now about two capture generations old instead of four.
+    // The whole chain in one pass: thirty-six faces, which is six blits and six
+    // small convolutions per gate. Measured against six faces a frame the frame
+    // time does not move (8.43 and 8.66 ms against 9.12 and 8.82, traffic off)
+    // while the cycle's age drops from 56 ms to 10 -- one gate. Fifty
+    // milliseconds of age was visible as reflections stepping, which reads as a
+    // framerate drop rather than as lag; ten milliseconds does not.
     static const int faces_per_frame = std::clamp(
-        refl_env_int("SLRR_REFL_GGX_FACES", 6), 1, 6);
+        refl_env_int("SLRR_REFL_GGX_FACES", 36), 1, 36);
     for (int n = 0; n < faces_per_frame; ++n) {
       const int level = reflection_ggx_level_;
       const int face = reflection_ggx_face_;
