@@ -673,3 +673,20 @@ they drew nothing.
 `irradiance_scale` (0-2) is the hand that keeps the car from changing brightness
 while the two ambient terms are compared. The integral and a flat colour do not
 have the same magnitude; 1.0 is the probe as computed.
+
+#### 8.9.1 Why the probe pumped while driving
+
+The first version reused the prefilter chain's cadence: one face a frame, published
+when all six were done. That cadence exists for the GGX levels because each face
+there is a 256-squared convolution; for a sixteen-texel cube it is pointless, and
+it is actively wrong. Six frames of driving are six different captures, so the six
+faces of one generation do not agree with each other, and the double buffer turns
+that disagreement into a step every sixth frame -- the ambient term pumps dark and
+light in motion and looks fine standing still, because standing still the six
+captures are identical.
+
+The whole probe is fifteen hundred pixels. It now integrates all six faces in one
+frame from one capture handle and publishes them in that frame, which removes both
+the inter-face disagreement and the publication step. Two runs with traffic off:
+frame 3.306 and 3.374 ms, `refl` 0.253 and 0.258 ms -- no measurable change from
+the face-a-frame version, as expected for 49k taps.

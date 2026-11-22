@@ -2251,7 +2251,6 @@ void LibBgfxBackend::update_reflections(const float* eye) {
               bgfx::createFrameBuffer(1, &attachment, false);
         }
       }
-      reflection_irr_face_ = 0;
       reflection_irr_write_ = 0;
       reflection_irr_ready_ = false;
     }
@@ -2680,9 +2679,13 @@ bgfx::TextureHandle LibBgfxBackend::reflection_irr_to_sample() const {
   return reflection_irr_[reflection_irr_write_ ^ 1];
 }
 
-// One face a frame, published only when all six come from the same generation,
-// for the same reason as the prefilter chain: a half-refreshed cube would mix
-// two moments of the world, and a diffuse term that flickers is obvious.
+// All six faces in one frame. A probe generation spread over frames takes each
+// face from a different capture generation, and while driving that is visible as
+// the ambient term pumping dark and light on a six-frame cycle: the faces no
+// longer agree with each other, and the double buffer publishes the disagreement
+// as a step. At sixteen texels a face the whole cube is fifteen hundred pixels, so
+// there is nothing to spread: integrate all of it from one capture and publish it
+// in the same frame.
 void LibBgfxBackend::build_irradiance_cube() {
   static const bool env_off = refl_env_int("SLRR_REFL_IRR", 1) == 0;
   const bool enabled = !env_off && host_enhanced_graphics().irradiance_probe;
@@ -2690,47 +2693,43 @@ void LibBgfxBackend::build_irradiance_cube() {
     reflection_irr_ready_ = false;
     return;
   }
-  if (std::getenv("SLRR_REFL_TRACE") && (s_refl_frame % 120) == 0)
-    std::fprintf(stderr, "[refl-irr] prog=%d src=%d ready=%d face=%d\n",
-                 bgfx::isValid(irradiance_program_) ? 1 : 0,
-                 bgfx::isValid(reflection_cube_to_sample()) ? 1 : 0,
-                 reflection_irr_ready_ ? 1 : 0, reflection_irr_face_);
   if (!bgfx::isValid(irradiance_program_)) return;
+  // One handle for the whole cube: reading a different capture per face is the
+  // same bug in a smaller form, because the published cube alternates between two
+  // captures every frame.
   const auto source = reflection_cube_to_sample();
   if (!bgfx::isValid(source)) return;
   static const bx::Vec3 axes[6] = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
   static const bx::Vec3 ups[6] = {{0,1,0}, {0,1,0}, {0,0,-1}, {0,0,1}, {0,1,0}, {0,1,0}};
-  const int face = reflection_irr_face_;
   const int side = reflection_irr_write_;
-  const auto fb = reflection_irr_fb_[side][face];
-  if (!bgfx::isValid(fb)) return;
-  const auto view = static_cast<uint16_t>(kReflectionIrrView + face);
-  bgfx::setViewFrameBuffer(view, fb);
-  bgfx::setViewRect(view, 0, 0, kReflectionIrrSize, kReflectionIrrSize);
-  bgfx::setViewClear(view, BGFX_CLEAR_COLOR, 0x000000ff, 0.f);
-  bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
-  const bx::Vec3 F = axes[face];
-  const bx::Vec3 R = bx::normalize(bx::cross(F, ups[face]));
-  const bx::Vec3 U = bx::normalize(bx::cross(R, F));
-  const float right[4] = {R.x, R.y, R.z, 0.f};
-  const float up[4] = {U.x, U.y, U.z, 0.f};
-  const float fwd[4] = {F.x, F.y, F.z, 0.f};
-  // Thirty-two taps against a level that is already wide: irradiance is the
-  // smoothest thing this renderer computes, and the blur is where the variance
-  // goes instead of into the picture.
-  const float params[4] = {0.f, 32.f, 0.f, 0.f};
-  bgfx::setUniform(u_refl_right_, right);
-  bgfx::setUniform(u_refl_up_, up);
-  bgfx::setUniform(u_refl_fwd_, fwd);
-  bgfx::touch(view);
-  draw_fullscreen(view, irradiance_program_, source, params, u_scene_reflection_);
-  if (++reflection_irr_face_ < 6) return;
-  reflection_irr_face_ = 0;
+  for (int face = 0; face < 6; ++face) {
+    const auto fb = reflection_irr_fb_[side][face];
+    if (!bgfx::isValid(fb)) continue;
+    const auto view = static_cast<uint16_t>(kReflectionIrrView + face);
+    bgfx::setViewFrameBuffer(view, fb);
+    bgfx::setViewRect(view, 0, 0, kReflectionIrrSize, kReflectionIrrSize);
+    bgfx::setViewClear(view, BGFX_CLEAR_COLOR, 0x000000ff, 0.f);
+    bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
+    const bx::Vec3 F = axes[face];
+    const bx::Vec3 R = bx::normalize(bx::cross(F, ups[face]));
+    const bx::Vec3 U = bx::normalize(bx::cross(R, F));
+    const float right[4] = {R.x, R.y, R.z, 0.f};
+    const float up[4] = {U.x, U.y, U.z, 0.f};
+    const float fwd[4] = {F.x, F.y, F.z, 0.f};
+    // Thirty-two taps against a level that is already wide: irradiance is the
+    // smoothest thing this renderer computes, and the blur is where the variance
+    // goes instead of into the picture.
+    const float params[4] = {0.f, 32.f, 0.f, 0.f};
+    bgfx::setUniform(u_refl_right_, right);
+    bgfx::setUniform(u_refl_up_, up);
+    bgfx::setUniform(u_refl_fwd_, fwd);
+    bgfx::touch(view);
+    draw_fullscreen(view, irradiance_program_, source, params, u_scene_reflection_);
+  }
   reflection_irr_write_ ^= 1;
   reflection_irr_ready_ = true;
   if (std::getenv("SLRR_REFL_TRACE"))
-    std::fprintf(stderr, "[refl-irr] published face=%d size=%d\n", face,
-                 int(kReflectionIrrSize));
+    std::fprintf(stderr, "[refl-irr] published size=%d\n", int(kReflectionIrrSize));
 }
 
 // Face size for the reflection cube. Hoisted so the prefilter chain can

@@ -480,7 +480,6 @@ class LibBgfxBackend final : public IRenderBackend {
   static constexpr uint16_t kReflectionIrrView = 210;
   bgfx::TextureHandle reflection_ggx_[2]{};
   bgfx::FrameBufferHandle reflection_ggx_fb_[2][6][6]{};
-  int reflection_irr_face_ = 0;
   int reflection_irr_write_ = 0;
   bool reflection_irr_ready_ = false;
   std::array<bgfx::TextureHandle, 2> reflection_irr_{{
