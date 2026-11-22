@@ -1897,8 +1897,13 @@ static double s_refl_now_ms = 0.0;
 static double s_refl_dyn_ms = 0.0;
 static std::chrono::steady_clock::time_point s_refl_last_call{};
 
-static constexpr double kReflectionCycleMs = 32.0;
-static constexpr double kReflectionDynamicMs = 16.0;
+// How old the cube is allowed to get, in milliseconds. A cube ages one frame per
+// face plus whatever the moving layer waits, so these two numbers are the trail a
+// player sees behind a moving car: 32 and 16 measured 24 to 30 ms of it, which is
+// visible. Note the cost is per face, not per pixel -- the capture is draw bound --
+// so the only way to buy freshness is to buy faces.
+static constexpr double kReflectionCycleMs = 16.0;
+static constexpr double kReflectionDynamicMs = 8.0;
 static unsigned s_refl_published_frame = 0;
 
 static int refl_env_int(const char* name, int fallback)
@@ -2355,9 +2360,11 @@ void LibBgfxBackend::update_reflections(const float* eye) {
     const double frame_ms = std::max(1.0, s_refl_frame_ms);
     if (bake_enabled && world_ready) {
       const std::array<float, 3> origin{eye[0], eye[1] + .8f, -eye[2]};
+      // Two faces a frame at least: one face a frame is a cube six frames old,
+      // 24 ms at 250 fps, and that is a trail you can see while driving.
       const int faces = std::clamp(
           static_cast<int>(std::ceil(static_cast<double>(face_count) * frame_ms /
-                                     kReflectionCycleMs)), 1, static_cast<int>(face_count));
+                                     kReflectionCycleMs)), 2, static_cast<int>(face_count));
       for (int i = 0; i < faces; ++i) {
         const int face = reflection_bake_face_;
         reflection_origin_ = origin;

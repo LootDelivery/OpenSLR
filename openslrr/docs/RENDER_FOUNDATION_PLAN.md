@@ -443,8 +443,10 @@ bit-identical to before. The mip a material selects did not change, so the
 softness it asks for is the softness it gets; what changed is the kernel.
 
 Rebuilt one level per frame from the raw capture, six faces per level, double
-buffered for the same reason as the bake. `SLRR_REFL_GGX=0` puts the material back
-on the box mips for A/B.
+buffered for the same reason as the bake. Level 0 is not built at all: it would be
+a copy of the capture, and the shader reads the capture cube directly while `lod`
+is below 1, so the sharp end stays on the freshest cube. `SLRR_REFL_GGX=0` puts the
+material back on the box mips for A/B.
 
 | | `gpu` | frame |
 |---|---|---|
@@ -464,3 +466,33 @@ Two wrong turns worth keeping:
    same flat paint from the other side. The chain is now built at the widths the
    old mapping produced, and material roughness becomes a real number only with
    PBR materials in stage 2.
+
+### 8.6 Freshness: what the cube's age is made of
+
+A reflection that trails a moving car is not a shading artefact, it is the age of
+the cube. The age has three parts, and all three were counted in frames at first:
+
+```
+age  =  bake cycle  +  moving layer  +  prefilter cycle
+```
+
+The bake builds `clamp(ceil(6 * frame_ms / cycle_ms), 1, 6)` faces a frame, and
+with `cycle_ms` at 32 and a 4 ms frame that is one face, so a whole cube every six
+frames -- 24 ms at 250 fps, which is a visible trail. The moving layer waited 16 ms
+on top of it. Both numbers were tuned for a 60 Hz frame and read as "invisible" in
+the bench, where the camera does not move.
+
+| | bake cycle | moving layer | prefilter | sharp age |
+|---|---|---|---|---|
+| before | 32 ms, 1 face/frame | 16 ms | 6 frames | 24-30 ms |
+| after | 16 ms, 2 faces/frame min | 8 ms | 5 frames | 12-16 ms |
+
+`refl` goes from 0.20 to 0.37 ms of a 3.6 ms frame and the frame time does not move
+(3.63 -> 3.58), because the capture is draw bound on the GPU and the extra faces
+fill time the frame already spends waiting. That is the whole trade: freshness is
+bought in faces, and faces are cheap in wall clock but they are not free, so the
+minimum of two exists to keep the age under a frame-time-and-a-half rather than to
+make the cube perfect.
+
+Rough mips stay a few frames behind the sharp ones. That is deliberate: a GGX lobe
+that is 20 degrees wide hides a 20 ms trail, while a mirror at `lod` 0 does not.

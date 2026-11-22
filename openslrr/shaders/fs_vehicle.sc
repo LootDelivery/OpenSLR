@@ -66,8 +66,11 @@ vec3 envPrefilter(vec3 dir, float radius)
     // a GGX lobe instead of an area average, which is what makes a highlight
     // fall off instead of breaking into patches.
     float lod = clamp(radius * 14.0, 0.0, 4.0);
+    // Level 0 of the prefiltered chain is the capture itself, and it is not
+    // written: the sharp end reads the capture cube directly, which is a whole
+    // cycle fresher than the convolved levels.
     vec3 result = textureCubeLod(s_sceneReflection, dir, lod).rgb;
-    if (u_envFilter.z > 0.5)
+    if (u_envFilter.z > 0.5 && lod >= 1.0)
         result = textureCubeLod(s_sceneReflectionGGX, dir, lod).rgb;
     return result;
 }
