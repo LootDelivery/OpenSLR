@@ -32,10 +32,13 @@ struct EnhancedGraphics {
   // reached by rubber. On is the physical mapping, a Blinn-Phong exponent
   // corresponding to a GGX roughness of sqrt(2/(e+2)) and level m standing for
   // roughness 0.02 * 2^m, which puts paint at levels 3 to 4.
-  bool reflection_physical_roughness = false;
+  bool reflection_physical_roughness = true;
   // Ceiling for that level. Four is what the mapping asks for on car paint and
   // it reads as flat pearl; two keeps the shape of the reflected environment.
-  float reflection_roughness_cap = 3.0f;
+  // 1.5 by the user's eye: above that the body stops reading as paint and starts
+  // reading as film. It also happens to be the range where the chain is barely
+  // used, which keeps the cycle's age out of sight.
+  float reflection_roughness_cap = 1.5f;
   // Head-on reflectance floor; the rest of the range is Fresnel.
   float reflection_strength = 0.35f;
   // Sample the GGX-prefiltered cube instead of the box-filtered mips of the

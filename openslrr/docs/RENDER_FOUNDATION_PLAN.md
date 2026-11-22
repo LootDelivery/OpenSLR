@@ -864,3 +864,31 @@ intended: a cube is only published when every face of every level comes from one
 generation, so a material reading the chain is up to one cycle behind, while glass
 and chrome read the capture itself and are only a few frames behind. The cycle was
 thirty-six faces, ninety-six at three faces a frame after 8.10.
+
+### 8.12 The defaults, and how the lag was found
+
+The switch and its cap were judged by eye on the car, and the judgement came with
+a diagnostic that is worth recording: cap 0.9 shows no lag, cap 1.0 and above
+does. That is not a coincidence. The material only reads the chain from `lod >= 1`,
+so 0.9 keeps every pixel on the capture and 1.0 is the exact point where it starts
+sampling convolved levels -- the lag the user saw was the chain's own age, not a
+consequence of blurring.
+
+So the chain's age was measured rather than estimated (`SLRR_REFL_AGE` prints the
+interval between publishes): 103 ms at three faces a frame, 50 ms at six. Six
+costs nothing measurable -- frame 7.39-7.66 ms at six against 7.21-7.90 at three,
+traffic off -- so six is the default and a cycle is now about two capture
+generations old.
+
+Defaults written for this look: physical roughness mapping on, cap 1.5. Above 1.5
+the body stops reading as paint and starts reading as film, which is a property of
+what the chain blurs rather than of how much light it returns -- the reflected
+world loses its shape and only its average survives. 1.5 also keeps the material
+inside the two sharpest convolved levels, which is where the cycle's age is least
+visible.
+
+Roughness 1.5 in this chain means a lobe of about 1.5 levels, and the levels are
+0.02 * 2^m, so the paint's blur is roughly 0.06 -- a fifth of the physical mapping
+for an exponent of 60. The mapping is still the right one; the cap is a statement
+about how much reflected structure the paint should keep, and that is the artist's
+call, not the renderer's.
