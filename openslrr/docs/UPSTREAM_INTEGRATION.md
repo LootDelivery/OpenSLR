@@ -484,19 +484,56 @@ Expected gain, using the measured cost of a submit (~0.8 µs at 100 cars, from
 3619 → 5809 draws costing 244 → 172 fps): about 0.7…1.0 ms per frame at 100 cars,
 i.e. most of what the traffic population costs to draw.
 
-Work it needs:
+What was built:
 
-1. an instanced variant of the vehicle vertex shader (per-instance world matrix
-   and tint, like `vs_mesh_inst.sc` does for static props), sharing the existing
-   `fs_vehicle.sc` material code;
-2. a grouping pass over the collected vehicle instances, keyed as the probe does,
-   producing one `bgfx::setInstanceDataBuffer` submit per group instead of one
-   `draw_instance` per part;
-3. the same grouping in the passes that draw cars again — shadows and the dynamic
-   reflection capture — or they will keep the old cost;
-4. per-instance values that are not material state (tint, fade, light flags) move
-   into the instance attributes; anything that changes a uniform per car cannot
-   be batched and has to stay a separate submit.
+1. `shaders/vs_vehicle_inst.sc` — the vehicle vertex path driven by per-instance
+   matrices (`i_data0…3`) instead of `u_model`, sharing `fs_vehicle.sc` unchanged,
+   so paint, glass, chrome, reflections, baked light and the streaming fade behave
+   exactly as they do for a single car. bgfx synthesises the instance attributes
+   from the program's `i_data*` inputs (`renderer_d3d11.cpp`, `setInputLayout`), so
+   the existing vertex layout and buffers needed no change and no geometry is
+   duplicated.
+2. `vehicle_inst_program_` — the same fragment shader linked with that vertex
+   path; `draw_instance` takes an optional `bgfx::InstanceDataBuffer`, and the
+   only thing batching changes inside it is `setInstanceDataBuffer` in place of
+   `setTransform` and the program at the submit.
+3. A grouping pass in `draw_dynamic_world`: streamed instances are collected under
+   `streamed_batch_key` — geometry, body colour, dissolve factor, light flags,
+   paint slot and texture, texture replacements, pass — and each group becomes one
+   instanced submit per material group. A group of one is drawn the ordinary way,
+   because an instance buffer upload for a single car costs more than it saves.
+4. `scene_instances_set_streamed` / `SceneInstance::streamed`: `traffic_runtime`
+   marks every car it creates and nothing else does. The racer path is untouched by
+   construction rather than by a filter.
+5. `SLRR_TRAFFIC_BATCH=0` turns the whole path off, so a run can be compared
+   against the plain one.
+
+Result. Parked, same position, density 1.0, 100 cars, pedestrians at maximum:
+
+| Metric | Batching off | Batching on |
+|---|---|---|
+| vehicle submits per frame | 1350 | **615** (−54 %) |
+| total draws per frame | 5055 | **4301** (−15 %) |
+| `world` zone | 0.80 ms | **0.62 ms** |
+| fps (uncapped) | 247.8 | **259.8** |
+
+A 75 s routed run at the same density: 6065 → 5350 draws, `world` 1.04 → 0.89 ms,
+frame average 4.75 → 4.63 ms, 210 → 216 fps.
+
+The 237-group ceiling is not reached: the key still carries per-car uniforms
+(body colour, dissolve factor, light flags) and the per-car paint texture, so a
+group of cars that differ in any of those cannot merge. Moving colour, fade and
+light flags into instance attributes would merge across them, and that is the
+next step if the remaining submits are worth it; per-car paint textures are a
+hard stop for the body group only.
+
+What is left:
+
+1. the passes that draw cars again — shadows and the dynamic reflection capture —
+   still submit per part and keep the old cost;
+2. per-instance values that are not material state could move into the instance
+   attributes to widen the groups;
+3. the racer path stays out of scope until it has a stable material identity.
 
 ## Deferred and rejected
 

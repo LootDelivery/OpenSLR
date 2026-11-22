@@ -29,6 +29,9 @@ struct SceneInstance {
   // U2-B.3: 1 for a settled object, 0..1 while a streamed traffic car dissolves
   // in. Filled from `scene_instances_set_fade` through the vehicle's owner key.
   float fade = 1.f;
+  // U2-B.4: created by the traffic streamer or the fake racers, so its draws may
+  // be merged with other cars that share geometry, material and paint.
+  bool streamed = false;
   uint32_t light_flags = 0;
   // Render-object id. Carries `flags` (dynamic shadow caster) and `shd_*`.
   int32_t type_id = 0;
@@ -65,6 +68,10 @@ void scene_instances_set_envmap(uint32_t resource);
 // U2-B.3: dissolve factor for a streamed object, keyed by the vehicle's owner
 // (the chassis GameRef). 1 removes the entry. Everything else draws at 1.
 void scene_instances_set_fade(void *owner, float fade);
+// Marks an object as streamed traffic, which opts its draws into instancing. The
+// racer path never calls this: its tuning combinations are open-ended and there
+// is nothing stable to batch on.
+void scene_instances_set_streamed(void *owner, bool streamed);
 std::string scene_instances_envmap();
 void scene_instances_select(void *world, void *skydome, bool preview_lamps);
 using SceneFrustum = std::array<std::array<float, 4>, 6>;

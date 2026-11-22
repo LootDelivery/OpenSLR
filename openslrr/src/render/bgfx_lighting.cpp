@@ -230,7 +230,7 @@ void batch_probe_report() {
   p.frames = 0;
 }
 
-  void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials)
+  void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials,const bgfx::InstanceDataBuffer* instances)
 {
     // preview alone means "an inset render", which uses a trimmed material.
     // A preview that asks for the full material keeps the real lights, glass
@@ -401,7 +401,14 @@ void batch_probe_report() {
           bgfx::setUniform(u_reflection_box_min_, low);
           bgfx::setUniform(u_reflection_box_max_, high);
         }
-        bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,group.index_start,group.index_count);
+        // A batched submit carries the per-instance matrices instead of one
+        // transform, and goes through the instanced vertex path. Everything else
+        // about the material is unchanged: the group shares geometry, branch and
+        // textures by construction, and the uniforms above come from the group's
+        // first instance.
+        if (instances) bgfx::setInstanceDataBuffer(instances);
+        else bgfx::setTransform(matrix);
+        bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,group.index_start,group.index_count);
         uint64_t state=BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|BGFX_STATE_DEPTH_TEST_GREATER;
         if (glass)
           state |= BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
@@ -419,7 +426,8 @@ void batch_probe_report() {
                                (uint64_t(view_id) << 56) ^ uint64_t(pass);
           batch_probe_note(key);
         }
-        bgfx::setState(state);bgfx::submit(view_id,vehicle_program_);
+        bgfx::setState(state);
+        bgfx::submit(view_id, instances ? vehicle_inst_program_ : vehicle_program_);
       }
       return;
     }

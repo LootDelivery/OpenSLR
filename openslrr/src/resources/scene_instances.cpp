@@ -1784,6 +1784,12 @@ std::unordered_map<void *, float> &fade_table() {
   return table;
 }
 
+// U2-B.4: owner keys whose draws may be instanced.
+std::unordered_map<void *, char> &streamed_table() {
+  static std::unordered_map<void *, char> table;
+  return table;
+}
+
 // The table lives in the anonymous namespace above; the public entry point is
 // defined outside it, after the namespace closes.
 void fade_set_impl(void *owner, float fade) {
@@ -1841,6 +1847,10 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
     instance.sky = n->key == g_sky;
     instance.color = n->color;
     instance.vehicle_material = n->vehicle_material;
+    if (instance.vehicle_material && !streamed_table().empty()) {
+      if (auto *owner = part_render_owner(n->key))
+        instance.streamed = streamed_table().count(owner) != 0;
+    }
     if (instance.vehicle_material && !fade_table().empty()) {
       // A car's parts inherit its dissolve factor, so a car fades in whole.
       if (auto *owner = part_render_owner(n->key)) {
@@ -1894,6 +1904,17 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
 
 void scene_instances_set_fade(void *owner, float fade) {
   fade_set_impl(owner, fade);
+}
+
+void scene_instances_set_streamed(void *owner, bool streamed) {
+  if (!owner) return;
+  auto *key = static_cast<void *>(part_render_owner(owner));
+  if (!key) key = owner;
+  auto &table = streamed_table();
+  if (streamed)
+    table[key] = 1;
+  else
+    table.erase(key);
 }
 
 std::vector<SceneInstance> scene_instances_collect_root(void *root) {

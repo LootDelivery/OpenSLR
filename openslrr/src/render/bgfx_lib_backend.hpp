@@ -204,7 +204,10 @@ class LibBgfxBackend final : public IRenderBackend {
                         bool receive_static_shadow = false, const SceneSun* sun = nullptr, const float* sky = nullptr);
 
 
-  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials = false);
+  // `instances` turns the submit into an instanced draw: the per-instance world
+  // matrices replace `matrix`. Only used for streamed traffic, whose instances
+  // are grouped by material before the draw.
+  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials = false, const bgfx::InstanceDataBuffer* instances = nullptr);
   void draw_prop_batches(uint16_t view_id, const std::vector<SceneBatch>& batches,
                          bool shadow, bool conservative = false);
   void refresh_distance_fog(const float render_eye[3]);
@@ -362,6 +365,8 @@ class LibBgfxBackend final : public IRenderBackend {
   std::unordered_map<void*, bgfx::TextureHandle> font_tex_;
   bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_color_ = BGFX_INVALID_HANDLE;
+  // U2-B.4: instanced vehicle program, used by ambient traffic only.
+  bgfx::ProgramHandle vehicle_inst_program_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle vehicle_program_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
