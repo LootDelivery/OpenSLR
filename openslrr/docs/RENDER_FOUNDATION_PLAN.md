@@ -214,3 +214,35 @@ same camera, the same population and a mean over at least 30 one-second samples;
 `--bench-drive 0` parks the camera and freezes the population is the closest thing
 to a controlled scene, and `--bench-route` is not usable until the autopilot stops
 flipping the car.
+
+## 8. Stage 0 results (measured)
+
+ValoCity, parked camera, 100 ambient cars and pedestrians at maximum, mean of 35
+one-second samples per row, Release build:
+
+| Cube | draws | `flush` | `refl` | `gpu` | frame | fps |
+|---|---|---|---|---|---|---|
+| 512 as shipped | 5264 | 2.90 | 0.75 | 2.94 | 4.18 | 241 |
+| frozen (capture skipped) | 3556 | 1.91 | 0.00 | 1.81 | 3.14 | 321 |
+| 128 | 4857 | 2.62 | 0.69 | 2.37 | 3.88 | 259 |
+
+The conclusion changes the design: **the capture is draw bound, not pixel
+bound.** Dropping the cube from 512 to 128 removes a quarter of the pixels and
+returns only 0.56 ms of GPU, while skipping the capture returns 1.13 ms and 1708
+draws. The cost is the per-face culling and submission of the city, six times per
+frame.
+
+What follows for the probes:
+
+1. A baked static probe is the only variant that removes the whole cost, because
+   it removes the draws rather than making them cheaper.
+2. A dynamic layer must keep a small radius. Cars are currently excluded; with
+the policy in 3.3 they come in, and at 23 draws per car a 150 m radius would add
+   roughly what the city already costs. A 40-60 m layer drawn into a 128-256 cube
+   keeps it to a few hundred draws.
+3. Compositing the dynamic layer over the static environment as its background
+   keeps the shader at one cube fetch, so the hybrid does not pay twice per pixel.
+
+Still to measure: how many cars fall inside a 40 m and a 60 m radius around the
+player in city traffic, which sets the size of the dynamic layer; and the shadow
+pass cost, which needs the overlay toggles.
