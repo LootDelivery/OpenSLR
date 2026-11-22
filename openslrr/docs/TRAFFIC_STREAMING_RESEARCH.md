@@ -130,7 +130,21 @@ Rejected: solving pop-in with distance alone (impossible with 1.5 km fog) and
 spawning behind occluders via ray casts (`scene_instances_pick` is a full CPU ray
 against instance meshes, too expensive for 48 candidates four times a second).
 
-## 6. Implementation notes (U2-B.3)
+## 6. The population has to be reached, not trickled
+
+A target is only half of a population policy; the other half is how fast it is
+reached. Filling at one car per quarter second is invisible while driving —
+replacements arrive as fast as cars leave — but it is very visible on arrival,
+when the checked-in target is 100 and the count starts at zero. The road test
+described exactly that: the city "comes alive together with the player". SUMO has
+the same distinction in its insertion queue: a vehicle that cannot be inserted is
+retried every step rather than every few seconds. The same applies here: the fill
+rate is a function of the deficit (24 cars per pass while a ground is being
+filled, one otherwise, and a shorter pass interval while short of target), and
+the churn guard — the four second cooldown on a lane that was just emptied — only
+applies at saturation, because below target it starves long lanes.
+
+## 7. Implementation notes (U2-B.3)
 
 | Piece | Where |
 |---|---|

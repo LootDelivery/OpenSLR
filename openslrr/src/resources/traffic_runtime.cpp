@@ -597,7 +597,7 @@ StreamRules stream_rules(float density) {
   // not just how many cars exist somewhere. A car costs about thirteen draw
   // calls, so the ceiling drops from a hundred to eighty: the same or better
   // visible density, a fifth less geometry.
-  rules.budget = int(std::lround(d * 80.f));
+  rules.budget = int(std::lround(d * 100.f));
   rules.min_gap = 30.f - 14.f * d;
   rules.per_car_metres = 40.f - 20.f * d;
   // The dissolve decides how close a car may appear, and the road test said
@@ -622,13 +622,13 @@ StreamRules stream_rules(float density) {
   rules.side_clear = 95.f * clear_scale;
   rules.rear_clear = 55.f * clear_scale;
   rules.min_player_distance = 40.f * clear_scale;
-  rules.spawn_radius = std::max(340.f * clear_scale, rules.front_clear + 60.f);
+  rules.spawn_radius = std::max(460.f * clear_scale, rules.front_clear + 60.f);
   rules.retire_radius = rules.spawn_radius + 80.f;
   return rules;
 }
 // A car this module did not create still occupies its lane, so the scheduler
 // sees it; only the budget and the retirement rules care about the owner.
-constexpr float kRetireScripted = 480.f;
+constexpr float kRetireScripted = 600.f;
 constexpr double kMinLifetime = 6.;
 // How long a streamed car takes to dissolve in. Long enough that the eye reads a
 // fade rather than a pop, short enough that the car is solid before the player
@@ -1288,7 +1288,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
     ground_keys.push_back(e.first);
   // One car per maintenance pass: a long deficit fills over several passes
   // instead of dropping a burst into a single frame.
-  int spawn_budget = 1;
+  static void *warm_ground = nullptr;
   static double logged = -1;
   static double next_pass = 0;
   static int last_target = 0;
@@ -1306,6 +1306,15 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       continue;
     const auto &edges = graph->traffic_edges();
     const StreamRules rules = stream_rules(density);
+    // A city the player has just entered has to be alive already. Filling the
+    // population at one car per quarter second means it wakes up with the player,
+    // which is what the road test reported. The first passes over a new ground
+    // fill quickly; the frame after a map change is a load frame anyway, so the
+    // cost lands where it cannot be felt. Afterwards the normal cadence returns.
+    const bool warming = warm_ground != key;
+    if (warming) warm_ground = key;
+    int spawn_budget = warming ? 24 : 1;
+    if (!warming && spawn_budget < 2) spawn_budget = 2;
     std::vector<int32_t> ids;
     for (const auto &e : registrations)
       if (e.second.ground == key)
@@ -1495,7 +1504,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
     //    costs a few random draws and nothing else.
     if (!frozen && !view.lanes.empty() && clock_seconds >= next_pass &&
         owned_count < target && spawn_budget > 0) {
-      next_pass = clock_seconds + .25;
+      next_pass = clock_seconds + (owned_count + 10 >= target ? .25 : .15);
       while (spawn_budget > 0 && owned_count < target) {
         // A positioned request (addTrafficP) is satisfied first, in the same
         // placement policy as the templates.
@@ -1515,16 +1524,22 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         uint32_t draw = uint32_t(random() * 4294967295.f);
         StreamSpot spot = stream_pick_spot(view, rules, draw);
         // An edge that was just emptied keeps its cooldown: destroying a car and
-        // putting another one in the same place is the churn U2-B.1 removed.
-        for (int retry = 0; spot.valid && retry < 4; ++retry) {
-          auto cool = edge_cooldown.find(spot.edge);
-          if (cool == edge_cooldown.end() || cool->second <= clock_seconds) break;
-          spot = stream_pick_spot(view, rules, draw);
-        }
-        if (spot.valid) {
-          auto cool = edge_cooldown.find(spot.edge);
-          if (cool != edge_cooldown.end() && cool->second > clock_seconds)
-            spot.valid = false;
+        // putting another one in the same place is the churn U2-B.1 removed. The
+        // cooldown only makes sense at saturation, though: below the target it
+        // leaves a long lane empty for four seconds after its last car drives
+        // off, which is exactly the uneven traffic the road test saw.
+        const bool at_target = owned_count + 4 >= target;
+        if (at_target) {
+          for (int retry = 0; spot.valid && retry < 4; ++retry) {
+            auto cool = edge_cooldown.find(spot.edge);
+            if (cool == edge_cooldown.end() || cool->second <= clock_seconds) break;
+            spot = stream_pick_spot(view, rules, draw);
+          }
+          if (spot.valid) {
+            auto cool = edge_cooldown.find(spot.edge);
+            if (cool != edge_cooldown.end() && cool->second > clock_seconds)
+              spot.valid = false;
+          }
         }
         prof_add(kProfSearch, t);
         last_refused = spot.valid ? "" : spot.refused;

@@ -415,9 +415,14 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   road test still read 130 m as "close" even with the dissolve), **95 m to the
   side and 55 m behind**, 40 m absolute, with the speed bubble inside the front
   zone. Ahead is where the eye is fixed, so it is the far one; the sides are what
-  keep the streets around the player full. The spawn band follows (340 m spawn,
-  420 m retire), or a 200 m clearance inside a 260 m radius would leave nothing
-  to seed. `SLRR_TRAFFIC_CLEAR=<scale>` scales the three together.
+  keep the streets around the player full. The spawn band is 460 m with 540 m
+  retire and 100 cars at the maximum: a band that stopped at 340 m left a long
+  straight with a cluster at the clearance and nothing behind it.
+  `SLRR_TRAFFIC_CLEAR=<scale>` scales the clearances together.
+- A city the player has just entered is filled immediately: entering a ground
+  fills at 24 cars per pass until the target is met (36 cars after one second,
+  90 after five), and the pedestrian crowd's first fill places people in view
+  with a larger batch instead of trickling them in from off screen.
 - Lanes are sorted nearest first and the scheduler draws towards the front of
   the list, so the budget packs the street the player is on before a side
   street 200 m away. Measured at noon with the player standing still: density

@@ -111,8 +111,11 @@ struct StreamRules {
   // `spawn_radius` is not retired until it leaves `retire_radius`. The band is
   // wider than the front clearance, or a far clearance would leave no road ahead
   // to seed at all.
-  float spawn_radius = 340.f;
-  float retire_radius = 420.f;
+  // The band has to reach further than the eye follows the road, or a long
+  // straight shows a cluster of cars at the front clearance and nothing behind
+  // them, which reads as "traffic only at the corner".
+  float spawn_radius = 460.f;
+  float retire_radius = 540.f;
   // Desired spacing between cars, linearly from the slider: a light city keeps
   // ~200 m of lane per car, the shipped maximum ~26 m, so the streets around
   // the player queue up instead of holding one car per block. The shipped

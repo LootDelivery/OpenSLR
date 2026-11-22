@@ -4364,7 +4364,14 @@ void tick_pedestrians(double seconds) {
     if (routed && active < want && clock >= crowd.refill_at) {
       // A full refill in one tick is the hitch, and it puts people on the
       // street in front of the camera. A few per frame, off screen, walk in.
-      const int batch = 3;
+      //
+      // The first fill of a crowd is different: the player has just arrived and
+      // the street should already be busy, not fill up around him. That pass is
+      // therefore allowed to place people in view and takes a bigger batch; the
+      // scene appearing is the transition, so nothing pops in the middle of a
+      // settled street.
+      const bool warm = !crowd.stocked;
+      const int batch = warm ? 24 : 3;
       bool stalled = false;
       for (int made = 0; active < want && made < batch; ++made) {
         if (!spare) {
@@ -4385,7 +4392,7 @@ void tick_pedestrians(double seconds) {
             taken.push_back({other.line.x, other.line.y, other.line.z, 2.f});
         if (!lines.spawn(car_x, car_y, car_z, kRadius, 12.f, ped_rng, spare->line,
                          taken.data(), static_cast<int>(taken.size()),
-                         &ped_point_hidden, &view)) {
+                         warm ? nullptr : &ped_point_hidden, &view)) {
           stalled = true;
           break;
         }
