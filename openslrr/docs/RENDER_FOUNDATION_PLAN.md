@@ -160,6 +160,7 @@ Stages 3 and 4 are worth nothing until the GPU ceiling moves, so they come after
 |---|---|---|
 | 0 | Measurement: GPU cost per pass (main view, cubemap, shadows), density sweep 0 / 0.2 / 0.5 / 1.0 on one camera; per-probe capture cost with cars included and excluded | A table of pass -> ms and draws -> fps for this machine, recorded in this document |
 | 1 | Probes as data: probe struct, registry, selection per object, bake scheduler; GGX prefilter built into the probe's mip chain (or into separate cubes if the blit limitation still holds); irradiance for diffuse ambient | Paint, chrome and glass look unchanged or better in A/B screenshots; the per-frame capture pass is gone or reduced; PBR can read a prefiltered cube and irradiance |
+| 1a | **Done** (`b407dbd6`): the static environment is baked into its own double-buffered cube, one face per frame, redone on world change, on 25 m of movement and on a 240 frame refresh; each frame a blit copies the bake into the capture face and only the moving objects are drawn over it, so a material still samples one cube | See 8.4 |
 | 2 | Materials: sort draws by material and texture, then instance identical materials with a persistent instance buffer (not a transient one) | Draw count per car drops; GPU time per car drops; cars still render exactly as before |
 | 3 | Parallel command encoding: one `bgfx::Encoder` per worker, instance ranges split by owner, the transparent pass ordered explicitly | `world` zone drops, frame time follows if the GPU allows |
 | 4 | Parallel scene walk: `collect` split by owner or cell, read-only against the reference map during the walk | `collect` zone drops |
@@ -354,3 +355,47 @@ The frame only spends 0.10 ms of main thread on `shadows`, so nothing here is
 worth optimising. Stage 5 replaces it: building shadows need a real shadow map
 with a cascade or a budget, traffic needs to cast instead of wearing a decal, and
 the cached map texture goes away.
+
+### 8.4 Stage 1a: the baked environment
+
+The static world is no longer captured every frame. It goes into its own
+double-buffered cube, one face per frame, and is redone only when the world
+changes, when the probe has moved 25 m or on a slow refresh, so streamed content
+still lands in it. Each frame a blit copies the bake into the capture face and
+only the moving objects are drawn on top. A material therefore still samples one
+cube and the shader did not change.
+
+Camera parked in ValoCity, 100 cars and pedestrians at maximum, medians of 30
+samples:
+
+| | draws | `refl` | `flush` | `gpu` | frame |
+|---|---|---|---|---|---|
+| per-frame capture | 5049 | 0.46 | 2.63 | 2.67 | 3.90 |
+| bake, moving layer every frame | 4309 | 0.34 | 2.58 | 2.23 | 3.87 |
+| bake, moving layer every 2 frames | 4145 | 0.17 | 2.24 | 2.12 | 3.54 |
+
+Switches, all measurement: `SLRR_REFL_BAKE=0` restores the per-frame capture,
+`SLRR_REFL_DYN=0` keeps the bake and drops the moving layer, `SLRR_REFL_DYN_INTERVAL`
+sets the moving layer cadence, `SLRR_REFL_BAKE_DIST` and `SLRR_REFL_BAKE_REFRESH`
+set when the bake is redone.
+
+Three things this cost, all of them found by looking at the cube rather than at
+the frame time, which is why `SLRR_REFL_DUMP=2` now forces the face panels on so a
+bench run can photograph them:
+
+1. A bake taken in the first frames is a cube with sky in it and nothing else: the
+   props stream in after the load. The bake waits for
+   `scene_instances_has_ground_props` and stays unready while it has no props, and
+   the per-frame capture keeps running until it is ready.
+2. Seeding the face by drawing `fs_cubeview` through `draw_fullscreen` produced a
+   black face. `bgfx::blit` from bake face to capture face works, and has to run in
+   its own view one below the capture view, because blits inside a view execute
+   before that view's draws.
+3. With the bake in place the moving layer is only vehicles, drivers and
+   pedestrians over it, and the ray between those two halves is decided before the
+   frustum cull so the counts in the trace stay readable.
+
+Still open in stage 1: GGX prefiltering of the bake's mip chain and a separate
+irradiance probe for diffuse ambient. Both are additive to this structure: the
+cube already exists as an object with its own schedule, so they change how its mips
+are built, not how it is captured.
