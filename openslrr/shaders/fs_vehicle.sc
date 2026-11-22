@@ -130,18 +130,26 @@ void main()
     if (u_irrParams.x > 0.5) {
         vec3 worldNormal = normalize(mul(u_invView, vec4(n, 0.0)).xyz);
         vec3 probe = textureCube(s_sceneIrradiance, worldNormal).rgb;
-        // The probe is the true hemisphere integral, and its absolute level comes
-        // out close to the flat constant it replaces (measured ratio about 0.9 on
-        // this map), so it is mixed in rather than normalised. Dividing by an
-        // average was the previous attempt: the average itself steps whenever the
-        // capture's mip chain is rebuilt, which is the last thing an ambient term
-        // should do.
+        // The probe is the true hemisphere integral. What it changes is the
+        // *shape* of the ambient: a vertical panel sees half sky and half road, so
+        // it is dimmer than the roof, where the flat constant lit the sills like
+        // the roof.
         //
-        // What the probe changes is the *shape*. A vertical surface sees half sky
-        // and half road, so it is dimmer than the roof, and that is correct --
-        // the flat constant lit the sills like the roof. x carries the ready
-        // flag, y how much of the probe to take over the constant.
-        ambient = mix(u_sunAmb.rgb, probe, clamp(u_irrParams.y, 0.0, 1.0));
+        // Its absolute level is a different question. The probe integrates a
+        // captured image, so its value is whatever that image holds -- measured a
+        // factor of one and a half away from the flat ambient, and in the other
+        // direction once the gain was applied blind. Dividing by the probe's own
+        // value straight up anchors an upward-facing surface to the level the
+        // material had before, which is what makes switching the probe on a change
+        // of shape and not a change of brightness. Clamped, because at night the
+        // sky is darker than the lit road and the ratio runs away.
+        vec3 probeUp = textureCube(s_sceneIrradiance, vec3(0.0, 1.0, 0.0)).rgb;
+        vec3 floorValue = vec3(1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0);
+        vec3 anchor = clamp(u_sunAmb.rgb / max(probeUp, floorValue), 0.2, 4.0);
+        // x carries the ready flag, y how much of the probe to take over the
+        // constant, z a manual multiplier on top of the anchor.
+        ambient = mix(u_sunAmb.rgb, probe * anchor * u_irrParams.z,
+                      clamp(u_irrParams.y, 0.0, 1.0));
     }
     vec3 illum = u_sunDiff.a > 0.5
         ? (ambient + u_sunDiff.rgb*ndl)

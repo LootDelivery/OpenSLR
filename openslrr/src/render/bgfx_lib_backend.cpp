@@ -749,10 +749,16 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       // own, which is how the two are compared side by side.
       // Row 0 is what a rough material samples when the GGX chain is on, row 1
       // is the raw environment: the two side by side are the whole comparison.
-      const bgfx::TextureHandle ggx = reflection_ggx_to_sample();
-      const bgfx::TextureHandle cube = cube_index == 0
-          ? (bgfx::isValid(ggx) ? ggx : reflection_cube_to_sample())
-          : reflection_cube_to_sample();
+      // SLRR_REFL_DUMP_IRR puts the irradiance probe in the top row. It is sixteen
+      // texels a face, so the panel is a magnified view of six numbers -- which is
+      // exactly what is wanted when the probe reads as one flat value.
+      static const bool dump_irr = std::getenv("SLRR_REFL_DUMP_IRR") != nullptr;
+      const bgfx::TextureHandle capture_cube = reflection_cube_to_sample();
+      const bgfx::TextureHandle preferred =
+          dump_irr ? reflection_irr_to_sample() : reflection_ggx_to_sample();
+      const bgfx::TextureHandle top =
+          bgfx::isValid(preferred) ? preferred : capture_cube;
+      const bgfx::TextureHandle cube = cube_index == 0 ? top : capture_cube;
       if (!bgfx::isValid(cube)) continue;
 
       // 240 and up: after the capture views (72 + 2 * capture), so the cube is
@@ -2688,11 +2694,13 @@ void LibBgfxBackend::build_ggx_cube() {
                                 : face == 3 ? bx::Vec3{0,0,1} : bx::Vec3{0,1,0};
         float face_view[16];
         bx::mtxLookAt(face_view, bx::Vec3{0,0,0}, axes[face], up_hint);
-        // The v axis is negated against the capture. A cube face is written with
-        // the projection's own up, while this quad's texcoord runs the other way,
-        // so a level built with the row taken as-is came out upside down: the
-        // road appeared in the sky of the reflection and the sky in the sills.
-        // The capture row of the dump panels is the reference to compare against.
+        // Rows of the capture's own lookAt, with the v axis negated because a
+        // cube face is written with the projection's up while this quad's texcoord
+        // runs the other way. Cube cross products are not a substitute: they come
+        // out upside down against what the capture wrote, which on a car reads as
+        // the road in the sky of the reflection. Row 0 of the dump panels against
+        // row 1 is the check, and it is a check of orientation, not brightness --
+        // the two halves of a swapped pair can carry almost the same mean.
         const float right[4] = {face_view[0], face_view[4], face_view[8], 0.f};
         const float up[4] = {-face_view[1], -face_view[5], -face_view[9], 0.f};
         const float fwd[4] = {face_view[2], face_view[6], face_view[10], 0.f};
@@ -2757,8 +2765,9 @@ bgfx::TextureHandle LibBgfxBackend::reflection_irr_to_sample() const {
 // there is nothing to spread: integrate all of it from one capture and publish it
 // in the same frame.
 void LibBgfxBackend::build_irradiance_cube() {
-  static const bool env_off = refl_env_int("SLRR_REFL_IRR", 1) == 0;
-  const bool enabled = !env_off && host_enhanced_graphics().irradiance_probe;
+  static const int env_irr = refl_env_int("SLRR_REFL_IRR", -1);
+  const bool enabled = env_irr >= 0 ? env_irr != 0
+                                    : host_enhanced_graphics().irradiance_probe;
   if (!enabled) {
     reflection_irr_ready_ = false;
     return;
@@ -2786,8 +2795,9 @@ void LibBgfxBackend::build_irradiance_cube() {
                             : face == 3 ? bx::Vec3{0,0,1} : bx::Vec3{0,1,0};
     float face_view[16];
     bx::mtxLookAt(face_view, bx::Vec3{0,0,0}, axes[face], up_hint);
-    // Same lookAt-derived basis as the prefilter, v axis negated for the same
-    // reason: the probe has to agree with the cube it integrates.
+    // Same basis as the prefilter, for the same reason and with the same check:
+    // the probe has to integrate the hemisphere the capture wrote, not its
+    // mirror image.
     const float right[4] = {face_view[0], face_view[4], face_view[8], 0.f};
     const float up[4] = {-face_view[1], -face_view[5], -face_view[9], 0.f};
     const float fwd[4] = {face_view[2], face_view[6], face_view[10], 0.f};
@@ -2797,7 +2807,13 @@ void LibBgfxBackend::build_irradiance_cube() {
     // z is the capture mip: five puts each tap on sixteen squared texels, which
     // is the size of a probe face, so thirty-two bilinear taps cover the
     // hemisphere instead of sampling thirty-two unrelated texels of it.
-    const float params[4] = {0.f, 32.f, 0.f, 0.f};
+    // Ninety-six taps. The probe is sixteen texels a face, so the whole cube is
+    // fifteen hundred pixels and a hundred taps each is a rounding error next to
+    // the capture -- and thirty-two was visibly speckled across a face.
+    const float params[4] = {0.f, 96.f, 5.f, 0.f};
+    // z is the capture mip the taps come from: five puts each tap on sixteen
+    // squared texels, the size of a probe face, so the taps average over the
+    // whole hemisphere area instead of sampling ninety-six unrelated street texels.
     // Same order as the prefilter, and for the same reason.
     bgfx::touch(view);
     bgfx::setUniform(u_refl_right_, right);

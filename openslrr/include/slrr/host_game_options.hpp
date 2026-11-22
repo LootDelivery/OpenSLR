@@ -65,6 +65,10 @@ struct EnhancedGraphics {
   // that expectation; the whole range is on a slider because this is a taste
   // call, not a correctness one.
   float irradiance_strength = 0.7f;
+  // Multiplier on top of the shader's self-calibration, which anchors an
+  // upward-facing surface to the flat ambient the material used before. 1.0 means
+  // the probe changes the shape of the ambient and not its level.
+  float irradiance_scale = 1.0f;
 };
 EnhancedGraphics& host_enhanced_graphics();
 // Options -> Advanced Game Options -> Framerate Adaptive Behaviour.

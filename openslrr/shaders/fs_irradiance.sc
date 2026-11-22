@@ -55,7 +55,7 @@ void main()
 	// rather than one arbitrary texel of the sharp cube.
 	float sourceLod = max(u_hizParams.z, 0.0);
 	vec3 sum = vec3(0.0, 0.0, 0.0);
-	for (int i = 0; i < 64; ++i) {
+	for (int i = 0; i < 192; ++i) {
 		if (i >= samples) break;
 		float fi = float(i);
 		vec2 xi = vec2((fi + 0.5) / float(samples), fract(fi * 0.6180339887));
