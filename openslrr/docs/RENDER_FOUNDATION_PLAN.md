@@ -452,6 +452,19 @@ built, and while `lod` is below 1 the shader reads the capture cube directly, a
 whole cycle fresher. `SLRR_REFL_GGX=0` puts the material back on the box mips for
 A/B, `SLRR_REFL_GGX_FACES` overrides the faces per frame.
 
+What the switch looks like, from a live A/B on the Mazda at the Green Slip
+spawn: the box mips average a thin dark section together with the bright road and
+sky around it, so rubber door frames and the panel gaps between them read as
+chrome highlights. With the GGX lobe they are black, because the lobe weights the
+neighbourhood rather than the area. That is the artefact the whole stage exists
+for, and it is visible immediately once the switch is live -- which is also why
+judging it by restarting the game was hopeless.
+
+One thing to keep separate: a section that *should* be glossy and now reads too
+dark is a roughness question, not a kernel one. Roughness still comes from
+`1 - specularExponent / 24`, which was tuned for the box mapping, and a real
+value arrives with PBR materials in stage 2.
+
 Cost, stationary at the Valo City spawn with traffic disabled so the runs are
 comparable, five percent trimmed mean of three runs each:
 
