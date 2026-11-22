@@ -2532,8 +2532,18 @@ void LibBgfxBackend::update_reflections(const float* eye) {
 // wide lobe needs more of the cube; the whole cycle is a few hundred
 // microseconds of GPU spread over six frames.
 void LibBgfxBackend::build_ggx_cube() {
-    static const bool enabled = refl_env_int("SLRR_REFL_GGX", 1) != 0;
-    if (!enabled || !bgfx::isValid(prefilter_program_)) return;
+    // Live, from the F12 panel, so the difference can be judged by toggling it
+    // while looking at the car. SLRR_REFL_GGX=0 still forces it off for A/B
+    // scripts. Switching it off drops the material to the capture's box mips on
+    // the same frame; switching it on publishes nothing until a whole cycle has
+    // been rebuilt, so the material never samples a half-convolved cube.
+    static const bool env_off = refl_env_int("SLRR_REFL_GGX", 1) == 0;
+    const bool enabled = !env_off && host_enhanced_graphics().ggx_reflections;
+    if (!enabled) {
+      reflection_ggx_ready_ = false;
+      return;
+    }
+    if (!bgfx::isValid(prefilter_program_)) return;
     const auto source = reflection_cube_to_sample();
     if (!bgfx::isValid(source)) return;
     static const bx::Vec3 axes[6] = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};

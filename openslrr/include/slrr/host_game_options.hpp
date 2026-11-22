@@ -25,6 +25,11 @@ struct EnhancedGraphics {
   float reflection_spread = 1.0f;
   // Head-on reflectance floor; the rest of the range is Fresnel.
   float reflection_strength = 0.35f;
+  // Sample the GGX-prefiltered cube instead of the box-filtered mips of the
+  // capture. Live, so the difference can be judged by toggling it while
+  // looking at the car; the chain keeps its double buffer, so switching on
+  // takes a full cycle before the material starts sampling it.
+  bool ggx_reflections = true;
 };
 EnhancedGraphics& host_enhanced_graphics();
 // Options -> Advanced Game Options -> Framerate Adaptive Behaviour.

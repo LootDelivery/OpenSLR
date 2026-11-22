@@ -80,6 +80,11 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
                "Authored\0Geometric\0Blend\0");
   ImGui::SliderFloat("Reflection blur", &enhanced.reflection_spread, 0.f, 3.f, "%.2f");
   ImGui::SliderFloat("Reflection strength", &enhanced.reflection_strength, 0.f, 1.f, "%.2f");
+  ImGui::Checkbox("GGX prefilter", &enhanced.ggx_reflections);
+  ImGui::SetItemTooltip("Convolve the environment with a GGX lobe instead of a box "
+                        "average. Toggling it off falls back to the capture's mips "
+                        "immediately; toggling it on needs one full cycle (~36 frames) "
+                        "before the material samples it.");
   ImGui::Checkbox("Volumetric clouds", &enhanced.volumetric_clouds);
   ImGui::Combo("Anti-aliasing", &enhanced.msaa, "Off\0MSAA 2x\0MSAA 4x\0MSAA 8x\0");
   ImGui::Checkbox("Sun flare", &options.sun_flare);
