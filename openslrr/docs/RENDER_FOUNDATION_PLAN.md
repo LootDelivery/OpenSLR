@@ -918,3 +918,65 @@ across three frames. Glass and chrome have exactly that age today and were never
 reported as laggy, so 24 ms is under the threshold. Reaching for less would mean
 changing the capture cadence itself, which is a separate step with its own risk:
 that cadence is what fixed reflections freezing in motion.
+
+### 8.14 The probe, and the check that brightness is not
+
+The irradiance probe had two faults and the first one cost more than the work.
+
+**Basis.** The convolutions were built on cross products of the face axis, which
+is the obvious thing to write and is a mirror image of what the capture wrote.
+The capture writes each face with its own `mtxLookAt` and `mtxProj`; taking those
+rows -- with the v axis negated, because the fullscreen quad's texcoord runs
+opposite the face's projection up -- is the combination that agrees with it. The
+prefilter has used that combination since §8.10; the probe inherited the cross
+products and was therefore integrating the sky where it should have seen asphalt.
+
+**The check.** This is the part worth keeping. The dump panels put the chain, or
+the probe, in the top row and the raw cube in the bottom row, and the temptation
+is to compare their *brightness* face by face. That is not a test. A mirrored
+pair can carry almost the same means -- 165 against 211 in one generation, the
+same two faces transposed in the next, which is what "face 2 is the bright one"
+looks like from both sides of a flip. Comparing means, an inverted chain passes.
+What does not pass is the image: the sky belongs at the top of a face and the
+road at the bottom, and the measure that settles it is the share of sky-blue
+pixels in the top half against the bottom half of each panel. Upright reads
+0.90 above and 0.40 below; mirrored reads the same numbers swapped. Two rounds of
+sign flipping in this pass came from reading brightness instead.
+
+**Sampling.** Thirty-two taps a face against a capture read at mip 0 samples
+ninety-six unrelated street texels and reads as speckle across a panel that has
+only sixteen texels to fill. Ninety-six taps taken from capture mip five puts
+each tap on sixteen squared texels -- the size of a probe face -- so the taps
+average over the hemisphere instead of over the street. Cost is a rounding error
+next to the capture: the whole probe is fifteen hundred texels.
+
+**Level.** The probe is an integral of a captured image, so its absolute value is
+whatever that image holds: measured about one and a half times the flat ambient
+the material used before, and, with a fixed gain applied blind, one and a half
+times *under* it -- the capture's eight-bit values are sRGB-encoded and a gain
+derived from their average lands nowhere in linear space. The material now
+calibrates itself: the probe's value straight up anchors an upward-facing surface
+to the flat ambient, so switching the probe on changes the shape of the ambient
+and not its brightness. Vertical panels still come out darker than the roof,
+which is the entire point of a directional ambient. The ratio is clamped,
+because at night the sky is darker than the lit road.
+
+Measured, ValoCity daylight, probe faces against capture faces:
+
+| face | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| probe | 189 | 178 | 167 | 202 | 188 | 182 |
+| capture | 197 | 177 | 167 | 211 | 194 | 176 |
+
+and in motion, frame to frame on the paint: probe on, step median 2.9 and maximum
+16.7; probe off, median 2.9 and maximum 18.1. The pumping the probe was switched
+off for (§8.10) is gone -- the level follows the scenery and no longer follows the
+capture cycle.
+
+The default stays off. What the probe changes on screen is that the doors and
+sills lose the roof's ambient and the paint reads deeper; that is a taste call and
+belongs on the F12 panel ("Diffuse irradiance probe", with "Irradiance strength"
+and "Irradiance scale" beside it), not in a default. `SLRR_REFL_IRR` takes
+`-1` to follow the panel, `0` to force it off and `>=1` to force it on, so a
+harness can photograph both without touching the panel, and `SLRR_REFL_DUMP_IRR`
+puts the probe in the top row for the comparison above.
