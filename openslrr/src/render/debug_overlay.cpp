@@ -86,7 +86,7 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
                         "one flat colour, so a car under a tree and a car in the "
                         "open are lit differently.");
   if (enhanced.irradiance_probe)
-    ImGui::SliderFloat("Irradiance scale", &enhanced.irradiance_scale, 0.f, 2.f, "%.2f");
+    ImGui::SliderFloat("Irradiance strength", &enhanced.irradiance_strength, 0.f, 1.f, "%.2f");
   ImGui::SetItemTooltip("Convolve the environment with a GGX lobe instead of a box "
                         "average. Toggling it off falls back to the capture's mips "
                         "immediately; toggling it on needs one full cycle (~36 frames) "

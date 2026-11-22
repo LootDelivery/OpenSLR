@@ -109,7 +109,19 @@ void main()
     vec3 ambient = u_sunAmb.rgb;
     if (u_irrParams.x > 0.5) {
         vec3 worldNormal = normalize(mul(u_invView, vec4(n, 0.0)).xyz);
-        ambient = textureCube(s_sceneIrradiance, worldNormal).rgb * u_irrParams.y;
+        vec3 probe = textureCube(s_sceneIrradiance, worldNormal).rgb;
+        // The probe is the true hemisphere integral, and its absolute level comes
+        // out close to the flat constant it replaces (measured ratio about 0.9 on
+        // this map), so it is mixed in rather than normalised. Dividing by an
+        // average was the previous attempt: the average itself steps whenever the
+        // capture's mip chain is rebuilt, which is the last thing an ambient term
+        // should do.
+        //
+        // What the probe changes is the *shape*. A vertical surface sees half sky
+        // and half road, so it is dimmer than the roof, and that is correct --
+        // the flat constant lit the sills like the roof. x carries the ready
+        // flag, y how much of the probe to take over the constant.
+        ambient = mix(u_sunAmb.rgb, probe, clamp(u_irrParams.y, 0.0, 1.0));
     }
     vec3 illum = u_sunDiff.a > 0.5
         ? (ambient + u_sunDiff.rgb*ndl)
@@ -240,8 +252,18 @@ void main()
             dbg = environment * reflectanceDbg;
         // 7: the diffuse ambient alone. If the probe is live this is the
         // captured sky above and the captured street below, not one colour.
-        else if (u_dynamicReflection.z > 6.5)
+        else if (u_dynamicReflection.z > 6.5 && u_dynamicReflection.z < 7.5)
             dbg = ambient * 2.0;
+        // 8: the ratio ambient/probe-average. One means the probe was rescaled to
+        // the flat colour's level on this pixel; far from one is the bug.
+        // 8: the probe's own level against the flat constant. One means the
+        // probe can be mixed in without the car changing brightness, and it is
+        // how the hand-over was calibrated per map.
+        else if (u_dynamicReflection.z > 7.5) {
+            vec3 worldNormal = normalize(mul(u_invView, vec4(n, 0.0)).xyz);
+            vec3 probe = textureCube(s_sceneIrradiance, worldNormal).rgb;
+            dbg = probe / max(u_sunAmb.rgb, vec3(1.0/255.0, 1.0/255.0, 1.0/255.0));
+        }
         gl_FragColor = vec4(dbg, 1.0);
         return;
     }

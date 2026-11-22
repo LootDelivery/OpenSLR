@@ -403,7 +403,8 @@ void batch_probe_report() {
         const auto irr_cube = reflection_irr_to_sample();
         const bool irr_ready = bgfx::isValid(irr_cube);
         const float irr_params[4] = {irr_ready ? 1.f : 0.f,
-                                     gfx.irradiance_scale, 0.f, 0.f};
+                                     std::clamp(gfx.irradiance_strength, 0.f, 1.f),
+                                     0.f, 0.f};
         bgfx::setUniform(u_irr_params_, irr_params);
         if (irr_ready) bgfx::setTexture(10, s_scene_irr_, irr_cube);
         if (live_env) {

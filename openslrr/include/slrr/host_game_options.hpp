@@ -33,10 +33,13 @@ struct EnhancedGraphics {
   // Diffuse ambient from the same capture the reflections use, instead of one
   // flat colour for the whole car.
   bool irradiance_probe = true;
-  // The integral and the flat colour do not have the same magnitude, so this
-  // is the hand that keeps the car from changing brightness when the probe is
-  // switched on. 1.0 is the probe as computed.
-  float irradiance_scale = 1.0f;
+  // How much of the ambient comes from the probe instead of the flat colour.
+  // 1.0 is physically what the environment gives -- and it makes a car's sides
+  // noticeably dimmer than the roof, because a vertical surface sees half sky
+  // and half road. The stock look lit both equally, so the default keeps some of
+  // that expectation; the whole range is on a slider because this is a taste
+  // call, not a correctness one.
+  float irradiance_strength = 0.7f;
 };
 EnhancedGraphics& host_enhanced_graphics();
 // Options -> Advanced Game Options -> Framerate Adaptive Behaviour.

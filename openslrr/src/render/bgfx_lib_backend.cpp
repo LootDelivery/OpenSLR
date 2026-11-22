@@ -768,7 +768,11 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       const float basis[4] = {F.x, F.y, F.z, 0.f};
       const float right[4] = {R.x, R.y, R.z, 0.f};
       const float up[4] = {U.x, U.y, U.z, 0.f};
-      const float params[4] = {float(cube_index), 0.f, 1.f, 0.f};
+      static const float dump_mip = [] {
+        const char* e = std::getenv("SLRR_REFL_DUMP_MIP");
+        return e ? std::strtof(e, nullptr) : 0.f;
+      }();
+      const float params[4] = {float(cube_index), dump_mip, 1.f, 0.f};
       const float unused_params[4] = {0.f, 0.f, 0.f, 0.f};
       bgfx::setUniform(u_face_basis_, basis);
       bgfx::setUniform(u_face_right_, right);
@@ -2235,6 +2239,9 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       // integral throws away everything a face could have resolved.
       for (int side = 0; side < 2; ++side) {
         auto& cube = reflection_irr_[side];
+        // No mip chain: the material normalises against the capture's average,
+        // not against the probe's, because only mip 0 of a face is ever written
+        // here and an autogen chain over it would be empty.
         cube = bgfx::createTextureCube(kReflectionIrrSize, false, 1,
             bgfx::TextureFormat::RGBA8,
             BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |

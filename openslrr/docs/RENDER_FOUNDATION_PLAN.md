@@ -690,3 +690,35 @@ frame from one capture handle and publishes them in that frame, which removes bo
 the inter-face disagreement and the publication step. Two runs with traffic off:
 frame 3.306 and 3.374 ms, `refl` 0.253 and 0.258 ms -- no measurable change from
 the face-a-frame version, as expected for 49k taps.
+
+#### 8.9.2 The probe's shape is right and its level is not the point
+
+With the probe live the car read as dim in the paint and almost black along the
+sills. That is not a bug in the integral, it is the integral: a vertical surface
+sees half sky and half road, so it receives less ambient than the roof, and the
+flat constant it replaced lit both equally. The picture the user compared it with
+was the flat term, so anything physically correct looks like a regression at first
+sight.
+
+The first attempt to fix it was to keep the flat term's brightness and take only
+the direction from the probe, by dividing the probe by its own average and
+multiplying by `u_sunAmb`. That needs an average, and the obvious source -- the
+last mip of the probe cube -- is empty: the probe writes mip 0 of a face and
+nothing writes the rest. Sampling it returned near black, the divisor collapsed to
+its floor, and the ambient saturated the car to white. Debug channel 8 was added to
+read the ratio rather than guess at it, and it is what showed the blowout.
+
+Averaging the *capture* instead (`textureCubeLod(s_sceneReflection, up, 4.0)`)
+does work, because the capture's chain is generated on resolve, and it measured a
+ratio of about 0.9 -- which says the probe's absolute level already sits within ten
+percent of the flat constant it replaces. So the divisor was buying almost nothing
+while adding a value that steps whenever the capture's chain is rebuilt. It is
+gone.
+
+What is left is the honest control: `irradiance_strength`, 0 to 1, mixing the
+probe over the flat colour. 1.0 is what the environment gives; the default 0.7
+keeps a third of the old term so the sills are not gloomy, and the whole range is
+on a slider because the compromise is taste, not correctness. Debug channel 8
+(`SLRR_ENV_DEBUG=8`) draws the probe against the flat colour, which is how the
+hand-over was checked per map, and `SLRR_REFL_DUMP_MIP` (0-5) picks the capture mip
+the cube dump panels show, so a level of the chain can be judged on its own.
