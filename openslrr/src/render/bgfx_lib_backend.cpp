@@ -85,6 +85,16 @@
 #include "dxbc/fs_blur.sc.bin.h"
 #include "glsl/fs_hiz.sc.bin.h"
 #include "glsl/fs_blur.sc.bin.h"
+// The prefilter passes existed as source and were compiled by the build, but
+// nothing included their embedded binaries or named them in k_fs, so
+// createEmbeddedShader returned an invalid handle for both. bgfx still handed
+// out a program, the draw did nothing, and the cubes they write stayed at their
+// clear colour. A black cube is not a missing pass you can see: it is a
+// reflection that is merely dark, which is why this survived a visual check.
+#include "dxbc/fs_prefilter.sc.bin.h"
+#include "glsl/fs_prefilter.sc.bin.h"
+#include "dxbc/fs_irradiance.sc.bin.h"
+#include "glsl/fs_irradiance.sc.bin.h"
 
 #include "bgfx_lib_backend.hpp"
 
@@ -105,6 +115,8 @@ static const bgfx::EmbeddedShader k_fs[] = {
     BGFX_EMBEDDED_SHADER(fs_cubeview),
     BGFX_EMBEDDED_SHADER(fs_hiz),
     BGFX_EMBEDDED_SHADER(fs_blur),
+    BGFX_EMBEDDED_SHADER(fs_prefilter),
+    BGFX_EMBEDDED_SHADER(fs_irradiance),
     BGFX_EMBEDDED_SHADER_END()};
 static const bgfx::EmbeddedShader k_vehicle[] = {
     BGFX_EMBEDDED_SHADER(vs_vehicle), BGFX_EMBEDDED_SHADER(fs_vehicle),
@@ -233,6 +245,8 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh"),
         bgfx::createEmbeddedShader(k_fs, rt, "fs_hiz"), true);
     u_hiz_params_ = bgfx::createUniform("u_hizParams", bgfx::UniformType::Vec4);
+    s_scene_irr_ = bgfx::createUniform("s_sceneIrradiance", bgfx::UniformType::Sampler);
+    u_irr_params_ = bgfx::createUniform("u_irrParams", bgfx::UniformType::Vec4);
     u_present_params_ = bgfx::createUniform("u_presentParams", bgfx::UniformType::Vec4);
     // Diagnostic cubemap face viewer. Only created so the sampler and the
     // per-face basis uniforms exist; nothing draws with it unless SLRR_REFL_DUMP.
@@ -255,6 +269,9 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     prefilter_program_ = bgfx::createProgram(
         bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh"),
         bgfx::createEmbeddedShader(k_fs, rt, "fs_prefilter"), true);
+    irradiance_program_ = bgfx::createProgram(
+        bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh"),
+        bgfx::createEmbeddedShader(k_fs, rt, "fs_irradiance"), true);
     s_reflection_ggx_ = bgfx::createUniform("s_sceneReflectionGGX",
                                             bgfx::UniformType::Sampler);
     u_refl_right_ = bgfx::createUniform("u_reflRight", bgfx::UniformType::Vec4);
@@ -1868,6 +1885,16 @@ void LibBgfxBackend::destroy_reflections() {
       cube = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(reflection_depth_)) bgfx::destroy(reflection_depth_);
+    for (auto& cube : reflection_irr_) {
+      if (bgfx::isValid(cube)) bgfx::destroy(cube);
+      cube = BGFX_INVALID_HANDLE;
+    }
+    for (auto& faces : reflection_irr_fb_)
+      for (auto& fb : faces) {
+        if (bgfx::isValid(fb)) bgfx::destroy(fb);
+        fb = BGFX_INVALID_HANDLE;
+      }
+    reflection_irr_ready_ = false;
     for (auto& depth : reflection_cube_depth_) {
       if (bgfx::isValid(depth)) bgfx::destroy(depth);
       depth = BGFX_INVALID_HANDLE;
@@ -2203,6 +2230,30 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       reflection_ggx_level_ = 0;
       reflection_ggx_write_ = 0;
       reflection_ggx_ready_ = false;
+      // The diffuse probe: small, single level, double buffered, one face a
+      // frame like the prefilter chain. Sixteen texels is enough because the
+      // integral throws away everything a face could have resolved.
+      for (int side = 0; side < 2; ++side) {
+        auto& cube = reflection_irr_[side];
+        cube = bgfx::createTextureCube(kReflectionIrrSize, false, 1,
+            bgfx::TextureFormat::RGBA8,
+            BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+            BGFX_SAMPLER_W_CLAMP);
+        if (!bgfx::isValid(cube)) {
+          destroy_reflections();
+          return;
+        }
+        for (int face = 0; face < 6; ++face) {
+          bgfx::Attachment attachment;
+          attachment.init(cube, bgfx::Access::Write, uint16_t(face), 1, 0,
+                          BGFX_ATTACHMENT_NONE);
+          reflection_irr_fb_[side][face] =
+              bgfx::createFrameBuffer(1, &attachment, false);
+        }
+      }
+      reflection_irr_face_ = 0;
+      reflection_irr_write_ = 0;
+      reflection_irr_ready_ = false;
     }
     if (reflection_world_ != ground->key) {
       reflection_world_ = ground->key;
@@ -2525,6 +2576,7 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       ++reflection_face_;
     }
     build_ggx_cube();
+    build_irradiance_cube();
 }
 
 // Stage 1b: one level of the GGX cube per frame, six faces per level. A level is
@@ -2621,6 +2673,64 @@ void LibBgfxBackend::build_ggx_cube() {
       reflection_ggx_write_ ^= 1;
       reflection_ggx_ready_ = true;
     }
+}
+
+bgfx::TextureHandle LibBgfxBackend::reflection_irr_to_sample() const {
+  if (!reflection_irr_ready_) return BGFX_INVALID_HANDLE;
+  return reflection_irr_[reflection_irr_write_ ^ 1];
+}
+
+// One face a frame, published only when all six come from the same generation,
+// for the same reason as the prefilter chain: a half-refreshed cube would mix
+// two moments of the world, and a diffuse term that flickers is obvious.
+void LibBgfxBackend::build_irradiance_cube() {
+  static const bool env_off = refl_env_int("SLRR_REFL_IRR", 1) == 0;
+  const bool enabled = !env_off && host_enhanced_graphics().irradiance_probe;
+  if (!enabled) {
+    reflection_irr_ready_ = false;
+    return;
+  }
+  if (std::getenv("SLRR_REFL_TRACE") && (s_refl_frame % 120) == 0)
+    std::fprintf(stderr, "[refl-irr] prog=%d src=%d ready=%d face=%d\n",
+                 bgfx::isValid(irradiance_program_) ? 1 : 0,
+                 bgfx::isValid(reflection_cube_to_sample()) ? 1 : 0,
+                 reflection_irr_ready_ ? 1 : 0, reflection_irr_face_);
+  if (!bgfx::isValid(irradiance_program_)) return;
+  const auto source = reflection_cube_to_sample();
+  if (!bgfx::isValid(source)) return;
+  static const bx::Vec3 axes[6] = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
+  static const bx::Vec3 ups[6] = {{0,1,0}, {0,1,0}, {0,0,-1}, {0,0,1}, {0,1,0}, {0,1,0}};
+  const int face = reflection_irr_face_;
+  const int side = reflection_irr_write_;
+  const auto fb = reflection_irr_fb_[side][face];
+  if (!bgfx::isValid(fb)) return;
+  const auto view = static_cast<uint16_t>(kReflectionIrrView + face);
+  bgfx::setViewFrameBuffer(view, fb);
+  bgfx::setViewRect(view, 0, 0, kReflectionIrrSize, kReflectionIrrSize);
+  bgfx::setViewClear(view, BGFX_CLEAR_COLOR, 0x000000ff, 0.f);
+  bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
+  const bx::Vec3 F = axes[face];
+  const bx::Vec3 R = bx::normalize(bx::cross(F, ups[face]));
+  const bx::Vec3 U = bx::normalize(bx::cross(R, F));
+  const float right[4] = {R.x, R.y, R.z, 0.f};
+  const float up[4] = {U.x, U.y, U.z, 0.f};
+  const float fwd[4] = {F.x, F.y, F.z, 0.f};
+  // Thirty-two taps against a level that is already wide: irradiance is the
+  // smoothest thing this renderer computes, and the blur is where the variance
+  // goes instead of into the picture.
+  const float params[4] = {0.f, 32.f, 0.f, 0.f};
+  bgfx::setUniform(u_refl_right_, right);
+  bgfx::setUniform(u_refl_up_, up);
+  bgfx::setUniform(u_refl_fwd_, fwd);
+  bgfx::touch(view);
+  draw_fullscreen(view, irradiance_program_, source, params, u_scene_reflection_);
+  if (++reflection_irr_face_ < 6) return;
+  reflection_irr_face_ = 0;
+  reflection_irr_write_ ^= 1;
+  reflection_irr_ready_ = true;
+  if (std::getenv("SLRR_REFL_TRACE"))
+    std::fprintf(stderr, "[refl-irr] published face=%d size=%d\n", face,
+                 int(kReflectionIrrSize));
 }
 
 // Face size for the reflection cube. Hoisted so the prefilter chain can

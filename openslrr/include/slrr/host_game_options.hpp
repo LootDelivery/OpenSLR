@@ -30,6 +30,13 @@ struct EnhancedGraphics {
   // looking at the car; the chain keeps its double buffer, so switching on
   // takes a full cycle before the material starts sampling it.
   bool ggx_reflections = true;
+  // Diffuse ambient from the same capture the reflections use, instead of one
+  // flat colour for the whole car.
+  bool irradiance_probe = true;
+  // The integral and the flat colour do not have the same magnitude, so this
+  // is the hand that keeps the car from changing brightness when the probe is
+  // switched on. 1.0 is the probe as computed.
+  float irradiance_scale = 1.0f;
 };
 EnhancedGraphics& host_enhanced_graphics();
 // Options -> Advanced Game Options -> Framerate Adaptive Behaviour.

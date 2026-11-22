@@ -473,8 +473,24 @@ class LibBgfxBackend final : public IRenderBackend {
   static constexpr uint16_t kReflectionGgxSize = 512;
   static constexpr int kReflectionGgxLevels = 6;
   static constexpr uint16_t kReflectionPrefilterView = 160;
+  // Sixteen texels a face is all a diffuse integral can use, and the
+  // view range is clear of the capture (130), the bake (150), the GGX
+  // chain (160-195) and the dump panels (240).
+  static constexpr uint16_t kReflectionIrrSize = 16;
+  static constexpr uint16_t kReflectionIrrView = 210;
   bgfx::TextureHandle reflection_ggx_[2]{};
   bgfx::FrameBufferHandle reflection_ggx_fb_[2][6][6]{};
+  int reflection_irr_face_ = 0;
+  int reflection_irr_write_ = 0;
+  bool reflection_irr_ready_ = false;
+  std::array<bgfx::TextureHandle, 2> reflection_irr_{{
+      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE}};
+  std::array<std::array<bgfx::FrameBufferHandle, 6>, 2> reflection_irr_fb_{};
+  bgfx::ProgramHandle irradiance_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_scene_irr_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_irr_params_ = BGFX_INVALID_HANDLE;
+  void build_irradiance_cube();
+  bgfx::TextureHandle reflection_irr_to_sample() const;
   int reflection_ggx_level_ = 0;
   int reflection_ggx_face_ = 0;
   int reflection_ggx_write_ = 0;

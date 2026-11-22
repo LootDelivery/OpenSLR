@@ -397,6 +397,15 @@ void batch_probe_report() {
                                      static_cast<float>(kReflectionGgxLevels - 1)};
         bgfx::setUniform(u_env_filter_, env_filter);
         bgfx::setUniform(u_dynamic_reflection_, reflection);
+        // The diffuse probe. x says whether the material may use it at all:
+        // until a whole generation has been integrated the shader keeps the
+        // flat ambient, so switching the probe on does not flash a black car.
+        const auto irr_cube = reflection_irr_to_sample();
+        const bool irr_ready = bgfx::isValid(irr_cube);
+        const float irr_params[4] = {irr_ready ? 1.f : 0.f,
+                                     gfx.irradiance_scale, 0.f, 0.f};
+        bgfx::setUniform(u_irr_params_, irr_params);
+        if (irr_ready) bgfx::setTexture(10, s_scene_irr_, irr_cube);
         if (live_env) {
           bgfx::setTexture(4, s_reflection_cube_, reflection_cube_to_sample());
           if (ggx_ready) bgfx::setTexture(9, s_reflection_ggx_, ggx_cube);

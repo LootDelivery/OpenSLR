@@ -492,14 +492,19 @@ Three wrong turns worth keeping:
    same flat paint from the other side. The chain is now built at the widths the
    old mapping produced, and material roughness becomes a real number only with
    PBR materials in stage 2.
-3. The pass never rendered a pixel for two independent reasons, and both were
-   invisible from the code. `draw_fullscreen` submitted its quad without
+3. The pass never rendered a pixel for three independent reasons, and all three
+   were invisible from the code. `draw_fullscreen` submitted its quad without
    `BGFX_STATE_MSAA`, and the backend silently drops the draw on an MSAA-capable
    target without it (section 8.5.1 below); and the cube face it drew into had no
    depth attachment, so nothing in the cube was ever depth tested (section 8.8).
-   Both are fixed. A trace line, a valid program handle and a plausible cost were
-   no evidence at all that a pixel arrived -- the same lesson as the instancing
-   experiment in U2-B.4.
+   Both are fixed. The third is worse: the build compiled `fs_prefilter.sc` and
+   wrote its binary, but nothing included that binary and the name was missing
+   from the `k_fs` table, so `createEmbeddedShader` returned an invalid handle,
+   bgfx still handed out a program, and the draw did nothing. A black cube does
+   not look broken -- it looks like a dark reflection, which is exactly how it
+   was read for several commits. A trace line, a valid program handle and a
+   plausible cost were no evidence at all that a pixel arrived; the same lesson as
+   the instancing experiment in U2-B.4, now with a black-on-black disguise.
 
 #### 8.5.1 A full-screen quad without BGFX_STATE_MSAA is dropped
 
@@ -635,3 +640,36 @@ nothing here; the capture is still draw bound.
 `SLRR_REFL_DYN=0` now gives a clean comparison for the static world, and the dump
 panels (`SLRR_REFL_DUMP=2`) show the difference immediately: the façade face has
 no pylons, no trees and no other buildings in it.
+
+### 8.9 Stage 1b, second half: a diffuse irradiance probe
+
+Diffuse ambient was one flat colour, `u_sunAmb`, for the whole car. A car against
+a bright wall, under a tree and in the open carried the same light, and its roof
+and its sills were lit identically. The probe is the same capture the reflections
+come from, integrated over the hemisphere around the normal: what a matte surface
+would receive, which is the term the flat colour was standing in for.
+
+Sixteen texels a face, one level, double buffered, one face a frame -- thirty-two
+cosine-weighted taps against a blurred mip of the capture, because irradiance is
+smooth by construction and that is where the variance belongs. Published only when
+all six faces come from the same generation.
+
+The material uses it in place of `u_sunAmb` in the diffuse term, and only when a
+generation is complete: until then it keeps the flat colour, so switching the
+probe on never shows an unlit car. `SLRR_ENV_DEBUG=7` draws the ambient term
+alone, which is how it was verified -- a black car there means the probe is
+producing nothing, and that is how the missing shader table entry was found.
+
+| | frame | refl |
+| --- | --- | --- |
+| probe and prefilter off | 3.218 ms | 0.244 ms |
+| probe and prefilter on | 3.265 ms | 0.246 ms |
+
+Roughly 0.05 ms for both passes, two runs each with traffic disabled. That is the
+honest number: before the shader table was fixed these passes cost nothing because
+they drew nothing.
+
+`SLRR_REFL_IRR=0` and `irradiance_probe` in the F12 panel switch it, and
+`irradiance_scale` (0-2) is the hand that keeps the car from changing brightness
+while the two ambient terms are compared. The integral and a flat colour do not
+have the same magnitude; 1.0 is the probe as computed.

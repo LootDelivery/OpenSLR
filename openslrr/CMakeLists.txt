@@ -185,7 +185,7 @@ bgfx_compile_shaders(
 )
 bgfx_compile_shaders(
   TYPE FRAGMENT
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_present.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_cubeview.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_hiz.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_blur.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_prefilter.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_present.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_cubeview.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_hiz.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_blur.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_prefilter.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_irradiance.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"

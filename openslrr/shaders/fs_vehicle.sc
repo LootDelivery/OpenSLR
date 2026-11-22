@@ -9,6 +9,9 @@ SAMPLERCUBE(s_sceneReflection, 4);
 // still come from the raw cube above, because its mip 0 is 512 across and the
 // prefiltered one is 128: on chrome that difference is the reflection.
 SAMPLERCUBE(s_sceneReflectionGGX, 9);
+// Diffuse ambient: the same capture, integrated over the hemisphere around the
+// normal. Sixteen texels a face, one level, refreshed a face a frame.
+SAMPLERCUBE(s_sceneIrradiance, 10);
 // The prefilter chain, one cube per blur level. Each level is stored at mip 0
 // of its own cube because writing a non-zero mip of a cube through blit does
 // not take effect -- the levels came back empty and the slider acted as
@@ -19,6 +22,7 @@ SAMPLERCUBE(s_sceneReflection3, 7);
 SAMPLERCUBE(s_sceneReflection4, 8);
 uniform vec4 u_dynamicReflection;
 uniform vec4 u_envFilter; // x = prefilter spread, y = legacy weight
+uniform vec4 u_irrParams; // x = probe ready, y = scale
 uniform vec4 u_reflectionProbe;
 uniform vec4 u_reflectionBoxMin;
 uniform vec4 u_reflectionBoxMax;
@@ -96,8 +100,19 @@ void main()
         u_sunDir.w > 0.5 ? u_sunDir.xyz : vec3(3.0, 5.0, -4.0)), 0.0)).xyz);
     float ndl = max(dot(n, lightDir), 0.0);
     float shade = 0.45+0.55*ndl;
+    // Ambient was one flat colour for the whole car: the same light on the roof
+    // and on the sills, under a tree and in the open. The probe replaces it with
+    // the captured environment integrated over the hemisphere around the normal,
+    // which is the term the flat colour stood in for. Until a whole generation
+    // has been integrated the material keeps the flat colour, so switching the
+    // probe on never shows an unlit car.
+    vec3 ambient = u_sunAmb.rgb;
+    if (u_irrParams.x > 0.5) {
+        vec3 worldNormal = normalize(mul(u_invView, vec4(n, 0.0)).xyz);
+        ambient = textureCube(s_sceneIrradiance, worldNormal).rgb * u_irrParams.y;
+    }
     vec3 illum = u_sunDiff.a > 0.5
-        ? (u_sunAmb.rgb + u_sunDiff.rgb*ndl)
+        ? (ambient + u_sunDiff.rgb*ndl)
         : vec3(shade, shade, shade);
     vec2 raw = channelUv(u_lightmap.z, v_texcoord0, v_texcoord1, v_texcoord2);
     vec2 luv = vec2(((raw.x - 0.5) - u_lightmapUv.z) * u_lightmapUv.x + 0.5,
@@ -221,8 +236,12 @@ void main()
             dbg = n*0.5 + vec3(0.5, 0.5, 0.5);
         else if (u_dynamicReflection.z > 4.5 && u_dynamicReflection.z < 5.5)
             dbg = vec3(reflectanceDbg, reflectanceDbg, reflectanceDbg);
-        else if (u_dynamicReflection.z > 5.5)
+        else if (u_dynamicReflection.z > 5.5 && u_dynamicReflection.z < 6.5)
             dbg = environment * reflectanceDbg;
+        // 7: the diffuse ambient alone. If the probe is live this is the
+        // captured sky above and the captured street below, not one colour.
+        else if (u_dynamicReflection.z > 6.5)
+            dbg = ambient * 2.0;
         gl_FragColor = vec4(dbg, 1.0);
         return;
     }
