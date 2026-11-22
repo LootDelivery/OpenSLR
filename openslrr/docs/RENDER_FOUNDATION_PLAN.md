@@ -428,44 +428,45 @@ Still open in stage 1: GGX prefiltering of the bake's mip chain and a separate
 irradiance probe for diffuse ambient. Both are additive to this structure: the
 cube already exists as an object with its own schedule, so they change how its mips
 are built, not how it is captured.
-### 8.5 Stage 1b: attempted, measured, reverted
 
-The cube's mips are a box filter, so a roughness lookup picks a level blurred by
-area: chrome does not care, semi-rough paint keeps the hard edges of whatever was
-bright. A second cube convolved with GGX importance sampling -- one level per
-frame, level `m` built at the angular width of `2^m` texels of the capture, sharp
-reads left on the capture cube -- was written, compiled and measured. It cost
-0.06 ms of a 3.6 ms frame.
+### 8.5 Stage 1b: a GGX-prefiltered environment
 
-It was also **inert**. Sampling mip 1 and mip 5 of the convolved cube from inside
-the vehicle shader returns 0, and the same pass writing into a 16 texel cube for
-the irradiance probe left the clear colour untouched. Four facts, taken together:
+The cube's mips are a box filter, so a roughness lookup picked a level that was
+blurred by area. On chrome that is invisible; on semi-rough paint it turns a
+highlight into a flat patch and keeps the hard edges of whatever was bright.
 
-* the pass runs (a trace printed once per level and frame, 1384 times a run);
-* the program is valid, the source cube is valid, the transient buffer is
-  available, and the framebuffers report valid;
-* the clear colour of the same view **does** land in the cube, so the target and
-  the view are right and only the draw is missing;
-* the capture and the bake, which draw the scene into the same kind of per-face
-  cube framebuffer with `bgfx::submit`, work.
+There is now a second cube whose levels are convolved with GGX: level `m` is built
+at the angular width of `2^m` texels of the capture, which is the width the
+box-filtered level used to have, and it takes 12 to 52 importance samples as the
+lobe widens. Level 0 is a straight blit of the capture, so sharp reflections are
+bit-identical to before. The mip a material selects did not change, so the
+softness it asks for is the softness it gets; what changed is the kernel.
 
-So the suspect is `draw_fullscreen` itself -- the full-screen quad helper the old
-blur chain used, which is why that chain reads as dead code. Two candidates were
-not settled before the work was pulled: the quad is submitted with
-`bgfx::setViewTransform(view, nullptr, ortho)`, and the vertex data is a
-`MeshVertex` filled by hand against a 52-byte layout with three UV sets and a
-packed colour. Either can produce a draw that is submitted, costs nothing, and
-rasterises nowhere.
+Rebuilt one level per frame from the raw capture, six faces per level, double
+buffered for the same reason as the bake. Level 0 is not built at all: it would be
+a copy of the capture, and the shader reads the capture cube directly while `lod`
+is below 1, so the sharp end stays on the freshest cube. `SLRR_REFL_GGX=0` puts the
+material back on the box mips for A/B.
 
-Nothing of stage 1b ships: a cube whose convolved levels are black is worse than
-box mips, and the `lod >= 1` branch would have handed those mips to every material
-rough enough to ask for them. The lesson is the one from U2-B.4 in another form:
-**measure the artefact, not the mechanism.** The pass had a trace, a valid handle
-and a plausible cost, and none of that is evidence that a pixel arrived.
+| | `gpu` | frame |
+|---|---|---|
+| GGX off | 2.34 | 3.57 |
+| GGX on, 16 + 24 per level samples | 2.57 | 3.76 |
+| GGX on, 12 + 8 per level samples | 2.50 | 3.63 |
 
-What to do first next time: prove `draw_fullscreen` renders at all -- draw a
-magenta quad with it into the OSD view and look at the screen -- before building
-anything on top of it.
+Two wrong turns worth keeping:
+
+1. The first chain was 128 across. A 128 texel face is four texels of the capture
+   per texel, so even level 0 was softer than the sharpest level a material could
+   ask for, and the paint went flat red. The chain has to start at the capture's
+   own resolution or the low end is a loss.
+2. Roughness taken from `1 - specularExponent / 24` is not a GGX roughness: it was
+   tuned for the box-mip mapping and lands near 0.6-0.9 on ordinary paint. Feeding
+   it straight into `roughness * (levels - 1)` gave mip 4 of a small cube and the
+   same flat paint from the other side. The chain is now built at the widths the
+   old mapping produced, and material roughness becomes a real number only with
+   PBR materials in stage 2.
+
 ### 8.6 Freshness: what the cube's age is made of
 
 A reflection that trails a moving car is not a shading artefact, it is the age of
