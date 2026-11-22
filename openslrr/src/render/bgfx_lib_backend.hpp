@@ -459,23 +459,6 @@ class LibBgfxBackend final : public IRenderBackend {
   // The cube the materials sample: the bake when it exists, otherwise whatever
   // the per-frame capture produced.
   bgfx::TextureHandle reflection_cube_to_sample() const;
-  // Stage 1b: the environment convolved with GGX per mip, so a roughness
-  // selects a lobe instead of a box-filtered level. Rebuilt from the raw cube a
-  // level per frame and double buffered, because a cube cannot be sampled while
-  // one of its levels is a render target.
-  static constexpr uint16_t kReflectionGgxSize = 512;
-  static constexpr int kReflectionGgxLevels = 6;
-  static constexpr uint16_t kReflectionPrefilterView = 160;
-  bgfx::TextureHandle reflection_ggx_[2]{};
-  bgfx::FrameBufferHandle reflection_ggx_fb_[2][6][6]{};
-  int reflection_ggx_level_ = 0;
-  int reflection_ggx_write_ = 0;
-  bool reflection_ggx_ready_ = false;
-  // The cube the materials sample for rough reflections.
-  bgfx::TextureHandle reflection_ggx_to_sample() const;
-  void build_ggx_cube();
-  bgfx::UniformHandle s_reflection_ggx_ = BGFX_INVALID_HANDLE;
-  bgfx::ProgramHandle prefilter_program_ = BGFX_INVALID_HANDLE;
   void* reflection_world_ = nullptr;
   size_t reflection_face_ = 0;
   bool reflection_ready_ = false;

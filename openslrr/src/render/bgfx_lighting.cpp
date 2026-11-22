@@ -388,18 +388,11 @@ void batch_probe_report() {
         const float reflection[4] = {live_env ? 1.f : enhanced_env ? 2.f : 0.f,
                                      static_cast<float>(gfx.reflection_normal),
                                      env_debug, gfx.reflection_strength};
-        // z flags the GGX cube, w is its top mip: the shader maps roughness onto
-        // that range instead of guessing a level.
-        const auto ggx_cube = reflection_ggx_to_sample();
-        const bool ggx_ready = bgfx::isValid(ggx_cube);
-        const float env_filter[4] = {gfx.reflection_spread, env_legacy,
-                                     ggx_ready ? 1.f : 0.f,
-                                     static_cast<float>(kReflectionGgxLevels - 1)};
+        const float env_filter[4] = {gfx.reflection_spread, env_legacy, 0.f, 0.f};
         bgfx::setUniform(u_env_filter_, env_filter);
         bgfx::setUniform(u_dynamic_reflection_, reflection);
         if (live_env) {
           bgfx::setTexture(4, s_reflection_cube_, reflection_cube_to_sample());
-          if (ggx_ready) bgfx::setTexture(9, s_reflection_ggx_, ggx_cube);
           const float probe[4] = {reflection_sample_origin_[0], reflection_sample_origin_[1],
               reflection_sample_origin_[2], reflection_box_valid_ ? 1.f : 0.f};
           const float low[4] = {reflection_box_min_[0], reflection_box_min_[1], reflection_box_min_[2], 0.f};
