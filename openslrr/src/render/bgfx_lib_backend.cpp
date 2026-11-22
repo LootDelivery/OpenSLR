@@ -804,7 +804,15 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     bgfx::setTexture(0, bgfx::isValid(sampler) ? sampler : s_tex_, texture,
                      BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
                          BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT);
-    bgfx::setState(state != 0 ? state : (BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A));
+    // BGFX_STATE_MSAA is not optional here. Without it the backend drops the draw
+    // on this app's targets: the quad is submitted, costs nothing, and no pixel
+    // arrives. Every prefilter pass in this file -- the old blur chain, the GGX
+    // levels, the irradiance probe -- used this helper with the default state and
+    // therefore never rendered a single pixel, which is why replacing the cube's
+    // box mips with a proper convolution changed nothing on screen.
+    bgfx::setState(state != 0 ? state
+                              : (BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                                 BGFX_STATE_MSAA));
     bgfx::submit(view, program);
   }
 
