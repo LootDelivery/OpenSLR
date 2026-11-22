@@ -2656,8 +2656,13 @@ void LibBgfxBackend::build_ggx_cube() {
                                 : face == 3 ? bx::Vec3{0,0,1} : bx::Vec3{0,1,0};
         float face_view[16];
         bx::mtxLookAt(face_view, bx::Vec3{0,0,0}, axes[face], up_hint);
+        // The v axis is negated against the capture. A cube face is written with
+        // the projection's own up, while this quad's texcoord runs the other way,
+        // so a level built with the row taken as-is came out upside down: the
+        // road appeared in the sky of the reflection and the sky in the sills.
+        // The capture row of the dump panels is the reference to compare against.
         const float right[4] = {face_view[0], face_view[4], face_view[8], 0.f};
-        const float up[4] = {face_view[1], face_view[5], face_view[9], 0.f};
+        const float up[4] = {-face_view[1], -face_view[5], -face_view[9], 0.f};
         const float fwd[4] = {face_view[2], face_view[6], face_view[10], 0.f};
         // z is the capture mip the taps are taken from. Level m stands for a lobe
         // 2^m capture texels wide, so reading mip m-1 gives every tap a texel that
@@ -2741,8 +2746,10 @@ void LibBgfxBackend::build_irradiance_cube() {
                             : face == 3 ? bx::Vec3{0,0,1} : bx::Vec3{0,1,0};
     float face_view[16];
     bx::mtxLookAt(face_view, bx::Vec3{0,0,0}, axes[face], up_hint);
+    // Same lookAt-derived basis as the prefilter, v axis negated for the same
+    // reason: the probe has to agree with the cube it integrates.
     const float right[4] = {face_view[0], face_view[4], face_view[8], 0.f};
-    const float up[4] = {face_view[1], face_view[5], face_view[9], 0.f};
+    const float up[4] = {-face_view[1], -face_view[5], -face_view[9], 0.f};
     const float fwd[4] = {face_view[2], face_view[6], face_view[10], 0.f};
     // Thirty-two taps against a level that is already wide: irradiance is the
     // smoothest thing this renderer computes, and the blur is where the variance

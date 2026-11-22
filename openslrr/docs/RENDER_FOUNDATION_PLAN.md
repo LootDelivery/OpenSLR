@@ -761,47 +761,50 @@ worth about 0.02 ms per pass at this size.
 `SLRR_BENCH_SHOT_FRAMES` shortens the ten second shot interval of `--bench-shots`,
 which is how a per-frame oscillation can be measured instead of guessed at.
 
-### 8.10 What is off by default, and why
+### 8.10 The GGX chain, defect by defect
 
-Two of the stage 1b passes are switched off in `EnhancedGraphics` and stay off
-until they can be shown to be correct in motion. This is not a retreat from the
-goal -- a PBR pipeline wants both -- it is a refusal to ship a half-built chain
-that the user can see failing.
+The chain is on. It took four separate faults to get there, and each was invisible
+from the others, which is why it looked like one impossible bug.
 
-`ggx_reflections` (F12: `GGX prefilter`). The capture's box mips remain the source
-for roughness lookups. The chain has three open defects:
+**The basis never reached the shaders.** `bgfx::touch(view)` is `discard()` plus an
+empty submit, so it throws away any uniform already set on the encoder -- and the
+three face-basis vectors were set before it. `normalize(F + x*R + y*U)` was a
+normalize of zero, every tap became a NaN direction, and each level of the chain
+came out as one flat colour. On screen that reads as *reflections disappearing*
+about a third of a second after the car starts moving, because that is when the
+first complete cycle publishes and replaces the capture the material was using.
+The old blur path in the same file has `touch` first, which is where the working
+order comes from.
 
-- Level 0 loses whole faces. Dumped with `SLRR_REFL_DUMP=2`, faces 0-3 are black
-  and 4-5 hold the capture, with every framebuffer reporting valid. It is not the
-  blit and not the attachment count: replacing the blit with a draw leaves the
-  same four faces empty.
-- The orientation was mirrored against the capture. Derived from cross products it
-  was upside down; derived from `bx::mtxLookAt` rows -- the same call the capture
-  uses -- it is still vertically flipped relative to the capture on the two faces
-  that do have content.
-- The material samples levels that are one of several captures, because a cycle
-  takes thirty-six faces and the capture is republished twelve times inside it.
+**The basis was also mirrored.** Built from cross products it was upside down;
+built from `bx::mtxLookAt` rows -- the same call the capture uses -- it was still
+vertically flipped, because a cube face is written with the projection's up while
+the fullscreen quad's texcoord runs the other way. The v axis is negated for both
+the prefilter and the probe. Dump row 0 against row 1 is the reference: they have
+to agree in orientation, not just in brightness.
 
-`irradiance_probe` (F12: `Irradiance probe`). The flat `u_sunAmb` is what the
-material uses. The probe comes out close to a constant instead of graded: with
-`SLRR_ENV_DEBUG=9` the whole body reads one value, so it cannot show the sky above
-and the street below, which is the entire point. Its level also moves with each
-capture, and in motion that reads as an ambient that pumps -- exactly the symptom
-that started this investigation.
+**Level 0 lost four faces, but only once.** Faces 0-3 black and 4-5 correct, with
+every framebuffer valid, is the *first generation only*: it is built before the
+capture cube holds anything. Watching the dump for more than a second shows the
+next cycle filling all six faces from the capture. This one was reported as a
+defect and was not one -- the giveaway is that the values then track the capture
+with a cycle of lag instead of staying black.
 
-Three defects were found and fixed on the way, and they are worth keeping because
-they are generic rather than specific to these passes:
+**The convolutions were point sampled.** `draw_fullscreen` hard codes
+`MIN_POINT | MAG_POINT` because every other caller is a one-texel copy, so twelve
+taps of a 512-squared cube were twelve arbitrary texels. It now takes a
+`sampler_flags` argument and the convolutions ask for linear filtering, and the
+source mip follows the level: level m reads mip m-1, so each tap covers its share
+of the lobe instead of a point inside it. The probe reads a mip whose texels are
+the size of a probe face, which is why thirty-two taps are enough there.
 
-- `bgfx::touch(view)` is `discard()` plus an empty submit, so it throws away any
-  uniform already set on the encoder. Every pass must touch first and set uniforms
-  afterwards. With the order reversed the face basis arrived as zero,
-  `normalize(F + x*R + y*U)` became a normalize of nothing and each convolution
-  wrote one flat colour.
-- `draw_fullscreen` hard coded point sampling. A convolution cannot be point
-  sampled; it now takes `sampler_flags` and the convolutions ask for linear.
-- A convolution has to be sampled at the scale it integrates. Level m reads mip
-  m-1 of the capture, and the probe reads a mip whose texels are the size of a
-  probe face.
+The material's sharp end still reads the capture itself, which is a whole cycle
+fresher than the convolved levels, and that is deliberate.
 
-The capture itself, its depth attachment, the blended pass and the moving layer
-are unaffected by all of this and remain the shipped path.
+Still open: a cycle is thirty-six faces, so the published cube mixes captures up
+to about a third of a second apart and the chain lags the world by that much.
+`SLRR_REFL_GGX_FACES` raises the faces per frame and shortens both, at a cost that
+has not been measured yet. The ambient probe is off by default: it still
+integrates to a near constant instead of a gradient (`SLRR_ENV_DEBUG=9` draws it
+unmixed and the whole body reads one value), and its level moves with each
+capture, which pumps while driving.

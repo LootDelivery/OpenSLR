@@ -30,12 +30,9 @@ struct EnhancedGraphics {
   // looking at the car; the chain keeps its double buffer, so switching on
   // takes a full cycle before the material starts sampling it.
   //
-  // Off by default for the same reason: the chain is still proving itself. Level
-  // 0 loses whole faces, the orientation was mirrored against the capture, and
-  // the material sampling a partly-built chain is what looked like reflections
-  // blinking off while driving. The capture's own box mips are what the material
-  // uses while this is off.
-  bool ggx_reflections = false;
+  // Back on: the chain is being finished rather than parked. See
+  // docs/RENDER_FOUNDATION_PLAN.md 8.10 for the defects still open.
+  bool ggx_reflections = true;
   // Diffuse ambient from the same capture the reflections use, instead of one
   // flat colour for the whole car.
   //
