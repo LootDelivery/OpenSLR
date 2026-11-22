@@ -106,7 +106,9 @@ Read from `LibBgfxBackend::update_reflections`:
 |---|---|
 | resolution | **512** per face by default (`reflection_face_size()`, clamped 64-2048, `SLRR_REFL_RES` overrides) |
 | format | RGBA8 — LDR |
-| mip levels | automatic mip chain via `BGFX_ATTACHMENT_AUTO_GEN_MIPS` (plain downsampling, **not** GGX prefiltering) |
+| mip levels | the capture cube has an automatic chain (`BGFX_ATTACHMENT_AUTO_GEN_MIPS`); what materials sample is a separate **GGX prefiltered** cube (`build_ggx_cube`, 512 square, six levels, roughness `0.02*2^m` a level, level 0 a blit of the capture) |
+| depth | one `D24S8` face per capture face (`reflection_cube_depth_[6]`, `BGFX_ATTACHMENT_NONE`); without it the face is painted in submission order |
+| diffuse probe | 16 square a face, six faces in one frame, ninety-six taps from capture mip 5, mixed over `u_sunAmb` at 0.7 |
 | faces per frame | budget from the "Reflection faces per frame" slider |
 | probe position | `eye + (0, 0.8, 0)`, Z negated |
 | probe tracking | car, or the camera in a showroom |

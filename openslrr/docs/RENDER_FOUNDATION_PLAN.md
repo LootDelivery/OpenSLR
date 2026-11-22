@@ -649,10 +649,12 @@ and its sills were lit identically. The probe is the same capture the reflection
 come from, integrated over the hemisphere around the normal: what a matte surface
 would receive, which is the term the flat colour was standing in for.
 
-Sixteen texels a face, one level, double buffered, one face a frame -- thirty-two
-cosine-weighted taps against a blurred mip of the capture, because irradiance is
-smooth by construction and that is where the variance belongs. Published only when
-all six faces come from the same generation.
+Sixteen texels a face, one level, double buffered, and all six faces integrated
+in one frame, so a generation is never half published. The taps are
+cosine-weighted and come from a blurred mip of the capture, because irradiance is
+smooth by construction and that is where the variance belongs; 8.14 raised the
+count to ninety-six a face and moved the reads to capture mip 5, where one tap
+already spans a probe face.
 
 The material uses it in place of `u_sunAmb` in the diffuse term, and only when a
 generation is complete: until then it keeps the flat colour, so switching the
@@ -812,10 +814,12 @@ without, which is noise, because a cycle is about two million taps spread over i
 frames. The published cube is therefore twelve dynamic frames old instead of
 thirty-six, and freshness is the one thing this chain cannot fake.
 
-The ambient probe is off by default. It still integrates to a near constant
-instead of a gradient (`SLRR_ENV_DEBUG=9` draws it unmixed and the whole body reads
-one value), and its level moves with each capture, which pumps while driving. It
-is the next piece of stage 1b, not a shipped feature.
+The ambient probe is on by default since 8.14. It reads a gradient (sky above,
+street below), its level is anchored to the flat constant by the shader rather
+than by a gain, and its frame-to-frame step in motion matches the probe-off run
+(median 2.9 against 2.9, maximum 16.7 against 18.1), so the pumping this note
+recorded is gone. What remains is taste: `irradiance_strength` and
+`irradiance_scale`, both on the F12 panel.
 
 ### 8.11 Why the GGX chain looked like it did nothing
 

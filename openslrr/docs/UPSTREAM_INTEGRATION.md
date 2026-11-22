@@ -17,6 +17,10 @@ passes, shadows, AO, HDR, the `patch/` tree) is out of scope and never ported.
 Columns follow the integration protocol: upstream PR, upstream files, our
 files, problem, adaptation, tests, result, status.
 
+This file is one direction only (upstream -> here). The other direction -- what
+this tree has that upstream does not, with the files that carry it and the traps
+an integrator has to know -- is `UPSTREAM_HANDOFF.md`.
+
 ## U1-A. Player constructor (#228)
 
 | Field | Content |

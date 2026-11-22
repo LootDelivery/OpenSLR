@@ -248,12 +248,14 @@ to what the plan proposed.
 **Reflections**
 
 - The cubemap is still `RGBA8` / LDR. Bright sources clip.
-- The mip chain is generated automatically (`BGFX_ATTACHMENT_AUTO_GEN_MIPS`).
-- `envPrefilter()` in `fs_vehicle.sc` selects a mip level with `textureCubeLod`
-  and blends two neighbouring levels. That is the reflection blur seen in game;
-  it is weak by nature, since level selection over a downsampled chain is a
-  lookup and not a convolution.
-- GGX prefiltering is **not implemented**.
+- The capture cube's mip chain is generated automatically
+  (`BGFX_ATTACHMENT_AUTO_GEN_MIPS`); the chain materials sample is a separate
+  **GGX prefiltered** cube (`build_ggx_cube`, 512 square, six levels, roughness
+  `0.02*2^m` a level, level 0 a blit of the capture).
+- `envPrefilter()` in `fs_vehicle.sc` now maps physical roughness
+  (`alpha = sqrt(2/(e+2))`) to a level of that chain, so paint reads levels 3-4
+  and chrome 1-2. The auto-generated mips are still what a mirror and the
+  diffuse probe read.
 
 **Status claim, stated precisely:** the scene is rendered and tone mapped
 through an HDR target and the texture inputs are decoded correctly, but the
