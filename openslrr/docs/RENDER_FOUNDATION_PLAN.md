@@ -285,32 +285,45 @@ pedestrians at maximum:
 | cars excluded (before) | 5264 | 0.75 | 2.94 | 4.18 | 241 |
 | other cars included | 6739 | 1.48 | 3.35 | 4.81 | 208 |
 
-The step costs 1475 draws, which is 65 car draws at 22.5 per car, while only about
-eleven cars are within 140 m of the player. The reason is a gap in the collection
+The step cost 1475 draws, which is 65 car draws at 22.5 per car, while only about
+eleven cars are within 140 m of the player. The reason was a gap in the collection
 path: **`scene_instances_collect` does not cull ordinary objects against the
 frustum it is handed.** The frustum only decides which walkers get a bone palette
-and which static prop cells are drawn; every car, part and pedestrian in the
-world is returned and drawn regardless of where the view points. Each of the six
-cube faces therefore draws every nearby car, and the main view draws the cars
-behind the player as well.
+and which static prop cells are drawn; every car, part and pedestrian in the world
+is returned and drawn regardless of where the view points. Each of the six cube
+faces therefore drew every nearby car.
 
-Consequences, in order of importance:
+Two follow-ups closed it, and the second is the largest cheap win found so far:
 
-1. Per-face culling of the cube would divide the cost of everything dynamic in it
-   by roughly six: the same policy would cost ~250 draws instead of 1475, which is
-   the estimate this document made before the measurement.
-2. The main view has the same gap, so the cost of traffic scales with the whole
-   population instead of with what is on screen. That is why moving the camera
-   changed `draws` so little in every measurement above.
-3. Culling cannot simply be pushed into `scene_instances_collect`, because the same
-   list feeds the per-car shadow maps: a car just outside the view still casts a
-   shadow into it. The cull has to be per pass: view frustum for the camera and
-   each cube face, a light-space or expanded set for the shadow pass.
+1. The car the probe belongs to was not being excluded at all, only its chassis.
+   `part_render_owner` stops at the first installed record and every body part --
+   door, hood, trunk -- is a record of its own, so the user could see his own boot
+   lid in the paint. `part_render_car` walks on to the first record whose native
+   kind is "car"; the capture now drops 94 objects per face for that car.
+2. `scene_instance_in_frustum` is applied per face before anything is drawn. It is
+   the same bounding-sphere test walkers already used, with a metre of slack.
 
-This is the largest cheap win found so far in the render path, and it is not a
-reflection change: it is object culling, which props already have and objects
-never did. It still has to be agreed before it is written, because it changes
-which draws happen in every pass.
+Camera parked, 100 cars and pedestrians at maximum, medians of 35 samples:
+
+| | draws | `refl` | `flush` | `gpu` | frame | fps |
+|---|---|---|---|---|---|---|
+| cars out, no cull | 5309 | 0.74 | 2.92 | 2.99 | 4.21 | 238 |
+| cars in, no cull | 5812 | 1.24 | 3.58 | 3.54 | 4.95 | 202 |
+| cars in, faces culled | 4133 | 0.65 | 2.49 | 2.78 | 3.83 | 261 |
+
+The capture with traffic in it is now cheaper than the capture without traffic
+was, and the frame is faster than before this work started. Objects drawn per face
+fall from ~800 to ~55, and the counts stay directional: no cars at all in the up
+and down faces.
+
+What is left is the same gap in the **main view**, which still draws the cars
+behind the player: the cost of traffic scales with the whole population instead of
+with what is on screen, which is why moving the camera changed `draws` so little
+in every measurement above. It cannot be pushed into `scene_instances_collect`,
+because that list feeds the per-car shadow maps and a car just outside the view
+still casts a shadow into it. It has to be a per-pass cull: view frustum for the
+camera, and for the shadow pass either a light-space set or the same list widened
+by the shadow radius.
 
 ### 8.2 Shadows today (reported by the user, confirmed in the code)
 
