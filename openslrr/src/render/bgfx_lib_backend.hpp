@@ -432,6 +432,28 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle u_reflection_probe_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_reflection_box_min_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_reflection_box_max_ = BGFX_INVALID_HANDLE;
+  // Stage 1: the static world does not change between frames, so it is captured
+  // once into its own cube and only recaptured when the world changes or the
+  // probe has moved far enough for the parallax box to be wrong. The per-frame
+  // capture then only has to deal with what actually moves.
+  // Double buffered for the same reason the capture cube is: a cube cannot be
+  // sampled while one of its faces is a render target.
+  bgfx::TextureHandle reflection_bake_cube_[2]{};
+  bgfx::FrameBufferHandle reflection_bake_fb_[2][6]{};
+  int reflection_bake_write_ = 0;
+  int reflection_bake_face_ = 0;
+  bool reflection_bake_ready_ = false;
+  int reflection_bake_batches_ = 0;
+  int reflection_bake_passes_ = 0;
+  uint32_t reflection_bake_frame_ = 0;
+  const void* reflection_bake_world_ = nullptr;
+  std::array<float, 3> reflection_bake_origin_{};
+  std::array<float, 3> reflection_bake_box_min_{}, reflection_bake_box_max_{};
+  bool reflection_bake_box_valid_ = false;
+  uint16_t reflection_bake_size_ = 0;
+  // The cube the materials sample: the bake when it exists, otherwise whatever
+  // the per-frame capture produced.
+  bgfx::TextureHandle reflection_cube_to_sample() const;
   void* reflection_world_ = nullptr;
   size_t reflection_face_ = 0;
   bool reflection_ready_ = false;

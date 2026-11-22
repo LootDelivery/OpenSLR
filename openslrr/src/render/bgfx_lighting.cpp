@@ -392,7 +392,7 @@ void batch_probe_report() {
         bgfx::setUniform(u_env_filter_, env_filter);
         bgfx::setUniform(u_dynamic_reflection_, reflection);
         if (live_env) {
-          bgfx::setTexture(4, s_reflection_cube_, reflection_cubes_[reflection_write_ ^ 1]);
+          bgfx::setTexture(4, s_reflection_cube_, reflection_cube_to_sample());
           const float probe[4] = {reflection_sample_origin_[0], reflection_sample_origin_[1],
               reflection_sample_origin_[2], reflection_box_valid_ ? 1.f : 0.f};
           const float low[4] = {reflection_box_min_[0], reflection_box_min_[1], reflection_box_min_[2], 0.f};

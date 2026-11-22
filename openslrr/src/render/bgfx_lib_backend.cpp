@@ -668,12 +668,16 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     // Diagnostic only: shows what the GPU really uses as the reflection
     // source. Reads the existing cubemaps directly as samplerCube; no copy is
     // made and the capture is not redirected anywhere.
-    if (!std::getenv("SLRR_REFL_DUMP")) return;
-    if (!debug_overlay_.render_options().reflection_viewer) return;
+    const char* dump_env = std::getenv("SLRR_REFL_DUMP");
+    if (!dump_env) return;
+    // 2 forces the panels on, so a bench run can photograph them without
+    // clicking the checkbox in the overlay.
+    const bool forced = std::atoi(dump_env) >= 2;
+    if (!forced && !debug_overlay_.render_options().reflection_viewer) return;
     // The panels are drawn at view 240+, above the OSD, so they would cover
     // the F12 panel and make it impossible to reach the checkbox again. Hide
     // them while the panel is open and show them once it is closed.
-    if (debug_overlay_.visible()) return;
+    if (debug_overlay_.visible() && !forced) return;
     bgfx::setDebug(BGFX_DEBUG_TEXT);
     if (!bgfx::isValid(cubeview_program_)) {
       std::fprintf(stderr, "[refl] view: no program\n");
@@ -700,7 +704,13 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     for (int i = 0; i < cols * rows; ++i) {
       const int cube_index = i / 6;
       const int face = i % 6;
-      const bgfx::TextureHandle cube = reflection_cubes_[cube_index];
+      // Row 0 is what the materials sample, row 1 is the static bake on its
+      // own, which is how the two are compared side by side.
+      const bgfx::TextureHandle cube = cube_index == 0
+          ? reflection_cube_to_sample()
+          : (bgfx::isValid(reflection_bake_cube_[reflection_bake_write_ ^ 1])
+                 ? reflection_bake_cube_[reflection_bake_write_ ^ 1]
+                 : reflection_cubes_[cube_index]);
       if (!bgfx::isValid(cube)) continue;
 
       // 240 and up: after the capture views (72 + 2 * capture), so the cube is
@@ -1796,6 +1806,21 @@ void LibBgfxBackend::update_local_light() {
     }
 }
 
+static int refl_env_int(const char* name, int fallback);
+static bool refl_bake_enabled();
+static bool refl_dynamic_enabled();
+
+bgfx::TextureHandle LibBgfxBackend::reflection_cube_to_sample() const {
+  // With the moving layer on, the capture cube is the bake with the moving
+  // objects drawn over it, so it is the complete environment. Without it the
+  // bake alone is what there is.
+  const bool dynamic = refl_dynamic_enabled();
+  if (!dynamic && reflection_bake_ready_ &&
+      bgfx::isValid(reflection_bake_cube_[reflection_bake_write_ ^ 1]))
+    return reflection_bake_cube_[reflection_bake_write_ ^ 1];
+  return reflection_cubes_[reflection_write_ ^ 1];
+}
+
 void LibBgfxBackend::destroy_reflections() {
     if (bgfx::isValid(reflection_capture_)) bgfx::destroy(reflection_capture_);
     if (bgfx::isValid(reflection_color_)) bgfx::destroy(reflection_color_);
@@ -1808,6 +1833,20 @@ void LibBgfxBackend::destroy_reflections() {
     if (bgfx::isValid(reflection_depth_)) bgfx::destroy(reflection_depth_);
     reflection_write_ = 0;
     reflection_depth_ = BGFX_INVALID_HANDLE;
+    for (auto& cube : reflection_bake_cube_) {
+      if (bgfx::isValid(cube)) bgfx::destroy(cube);
+      cube = BGFX_INVALID_HANDLE;
+    }
+    for (auto& faces : reflection_bake_fb_)
+      for (auto& fb : faces) {
+        if (bgfx::isValid(fb)) bgfx::destroy(fb);
+        fb = BGFX_INVALID_HANDLE;
+      }
+    reflection_bake_write_ = 0;
+    reflection_bake_face_ = 0;
+    reflection_bake_ready_ = false;
+    reflection_bake_world_ = nullptr;
+    reflection_bake_size_ = 0;
     reflection_world_ = nullptr;
     reflection_face_ = 0;
     reflection_ready_ = false;
@@ -1825,6 +1864,21 @@ static int refl_env_int(const char* name, int fallback)
 {
     const char* value = std::getenv(name);
     return value ? std::atoi(value) : fallback;
+}
+
+// Stage 1 switches. SLRR_REFL_BAKE=0 returns the whole environment to the
+// per-frame capture; SLRR_REFL_DYN=0 keeps the bake and drops the moving layer,
+// which is how the static environment is checked on its own.
+static bool refl_bake_enabled()
+{
+    static const bool value = refl_env_int("SLRR_REFL_BAKE", 1) != 0;
+    return value;
+}
+
+static bool refl_dynamic_enabled()
+{
+    static const bool value = refl_env_int("SLRR_REFL_DYN", 1) != 0;
+    return value;
 }
 
 void LibBgfxBackend::update_reflections(const float* eye) {
@@ -1993,6 +2047,27 @@ void LibBgfxBackend::update_reflections(const float* eye) {
               bgfx::createFrameBuffer(1, &attachment, false);
         }
       }
+      for (int cube_index = 0; cube_index < 2; ++cube_index) {
+        auto& cube = reflection_bake_cube_[cube_index];
+        cube = bgfx::createTextureCube(size, true, 1, bgfx::TextureFormat::RGBA8,
+            BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+            BGFX_SAMPLER_W_CLAMP);
+        if (!bgfx::isValid(cube)) {
+          destroy_reflections();
+          return;
+        }
+        for (int face = 0; face < 6; ++face) {
+          bgfx::Attachment attachment;
+          attachment.init(cube, bgfx::Access::Write, uint16_t(face), 1, 0,
+                          face == 5 ? BGFX_ATTACHMENT_AUTO_GEN_MIPS
+                                    : BGFX_ATTACHMENT_NONE);
+          reflection_bake_fb_[cube_index][face] =
+              bgfx::createFrameBuffer(1, &attachment, false);
+        }
+      }
+      reflection_bake_size_ = size;
+      reflection_bake_ready_ = false;
+      reflection_bake_face_ = 0;
     }
     if (reflection_world_ != ground->key) {
       reflection_world_ = ground->key;
@@ -2033,39 +2108,50 @@ void LibBgfxBackend::update_reflections(const float* eye) {
           reflection_sample_origin_[0], reflection_sample_origin_[1],
           reflection_sample_origin_[2]);
     }
-    const int budget = debug_overlay_.render_options().reflection_faces;
-    for (int capture = 0; capture < budget && reflection_face_ < face_count; ++capture) {
-      const auto face = reflection_face_;
-      if (face == 0)
-        reflection_origin_ = {eye[0], eye[1] + .8f, -eye[2]};
+    // One face of the environment around the probe. The per-frame capture and
+    // the static bake are the same pass, except that the bake leaves out what
+    // moves: cars, their drivers and pedestrians belong to the dynamic layer.
+    // mode 0 is the whole environment, 1 is the static bake, 2 is the moving
+    // layer drawn over a copy of the bake.
+    const auto capture_face = [&](int face, bgfx::FrameBufferHandle target,
+                                  uint16_t view, int mode) {
       constexpr bx::Vec3 axes[] = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
       const bx::Vec3 centre{reflection_origin_[0], reflection_origin_[1], reflection_origin_[2]};
       const bx::Vec3 up = face == 2 ? bx::Vec3{0,0,-1}
                           : face == 3 ? bx::Vec3{0,0,1} : bx::Vec3{0,1,0};
-      constexpr float far_plane = 150.f;
-      float view[16], proj[16];
-      bx::mtxLookAt(view, centre, bx::add(centre, axes[face]), up);
+      // The moving layer does not need the whole 150 m: a car reflected from
+      // beyond 80 m is a few pixels of paint.
+      const float far_plane = mode == 2 ? 80.f : 150.f;
+      float view_mtx[16], proj[16];
+      bx::mtxLookAt(view_mtx, centre, bx::add(centre, axes[face]), up);
       bx::mtxProj(proj, 90.f, 1.f, .15f, far_plane, bgfx::getCaps()->homogeneousDepth);
-      const auto frustum = view_frustum(view, proj);
+      const auto frustum = view_frustum(view_mtx, proj);
       reverse_scene_projection(proj);
       const auto objects = scene_instances_collect(&frustum);
-      // This view runs after the main camera. Its results are sampled next frame.
-      const auto reflection_view = static_cast<uint16_t>(72 + 2 * capture);
       // A face with no framebuffer would draw to the backbuffer and leave the
       // capture sitting in the corner of the window.
-      if (!bgfx::isValid(reflection_face_fb_[reflection_write_][face])) continue;
-      bgfx::setViewFrameBuffer(reflection_view, reflection_face_fb_[reflection_write_][face]);
-      bgfx::setViewRect(reflection_view, 0, 0, size, size);
-      bgfx::setViewClear(reflection_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x577493ff, 0.f);
-      bgfx::setViewTransform(reflection_view, view, proj);
-      bgfx::setViewMode(reflection_view, bgfx::ViewMode::Sequential);
-      bgfx::touch(reflection_view);
-      if (outdoor_lighting_ || std::any_of(objects.begin(), objects.end(),
-          [](const SceneInstance& object) { return object.sky; }))
-        draw_sky(reflection_view, view, proj);
-      // The garage shell is preloaded SCX geometry outside the instance list.
-      // Without it the paint and glass mirror the clear colour, not the room.
-      if (garage_ && !parts_.empty()) draw_scene(reflection_view);
+      if (!bgfx::isValid(target)) return;
+      bgfx::setViewFrameBuffer(view, target);
+      bgfx::setViewRect(view, 0, 0, size, size);
+      // The moving layer starts from a copy of the bake, so its colour comes
+      // from there and only the depth needs clearing.
+      bgfx::setViewClear(view, mode == 2 ? BGFX_CLEAR_DEPTH
+                                         : (BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH),
+                         0x577493ff, 0.f);
+      bgfx::setViewTransform(view, view_mtx, proj);
+      bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
+      bgfx::touch(view);
+      if (mode == 2) {
+        // The static environment was blitted into this face by the view just
+        // before it, so the colour under the moving objects is already right.
+      } else {
+        if (outdoor_lighting_ || std::any_of(objects.begin(), objects.end(),
+            [](const SceneInstance& object) { return object.sky; }))
+          draw_sky(view, view_mtx, proj);
+        // The garage shell is preloaded SCX geometry outside the instance list.
+        // Without it the paint and glass mirror the clear colour, not the room.
+        if (garage_ && !parts_.empty()) draw_scene(view);
+      }
       const float origin_x = reflection_origin_[0];
       const float origin_y = reflection_origin_[1];
       const float origin_z = reflection_origin_[2];
@@ -2089,8 +2175,26 @@ void LibBgfxBackend::update_reflections(const float* eye) {
           subject = part_render_car(object.key);
         }
       }
-      int self_skipped = 0, cars_drawn = 0, culled = 0;
+      int self_skipped = 0, cars_drawn = 0, culled = 0, moved_skipped = 0, drawn = 0;
+      int veh = 0, gpu = 0, carrec = 0;
+      if (std::getenv("SLRR_REFL_TRACE"))
+        for (const auto& o : objects) {
+          if (o.vehicle_material) ++veh;
+          if (o.gpu_skin) ++gpu;
+          if (part_render_car(o.key)) ++carrec;
+        }
       for (const auto& object : objects) {
+        // A bake is the static world only, and the moving layer is the other way
+        // round. Anything that can move belongs to one and not the other: a car
+        // frozen into the environment would be a car painted on the road.
+        const bool moves = object.vehicle_material || object.gpu_skin ||
+                           part_is_driver_render(object.key) ||
+                           part_render_car(object.key) != nullptr;
+        if ((mode == 1 && moves) || (mode == 2 && !moves))
+        {
+          ++moved_skipped;
+          continue;
+        }
         // Objects are collected for every view without a frustum test, so a face
         // would otherwise draw the whole population of the world: eleven cars at
         // twenty-two draws each, six times over. Reject what this face cannot
@@ -2140,14 +2244,125 @@ void LibBgfxBackend::update_reflections(const float* eye) {
         const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (dist > 12.f && extent > 0.f && extent / dist * 128.f < 4.f) continue;
         if (object.vehicle_material) ++cars_drawn;
-        draw_instance(reflection_view, object, object.transform.data(), false, 0);
+        ++drawn;
+        draw_instance(view, object, object.transform.data(), false, 0);
       }
       if (std::getenv("SLRR_REFL_TRACE"))
-        std::fprintf(stderr, "[refl-trace] face=%d subject=%p culled=%d skipped=%d cars=%d\n",
-                     face, subject, culled, self_skipped, cars_drawn);
-      std::vector<SceneBatch> reflection_batches;
-      scene_instances_collect_batches(&frustum, reflection_batches, reflection_origin_.data());
-      draw_prop_batches(reflection_view, reflection_batches, false);
+        std::fprintf(stderr, "[refl-trace] face=%d mode=%d total=%zu veh=%d gpu=%d carrec=%d culled=%d skipped=%d moved=%d drawn=%d cars=%d\n",
+                     face, mode, objects.size(), veh, gpu, carrec, culled, self_skipped,
+                     moved_skipped, drawn, cars_drawn);
+      if (std::getenv("SLRR_REFL_TRACE"))
+        std::fprintf(stderr, "[refl-face] face=%d mode=%d objects=%zu drawn=%d\n",
+                     face, mode, objects.size(), drawn);
+      if (mode != 2) {
+        std::vector<SceneBatch> reflection_batches;
+        scene_instances_collect_batches(&frustum, reflection_batches, reflection_origin_.data());
+        if (face == 0) reflection_bake_batches_ = static_cast<int>(reflection_batches.size());
+        draw_prop_batches(view, reflection_batches, false);
+      }
+    };
+
+    // Stage 1: the static world is captured once into its own cube and only
+    // recaptured when the world changes or the probe has moved far enough for
+    // the parallax box to be wrong. One face per frame: a whole bake is a few
+    // milliseconds and would hitch, and the published cube keeps being sampled
+    // while the next one is built.
+    const bool bake_enabled = refl_bake_enabled();
+    static const float rebake_metres =
+        static_cast<float>(std::max(1, refl_env_int("SLRR_REFL_BAKE_DIST", 25)));
+    // The static world streams in after the first frames, and a bake taken
+    // before it lands is an empty room with sky in it. Until the ground props
+    // are there, the per-frame capture keeps running as it always did.
+    const bool world_ready = scene_instances_has_ground_props();
+    if (bake_enabled && world_ready) {
+      const std::array<float, 3> origin{eye[0], eye[1] + .8f, -eye[2]};
+      const float dx = origin[0] - reflection_bake_origin_[0];
+      const float dy = origin[1] - reflection_bake_origin_[1];
+      const float dz = origin[2] - reflection_bake_origin_[2];
+      // Content streams in after the first bake too, and a bake that is a
+      // second old is not worth defending: it is one face per frame.
+      static const uint32_t refresh_frames = static_cast<uint32_t>(
+          std::max(0, refl_env_int("SLRR_REFL_BAKE_REFRESH", 240)));
+      const bool stale = refresh_frames > 0u &&
+                         s_refl_frame - reflection_bake_frame_ > refresh_frames;
+      const bool due = !reflection_bake_ready_ ||
+          reflection_bake_world_ != static_cast<const void*>(reflection_world_) ||
+          stale ||
+          dx * dx + dy * dy + dz * dz > rebake_metres * rebake_metres;
+      if (due || reflection_bake_face_ != 0) {
+        if (reflection_bake_face_ == 0) reflection_origin_ = origin;
+        const int face = reflection_bake_face_;
+        capture_face(face, reflection_bake_fb_[reflection_bake_write_][face],
+                     static_cast<uint16_t>(72 + 2 * face), 1);
+        if (++reflection_bake_face_ == static_cast<int>(face_count)) {
+          reflection_bake_face_ = 0;
+          reflection_bake_write_ ^= 1;
+          ++reflection_bake_passes_;
+          reflection_bake_frame_ = s_refl_frame;
+          // A bake with no props in it was taken before the world landed; keep
+          // the per-frame capture in charge until a bake has content.
+          reflection_bake_ready_ = reflection_bake_batches_ > 0;
+          reflection_bake_world_ = reflection_world_;
+          reflection_bake_origin_ = reflection_origin_;
+          reflection_bake_box_min_ = reflection_box_min_;
+          reflection_bake_box_max_ = reflection_box_max_;
+          reflection_bake_box_valid_ = reflection_box_valid_;
+          // The material samples the bake with the box it was captured under.
+          reflection_sample_origin_ = reflection_bake_origin_;
+          reflection_env_valid_ = true;
+          reflection_env_world_ = reflection_world_;
+          reflection_ready_ = true;
+          std::fprintf(stderr, "[refl-bake] frame=%u pass=%d batches=%d origin=%.2f %.2f %.2f\n",
+                       s_refl_frame, reflection_bake_passes_,
+                       reflection_bake_batches_, reflection_bake_origin_[0],
+                       reflection_bake_origin_[1], reflection_bake_origin_[2]);
+        }
+      }
+      // A frame spent baking does not capture the moving layer. It happens on
+      // world change and every rebake distance, not every frame.
+      if (reflection_bake_face_ != 0 || due) return;
+      // SLRR_REFL_DYN=0 leaves the baked environment alone: no moving layer,
+      // which is how the static part is judged on its own.
+      if (!refl_dynamic_enabled()) return;
+    }
+
+    // The moving layer is a small part of the environment and it is sampled at a
+    // few mip levels in paint and chrome, so refreshing it every frame buys
+    // nothing visible and costs a full six-face pass. SLRR_REFL_DYN_INTERVAL=N
+    // refreshes it once every N frames; the published cube stays valid between
+    // refreshes, only the reflections of moving objects lag by N frames.
+    static const int dyn_interval = std::max(1, refl_env_int("SLRR_REFL_DYN_INTERVAL", 2));
+    if (dyn_interval > 1 && (static_cast<int>(s_refl_frame) % dyn_interval) != 0) return;
+
+    // With the bake ready, the per-frame pass is only the moving layer on top of
+    // it. Without the bake it is the whole environment, as before.
+    const int mode = (bake_enabled && reflection_bake_ready_) ? 2 : 0;
+    const int budget = debug_overlay_.render_options().reflection_faces;
+    for (int capture = 0; capture < budget && reflection_face_ < face_count; ++capture) {
+      const auto face = reflection_face_;
+      if (face == 0)
+        reflection_origin_ = {eye[0], eye[1] + .8f, -eye[2]};
+      if (mode == 2 && reflection_bake_ready_ &&
+          bgfx::isValid(reflection_bake_cube_[reflection_bake_write_ ^ 1])) {
+        // Copy the static environment into this face before the moving
+        // objects are drawn on it. The blit runs in its own view, one
+        // below the capture view, because blits inside a view are
+        // executed before its draws and this must land first.
+        bgfx::TextureRegion source, destination;
+        source.init(reflection_bake_cube_[reflection_bake_write_ ^ 1], 0, 0,
+                    size, size);
+        source.z = static_cast<uint16_t>(face);
+        destination.init(reflection_cubes_[reflection_write_], 0, 0, size, size);
+        destination.z = static_cast<uint16_t>(face);
+        const auto blit_view =
+            static_cast<uint16_t>(72 + 2 * capture - 1);
+        bgfx::setViewFrameBuffer(blit_view, BGFX_INVALID_HANDLE);
+        bgfx::setViewRect(blit_view, 0, 0, size, size);
+        bgfx::blit(blit_view, destination, source);
+      }
+      // This view runs after the main camera. Its results are sampled next frame.
+      capture_face(face, reflection_face_fb_[reflection_write_][face],
+                   static_cast<uint16_t>(72 + 2 * capture), mode);
       ++reflection_face_;
     }
 }
