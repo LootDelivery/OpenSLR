@@ -29,10 +29,22 @@ struct EnhancedGraphics {
   // capture. Live, so the difference can be judged by toggling it while
   // looking at the car; the chain keeps its double buffer, so switching on
   // takes a full cycle before the material starts sampling it.
-  bool ggx_reflections = true;
+  //
+  // Off by default for the same reason: the chain is still proving itself. Level
+  // 0 loses whole faces, the orientation was mirrored against the capture, and
+  // the material sampling a partly-built chain is what looked like reflections
+  // blinking off while driving. The capture's own box mips are what the material
+  // uses while this is off.
+  bool ggx_reflections = false;
   // Diffuse ambient from the same capture the reflections use, instead of one
   // flat colour for the whole car.
-  bool irradiance_probe = true;
+  //
+  // Off by default, and not because the idea is wrong. Its chain still has open
+  // defects: the probe comes out flat instead of graded, so it cannot show the
+  // sky above and the street below, and its level moves with each capture, which
+  // is visible as an ambient that pumps while driving. See
+  // docs/RENDER_FOUNDATION_PLAN.md 8.10 before switching it on.
+  bool irradiance_probe = false;
   // How much of the ambient comes from the probe instead of the flat colour.
   // 1.0 is physically what the environment gives -- and it makes a car's sides
   // noticeably dimmer than the roof, because a vertical surface sees half sky

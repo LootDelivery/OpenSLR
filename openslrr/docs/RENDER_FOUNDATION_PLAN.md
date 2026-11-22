@@ -760,3 +760,48 @@ worth about 0.02 ms per pass at this size.
 
 `SLRR_BENCH_SHOT_FRAMES` shortens the ten second shot interval of `--bench-shots`,
 which is how a per-frame oscillation can be measured instead of guessed at.
+
+### 8.10 What is off by default, and why
+
+Two of the stage 1b passes are switched off in `EnhancedGraphics` and stay off
+until they can be shown to be correct in motion. This is not a retreat from the
+goal -- a PBR pipeline wants both -- it is a refusal to ship a half-built chain
+that the user can see failing.
+
+`ggx_reflections` (F12: `GGX prefilter`). The capture's box mips remain the source
+for roughness lookups. The chain has three open defects:
+
+- Level 0 loses whole faces. Dumped with `SLRR_REFL_DUMP=2`, faces 0-3 are black
+  and 4-5 hold the capture, with every framebuffer reporting valid. It is not the
+  blit and not the attachment count: replacing the blit with a draw leaves the
+  same four faces empty.
+- The orientation was mirrored against the capture. Derived from cross products it
+  was upside down; derived from `bx::mtxLookAt` rows -- the same call the capture
+  uses -- it is still vertically flipped relative to the capture on the two faces
+  that do have content.
+- The material samples levels that are one of several captures, because a cycle
+  takes thirty-six faces and the capture is republished twelve times inside it.
+
+`irradiance_probe` (F12: `Irradiance probe`). The flat `u_sunAmb` is what the
+material uses. The probe comes out close to a constant instead of graded: with
+`SLRR_ENV_DEBUG=9` the whole body reads one value, so it cannot show the sky above
+and the street below, which is the entire point. Its level also moves with each
+capture, and in motion that reads as an ambient that pumps -- exactly the symptom
+that started this investigation.
+
+Three defects were found and fixed on the way, and they are worth keeping because
+they are generic rather than specific to these passes:
+
+- `bgfx::touch(view)` is `discard()` plus an empty submit, so it throws away any
+  uniform already set on the encoder. Every pass must touch first and set uniforms
+  afterwards. With the order reversed the face basis arrived as zero,
+  `normalize(F + x*R + y*U)` became a normalize of nothing and each convolution
+  wrote one flat colour.
+- `draw_fullscreen` hard coded point sampling. A convolution cannot be point
+  sampled; it now takes `sampler_flags` and the convolutions ask for linear.
+- A convolution has to be sampled at the scale it integrates. Level m reads mip
+  m-1 of the capture, and the probe reads a mip whose texels are the size of a
+  probe face.
+
+The capture itself, its depth attachment, the blended pass and the moving layer
+are unaffected by all of this and remain the shipped path.

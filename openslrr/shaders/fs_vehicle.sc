@@ -259,6 +259,12 @@ void main()
         // 8: the probe's own level against the flat constant. One means the
         // probe can be mixed in without the car changing brightness, and it is
         // how the hand-over was calibrated per map.
+        // 9: the probe alone, unmixed and unscaled, so its shape is visible
+        // instead of saturating the way ambient*2 does.
+        else if (u_dynamicReflection.z > 8.5) {
+            vec3 worldNormal = normalize(mul(u_invView, vec4(n, 0.0)).xyz);
+            dbg = textureCube(s_sceneIrradiance, worldNormal).rgb;
+        }
         else if (u_dynamicReflection.z > 7.5) {
             vec3 worldNormal = normalize(mul(u_invView, vec4(n, 0.0)).xyz);
             vec3 probe = textureCube(s_sceneIrradiance, worldNormal).rgb;

@@ -2620,7 +2620,6 @@ void LibBgfxBackend::build_ggx_cube() {
     const auto source = reflection_cube_to_sample();
     if (!bgfx::isValid(source)) return;
     static const bx::Vec3 axes[6] = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
-    static const bx::Vec3 ups[6] = {{0,1,0}, {0,1,0}, {0,0,-1}, {0,0,1}, {0,1,0}, {0,1,0}};
     // A whole level is six faces, and a full-screen convolution of six faces is
     // far more work than the rest of the frame: at 256 squared with twenty taps
     // it measured 1.7 ms a frame, which is not a price a reflection that is only
@@ -2644,42 +2643,40 @@ void LibBgfxBackend::build_ggx_cube() {
       // the last level is for once material roughness becomes physical.
       const float roughness = std::min(0.02f * static_cast<float>(1 << level), 1.f);
       const auto fb = reflection_ggx_fb_[side][level][face];
-      if (level == 0) {
-        // Roughness 0 is the capture itself; a copy is exact and free compared
-        // to convolving 512 across 6 faces.
-        if (bgfx::isValid(fb)) {
-          bgfx::TextureRegion source_region, destination_region;
-          source_region.init(source, 0, 0, kReflectionGgxSize, kReflectionGgxSize);
-          source_region.z = static_cast<uint16_t>(face);
-          destination_region.init(reflection_ggx_[side], 0, 0,
-                                  kReflectionGgxSize, kReflectionGgxSize);
-          destination_region.mip = 0;
-          destination_region.z = static_cast<uint16_t>(face);
-          bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
-          bgfx::setViewRect(view, 0, 0, kReflectionGgxSize, kReflectionGgxSize);
-          bgfx::blit(view, destination_region, source_region);
-        }
-      } else if (bgfx::isValid(fb)) {
+      if (bgfx::isValid(fb)) {
         bgfx::setViewFrameBuffer(view, fb);
         bgfx::setViewRect(view, 0, 0, target, target);
         bgfx::setViewClear(view, BGFX_CLEAR_COLOR, 0x000000ff, 0.f);
         bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
-        const bx::Vec3 F = axes[face];
-        const bx::Vec3 R = bx::normalize(bx::cross(F, ups[face]));
-        const bx::Vec3 U = bx::normalize(bx::cross(R, F));
-        const float right[4] = {R.x, R.y, R.z, 0.f};
-        const float up[4] = {U.x, U.y, U.z, 0.f};
-        const float fwd[4] = {F.x, F.y, F.z, 0.f};
+        // The basis comes from the same lookAt the capture itself uses, taken row
+        // by row. Building it from cross products instead flipped the image: the
+        // prefiltered level was the environment upside down, so rough paint
+        // reflected the road in its sky and the sky in its sills.
+        const bx::Vec3 up_hint = face == 2 ? bx::Vec3{0,0,-1}
+                                : face == 3 ? bx::Vec3{0,0,1} : bx::Vec3{0,1,0};
+        float face_view[16];
+        bx::mtxLookAt(face_view, bx::Vec3{0,0,0}, axes[face], up_hint);
+        const float right[4] = {face_view[0], face_view[4], face_view[8], 0.f};
+        const float up[4] = {face_view[1], face_view[5], face_view[9], 0.f};
+        const float fwd[4] = {face_view[2], face_view[6], face_view[10], 0.f};
         // z is the capture mip the taps are taken from. Level m stands for a lobe
         // 2^m capture texels wide, so reading mip m-1 gives every tap a texel that
         // is already the width of its share of the lobe. Point samples of mip 0
         // instead made the level a lottery of single texels.
         const float source_lod = static_cast<float>(std::max(0, level - 1));
         const float params[4] = {roughness, 12.f + 8.f * level, source_lod, 0.f};
+        // touch before the uniforms: bgfx::touch is discard() plus an empty
+        // submit, so it drops whatever was set on the encoder. With the basis
+        // vectors set first they arrived as zero, normalize(F + x*R + y*U) turned
+        // into a normalize of nothing, every tap became a NaN direction and every
+        // level of the chain came out as one flat colour instead of the
+        // environment. The blur path further down this file has the same two
+        // statements in the other order, which is where the working pattern is.
+        bgfx::touch(view);
         bgfx::setUniform(u_refl_right_, right);
         bgfx::setUniform(u_refl_up_, up);
         bgfx::setUniform(u_refl_fwd_, fwd);
-        bgfx::touch(view);
+
         // draw_fullscreen passes hiz_params into u_hizParams, which is where
         // this shader reads the roughness and the sample count.
         draw_fullscreen(view, prefilter_program_, source, params, u_scene_reflection_, 0,
@@ -2738,23 +2735,27 @@ void LibBgfxBackend::build_irradiance_cube() {
     bgfx::setViewRect(view, 0, 0, kReflectionIrrSize, kReflectionIrrSize);
     bgfx::setViewClear(view, BGFX_CLEAR_COLOR, 0x000000ff, 0.f);
     bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
-    const bx::Vec3 F = axes[face];
-    const bx::Vec3 R = bx::normalize(bx::cross(F, ups[face]));
-    const bx::Vec3 U = bx::normalize(bx::cross(R, F));
-    const float right[4] = {R.x, R.y, R.z, 0.f};
-    const float up[4] = {U.x, U.y, U.z, 0.f};
-    const float fwd[4] = {F.x, F.y, F.z, 0.f};
+    // Same lookAt-derived basis as the prefilter: the probe has to agree with
+    // the cube it integrates, or the ambient comes out rotated against the world.
+    const bx::Vec3 up_hint = face == 2 ? bx::Vec3{0,0,-1}
+                            : face == 3 ? bx::Vec3{0,0,1} : bx::Vec3{0,1,0};
+    float face_view[16];
+    bx::mtxLookAt(face_view, bx::Vec3{0,0,0}, axes[face], up_hint);
+    const float right[4] = {face_view[0], face_view[4], face_view[8], 0.f};
+    const float up[4] = {face_view[1], face_view[5], face_view[9], 0.f};
+    const float fwd[4] = {face_view[2], face_view[6], face_view[10], 0.f};
     // Thirty-two taps against a level that is already wide: irradiance is the
     // smoothest thing this renderer computes, and the blur is where the variance
     // goes instead of into the picture.
     // z is the capture mip: five puts each tap on sixteen squared texels, which
     // is the size of a probe face, so thirty-two bilinear taps cover the
     // hemisphere instead of sampling thirty-two unrelated texels of it.
-    const float params[4] = {0.f, 32.f, 5.f, 0.f};
+    const float params[4] = {0.f, 32.f, 0.f, 0.f};
+    // Same order as the prefilter, and for the same reason.
+    bgfx::touch(view);
     bgfx::setUniform(u_refl_right_, right);
     bgfx::setUniform(u_refl_up_, up);
     bgfx::setUniform(u_refl_fwd_, fwd);
-    bgfx::touch(view);
     draw_fullscreen(view, irradiance_program_, source, params, u_scene_reflection_, 0,
                     kLinearCubeSampler);
   }
