@@ -2069,14 +2069,35 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       const float origin_x = reflection_origin_[0];
       const float origin_y = reflection_origin_[1];
       const float origin_z = reflection_origin_[2];
+      // A car must not mirror its own silhouette, but every other car is
+      // environment: traffic in the paint and chrome is what makes a street look
+      // alive. So the capture skips exactly the car the probe belongs to, which
+      // is the controlled chassis, and draws the rest. When nothing is
+      // controlled -- a cutscene, a bench without a driver -- the nearest car to
+      // the probe is the subject, because that is the one at arm's length.
+      void* subject = part_controlled_chassis();
+      if (!subject) {
+        float nearest = 36.f;  // within 6 m of the probe
+        for (const auto& object : objects) {
+          if (!object.vehicle_material) continue;
+          const float dx = object.transform[12] - origin_x;
+          const float dy = object.transform[13] - origin_y;
+          const float dz = object.transform[14] - origin_z;
+          const float d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 >= nearest) continue;
+          nearest = d2;
+          subject = part_render_owner(object.key);
+        }
+      }
       for (const auto& object : objects) {
-        // The driver belongs to the car and the car is already kept out of the
-        // cubemap, because the cubemap is the environment the car reflects. In
+        // The driver belongs to the car the probe is on, and that car is kept
+        // out of the cubemap because it is the environment the car reflects. In
         // the car inspection mode he is rendered and, at arm's length from the
         // probe, fills several faces. Pedestrians are environment and stay in,
         // so this is keyed on the driver himself and not on being a character.
-        if (object.sky || object.vehicle_material ||
-            part_is_driver_render(object.key) ||
+        const bool self = subject && object.vehicle_material &&
+                          part_render_owner(object.key) == subject;
+        if (object.sky || self || part_is_driver_render(object.key) ||
             (object.gpu_skin && object.skin.empty()) ||
             !instance_meshes_.contains(object.geometry.get()))
           continue;

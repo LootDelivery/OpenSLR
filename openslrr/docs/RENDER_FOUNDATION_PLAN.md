@@ -273,6 +273,45 @@ policy "exclude the controlled car, include the rest" is affordable even with th
 capture as it is today; the dynamic layer of the hybrid is a size question for
 chrome quality, not for cost.
 
+### 8.3 Cars in the capture: policy in, and what it exposed
+
+The policy from 3.3 is implemented now: the capture skips only the controlled
+chassis (falling back to the car nearest the probe within 6 m when nothing is
+controlled) and draws every other car. Measured on the same camera, 100 cars and
+pedestrians at maximum:
+
+| | draws | `refl` | `gpu` | frame | fps |
+|---|---|---|---|---|---|
+| cars excluded (before) | 5264 | 0.75 | 2.94 | 4.18 | 241 |
+| other cars included | 6739 | 1.48 | 3.35 | 4.81 | 208 |
+
+The step costs 1475 draws, which is 65 car draws at 22.5 per car, while only about
+eleven cars are within 140 m of the player. The reason is a gap in the collection
+path: **`scene_instances_collect` does not cull ordinary objects against the
+frustum it is handed.** The frustum only decides which walkers get a bone palette
+and which static prop cells are drawn; every car, part and pedestrian in the
+world is returned and drawn regardless of where the view points. Each of the six
+cube faces therefore draws every nearby car, and the main view draws the cars
+behind the player as well.
+
+Consequences, in order of importance:
+
+1. Per-face culling of the cube would divide the cost of everything dynamic in it
+   by roughly six: the same policy would cost ~250 draws instead of 1475, which is
+   the estimate this document made before the measurement.
+2. The main view has the same gap, so the cost of traffic scales with the whole
+   population instead of with what is on screen. That is why moving the camera
+   changed `draws` so little in every measurement above.
+3. Culling cannot simply be pushed into `scene_instances_collect`, because the same
+   list feeds the per-car shadow maps: a car just outside the view still casts a
+   shadow into it. The cull has to be per pass: view frustum for the camera and
+   each cube face, a light-space or expanded set for the shadow pass.
+
+This is the largest cheap win found so far in the render path, and it is not a
+reflection change: it is object culling, which props already have and objects
+never did. It still has to be agreed before it is written, because it changes
+which draws happen in every pass.
+
 ### 8.2 Shadows today (reported by the user, confirmed in the code)
 
 What exists is not a shadow system to optimise, it is three unrelated things:
