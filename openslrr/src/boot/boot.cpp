@@ -741,8 +741,16 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
                 : bench_frames < 0 ? 0.f
                                    : reversing ? 0.f
                                    : (opt.bench_route ? (route_speed < 16.f ? .55f : .2f) : 1.f);
+        // Temporary diagnostic: SLRR_BENCH_SHOT_FRAMES shortens the ten second
+        // interval so a run can sample many consecutive frames and show a
+        // per-frame oscillation instead of a handful of moments.
+        static const int bench_shot_frames = [] {
+          const char* e = std::getenv("SLRR_BENCH_SHOT_FRAMES");
+          const int v = e ? std::atoi(e) : 0;
+          return v > 0 ? v : 10 * 60;
+        }();
         if (bench_running && !opt.bench_shots.empty() && bench_frames >= 0 &&
-            bench_frames >= 10 * kBenchRate * bench_shot) {
+            bench_frames >= bench_shot_frames * bench_shot) {
           char name[32];
           std::snprintf(name, sizeof(name), "\\t%02d", bench_shot * 10);
           render.request_screenshot(opt.bench_shots + name);

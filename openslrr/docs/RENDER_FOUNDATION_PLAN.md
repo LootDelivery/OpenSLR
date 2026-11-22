@@ -722,3 +722,41 @@ on a slider because the compromise is taste, not correctness. Debug channel 8
 (`SLRR_ENV_DEBUG=8`) draws the probe against the flat colour, which is how the
 hand-over was checked per map, and `SLRR_REFL_DUMP_MIP` (0-5) picks the capture mip
 the cube dump panels show, so a level of the chain can be judged on its own.
+
+#### 8.9.3 The two shimmering passes were both point sampled
+
+The probe pumped dark and light in motion, and the GGX chain blinked as if the
+reflections were switched off, while the plain capture looked steady. The two
+culprits had one thing in common: they are the only passes in this file drawn
+through `draw_fullscreen`, and that helper hard coded `MIN_POINT | MAG_POINT`,
+because everything else that uses it is a one-texel-to-one-texel copy -- present,
+the old blur chain, the cube dump panels, the Hi-Z downsample.
+
+A convolution cannot be point sampled. The GGX prefilter took twelve taps of the
+sharpest mip of a 512-squared cube: twelve arbitrary texels, not twelve samples of
+a lobe. Nothing about that estimate is stable, and every capture cycle it was a
+different dozen texels, so the published level was noise -- on chrome that reads as
+blocky sparkle, on paint as blotches that move, and when the twelve happened to
+land on the dark half of the environment the reflection was simply gone for a
+cycle. The probe had the same defect in a smaller form: thirty-two point taps of
+mip 4, each an unrelated texel of a 32-squared level.
+
+Two changes, both in `draw_fullscreen`'s new `sampler_flags` argument and the two
+shaders:
+
+- Linear filtering, clamped, no mip selector. This bgfx spells linear as the
+  absence of `MIN_POINT` and `MAG_POINT`, so the flags for it are the clamps
+  alone.
+- The source mip follows the level. Level m stands for a lobe 2^m capture texels
+  wide, so its taps read mip m-1: every tap then covers its share of the lobe
+  instead of a point inside it. The probe reads mip 5, whose texels are sixteen
+  squared -- the size of a probe face -- so thirty-two bilinear taps cover the
+  hemisphere rather than sampling thirty-two points of it.
+
+Both are the same rule stated twice: an integral has to be sampled at the scale it
+integrates. Cost, two runs each, traffic off: frame 6.44-6.78 ms and `refl`
+0.25-0.26 ms against 6.24-6.42 and 0.24 before, so a linear-filtered cube read is
+worth about 0.02 ms per pass at this size.
+
+`SLRR_BENCH_SHOT_FRAMES` shortens the ten second shot interval of `--bench-shots`,
+which is how a per-frame oscillation can be measured instead of guessed at.

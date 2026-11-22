@@ -21,7 +21,7 @@ $input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_color0, v_staticShadow
 
 SAMPLERCUBE(s_sceneReflection, 0);
 
-// y = sample count.
+// y = sample count, z = capture mip to read.
 uniform vec4 u_hizParams;
 // Camera basis of the cube face being written, from the capture's own axes.
 uniform vec4 u_reflRight;
@@ -50,12 +50,16 @@ void main()
 	vec3 n = normalize(u_reflFwd.xyz + u_reflRight.xyz * su + u_reflUp.xyz * sv);
 
 	int samples = int(max(u_hizParams.y, 1.0));
+	// A mip whose texels are the size of a probe face: sixteen squared over nine
+	// mips, so each tap is already an average of its share of the hemisphere
+	// rather than one arbitrary texel of the sharp cube.
+	float sourceLod = max(u_hizParams.z, 0.0);
 	vec3 sum = vec3(0.0, 0.0, 0.0);
 	for (int i = 0; i < 64; ++i) {
 		if (i >= samples) break;
 		float fi = float(i);
 		vec2 xi = vec2((fi + 0.5) / float(samples), fract(fi * 0.6180339887));
-		sum += textureCubeLod(s_sceneReflection, cosineSample(xi, n), 4.0).rgb;
+		sum += textureCubeLod(s_sceneReflection, cosineSample(xi, n), sourceLod).rgb;
 	}
 	gl_FragColor = vec4(sum / float(samples), 1.0);
 }

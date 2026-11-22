@@ -800,7 +800,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
                                       bgfx::TextureHandle texture,
                                       const float* hiz_params,
                                       bgfx::UniformHandle sampler,
-                                      uint64_t state) {
+                                      uint64_t state, uint64_t sampler_flags) {
     if (!bgfx::isValid(program) || !bgfx::isValid(texture)) return;
     if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
         bgfx::getAvailTransientIndexBuffer(6) < 6)
@@ -845,9 +845,18 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     if (hiz_params) bgfx::setUniform(u_hiz_params_, hiz_params);
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::setIndexBuffer(&indexes);
+    // Point for the passes that copy one texel to one texel -- present, the blur
+    // chain, the cube dump panels, the Hi-Z downsample. Convolutions ask for
+    // linear instead: the prefilter takes twelve taps of a 512-squared cube, and
+    // twelve point samples of the sharpest mip are twelve arbitrary texels, not
+    // an integral of anything. The noise that came out of that changed every
+    // capture cycle, which is the shimmer the GGX cube showed in motion.
     bgfx::setTexture(0, bgfx::isValid(sampler) ? sampler : s_tex_, texture,
-                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
-                         BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT);
+                     sampler_flags != 0 ? sampler_flags
+                                        : (BGFX_SAMPLER_U_CLAMP |
+                                           BGFX_SAMPLER_V_CLAMP |
+                                           BGFX_SAMPLER_MIN_POINT |
+                                           BGFX_SAMPLER_MAG_POINT));
     // BGFX_STATE_MSAA is not optional here. Without it the backend drops the draw
     // on this app's targets: the quad is submitted, costs nothing, and no pixel
     // arrives. Every prefilter pass in this file -- the old blur chain, the GGX
@@ -2585,6 +2594,12 @@ void LibBgfxBackend::update_reflections(const float* eye) {
     build_irradiance_cube();
 }
 
+// Linear, clamped. This bgfx spells linear as the absence of MIN_POINT and
+// MAG_POINT, so the flags are the clamps alone. The convolutions below take an
+// explicit lod and want the hardware to interpolate inside that level.
+static constexpr uint64_t kLinearCubeSampler =
+    BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_W_CLAMP;
+
 // Stage 1b: one level of the GGX cube per frame, six faces per level. A level is
 // at most 128 across and the sample count grows with the roughness, because a
 // wide lobe needs more of the cube; the whole cycle is a few hundred
@@ -2655,14 +2670,20 @@ void LibBgfxBackend::build_ggx_cube() {
         const float right[4] = {R.x, R.y, R.z, 0.f};
         const float up[4] = {U.x, U.y, U.z, 0.f};
         const float fwd[4] = {F.x, F.y, F.z, 0.f};
-        const float params[4] = {roughness, 12.f + 8.f * level, 0.f, 0.f};
+        // z is the capture mip the taps are taken from. Level m stands for a lobe
+        // 2^m capture texels wide, so reading mip m-1 gives every tap a texel that
+        // is already the width of its share of the lobe. Point samples of mip 0
+        // instead made the level a lottery of single texels.
+        const float source_lod = static_cast<float>(std::max(0, level - 1));
+        const float params[4] = {roughness, 12.f + 8.f * level, source_lod, 0.f};
         bgfx::setUniform(u_refl_right_, right);
         bgfx::setUniform(u_refl_up_, up);
         bgfx::setUniform(u_refl_fwd_, fwd);
         bgfx::touch(view);
         // draw_fullscreen passes hiz_params into u_hizParams, which is where
         // this shader reads the roughness and the sample count.
-        draw_fullscreen(view, prefilter_program_, source, params, u_scene_reflection_);
+        draw_fullscreen(view, prefilter_program_, source, params, u_scene_reflection_, 0,
+                        kLinearCubeSampler);
       }
       if (std::getenv("SLRR_REFL_TRACE") && face == 0 &&
           std::fprintf(stderr, "[refl-ggx] level=%d face=%d target=%d roughness=%.2f "
@@ -2726,12 +2747,16 @@ void LibBgfxBackend::build_irradiance_cube() {
     // Thirty-two taps against a level that is already wide: irradiance is the
     // smoothest thing this renderer computes, and the blur is where the variance
     // goes instead of into the picture.
-    const float params[4] = {0.f, 32.f, 0.f, 0.f};
+    // z is the capture mip: five puts each tap on sixteen squared texels, which
+    // is the size of a probe face, so thirty-two bilinear taps cover the
+    // hemisphere instead of sampling thirty-two unrelated texels of it.
+    const float params[4] = {0.f, 32.f, 5.f, 0.f};
     bgfx::setUniform(u_refl_right_, right);
     bgfx::setUniform(u_refl_up_, up);
     bgfx::setUniform(u_refl_fwd_, fwd);
     bgfx::touch(view);
-    draw_fullscreen(view, irradiance_program_, source, params, u_scene_reflection_);
+    draw_fullscreen(view, irradiance_program_, source, params, u_scene_reflection_, 0,
+                    kLinearCubeSampler);
   }
   reflection_irr_write_ ^= 1;
   reflection_irr_ready_ = true;

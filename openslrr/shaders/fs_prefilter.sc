@@ -20,7 +20,7 @@ $input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_color0, v_staticShadow
 
 SAMPLERCUBE(s_sceneReflection, 0);
 
-// x = roughness of this mip, y = sample count.
+// x = roughness of this mip, y = sample count, z = capture mip to read.
 uniform vec4 u_hizParams;
 // Camera basis of the cube face being written. Taken from the capture's own
 // axes so a texel maps back to the direction it came from.
@@ -62,6 +62,11 @@ void main()
 
 	float roughness = max(u_hizParams.x, 0.0);
 	int samples = int(u_hizParams.y);
+	// The level of the capture these taps are taken from. Sampling the sharpest
+	// mip with a dozen taps is not an integral of the lobe, it is a dozen texels,
+	// and the twelve change with every capture -- which is the noise that made
+	// the cube shimmer while driving.
+	float sourceLod = max(u_hizParams.z, 0.0);
 
 	vec3 sum = vec3(0.0, 0.0, 0.0);
 	float weight = 0.0;
@@ -76,10 +81,10 @@ void main()
 		vec3 l = normalize(2.0 * dot(v, h) * h - v);
 		float nDotL = max(dot(r, l), 0.0);
 		if (nDotL > 0.0) {
-			sum += textureCubeLod(s_sceneReflection, l, 0.0).rgb * nDotL;
+			sum += textureCubeLod(s_sceneReflection, l, sourceLod).rgb * nDotL;
 			weight += nDotL;
 		}
 	}
-	vec3 colour = weight > 0.0 ? sum / weight : textureCubeLod(s_sceneReflection, r, 0.0).rgb;
+	vec3 colour = weight > 0.0 ? sum / weight : textureCubeLod(s_sceneReflection, r, sourceLod).rgb;
 	gl_FragColor = vec4(colour, 1.0);
 }

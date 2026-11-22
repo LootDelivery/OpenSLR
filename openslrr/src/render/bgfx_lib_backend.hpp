@@ -566,7 +566,7 @@ class LibBgfxBackend final : public IRenderBackend {
   void draw_fullscreen(uint16_t view, bgfx::ProgramHandle program,
                        bgfx::TextureHandle texture, const float* hiz_params,
                        bgfx::UniformHandle sampler = BGFX_INVALID_HANDLE,
-                       uint64_t state = 0);
+                       uint64_t state = 0, uint64_t sampler_flags = 0);
   void present_scene(uint16_t view);
 
   struct HizLevel {
