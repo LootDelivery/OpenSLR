@@ -962,8 +962,28 @@ void VehicleDynamics::step_drive() {
       if (idle_and_stopped || braking_at_rest || idling_against_a_stop || dragged_backwards)
         engage = 0.0;
     }
-    const double shaft_new = shaft_omega + engage * exchange * (1.0 - coupling_k) * gap;
-    const double rpm_new = engine_omega - engage * exchange * coupling_k * gap;
+    // A clutch transmits TORQUE, not speed, and this link is the speed form of it. The
+    // difference is what a slide exposes: the tyre can bring a driven wheel to a stop in
+    // a single step (20 kN at 0.318 m against 1.6 kg*m^2 is 33 rad/s in one tick), and a
+    // speed constraint then drags the engine down with it -- the reported "the wheels
+    // stop and the revs fall" at 100-110 degrees of yaw, where the wheel's forward axis
+    // turns against the car's motion and the tyre force reverses.
+    //
+    // So the most the link may take off the crank in one step is what the engine is
+    // making, times engagement, divided by its inertia. Ask for more and a real clutch
+    // slips: the engine keeps its speed, the wheel gets what the clutch can give.
+    const double engine_table_now =
+        drive.torque(std::max(engine_omega * rpm_per_rad, drive.idle));
+    const double clutch_torque = std::max(0.0, engine_table_now) * gas * engage;
+    const double available_drop = clutch_torque / j_engine;
+    double gap_used = gap;
+    if (gap_used > 0 && engage > 0) {
+      const double drop = gap_used * engage * exchange * coupling_k;
+      if (drop > available_drop && drop > 0)
+        gap_used *= available_drop / drop;
+    }
+    const double shaft_new = shaft_omega + engage * exchange * (1.0 - coupling_k) * gap_used;
+    const double rpm_new = engine_omega - engage * exchange * coupling_k * gap_used;
     const double wheel_step = shaft_new / ratio - wheel_shaft;
     if (wh_abs > 1e-9)
       for (size_t i = 0; i < wheels.size(); ++i) {
@@ -1158,11 +1178,12 @@ void VehicleDynamics::step_drive() {
       s.spin -=
           (force.longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
           timestep / wheel_inertia;
-      // Tried, measured, reverted: letting the driveline own the driven wheel's speed
-      // outright (the tyre acting through force alone) removes all torque sensitivity --
-      // 200 and 600 Nm then reach 80-160 km/h in 3.26 and 3.11 s, because the wheel is
-      // always at engine speed and the car is always traction limited. The tyre must be
-      // able to react back on the wheel.
+      // Tried twice and reverted twice: letting the driveline own a driven wheel's speed
+      // outright, with the tyre acting through force alone. It does not fix the wheel
+      // stopping in a slide, and it removes torque sensitivity -- 200 against 600 Nm
+      // reach 80-160 km/h in 3.26 and 3.11 s, because the wheel is then always at engine
+      // speed and the car is always traction limited. Measured with the recovered
+      // J_engine too, so it is not an artefact of the old inertia.
     }
     const double before_hold = s.spin;
     s.spin = brake(s.spin, remaining_brake);
