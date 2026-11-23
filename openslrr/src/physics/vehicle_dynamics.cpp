@@ -798,7 +798,36 @@ void VehicleDynamics::step_drive() {
   engine_omega = std::max(0.0, engine_omega + net * timestep / drive.inertia);
 
   double drive_impulse = 0;
-  if (weights > 0 && ratio != 0 && shift_time_ == 0 && !direction_brake &&
+  if (drive.faithful && engine_running && weights > 0 && ratio != 0 &&
+      shift_time_ == 0 && !direction_brake && gear != 0 && drive.clutch > .01) {
+    // The original's coupling, from the recovered contract: the gearbox passes the
+    // engine's torque, the clutch release scales it, and ClutchF caps what the
+    // clutch can carry. There is no engine-speed hold, so full throttle gives the
+    // whole curve and whatever the tyres cannot take is slip rather than a limit on
+    // the engine. The engine may always flare above the driveline; it is only ever
+    // pulled *up* to it, which is what a clutch does and what keeps a launch from
+    // bogging.
+    // The original has no separately integrated crank while a gear is engaged:
+    // the engine turns with the driveline, so the tachometer follows the wheels and
+    // a spinning wheel flares it. An independently integrated crank sat at the
+    // limiter with the clutch slipping forever -- the car pulled away on a clutch
+    // that never locked.
+    const double driveline_omega = std::abs(shaft * ratio);
+    const double idle_omega = drive.idle / rpm_per_rad;
+    engine_omega = std::clamp(std::max(driveline_omega, idle_omega), 0.0,
+                              drive.limit * 1.02 / rpm_per_rad);
+    // `drive.clutch` is engagement here (1 = engaged), the complement of the
+    // pedal the original multiplies by.
+    const double requested = drive.torque(std::max(rpm, drive.idle)) * gas;
+    const double transmitted =
+        std::min(std::max(0.0, requested) * std::clamp(drive.clutch, 0.0, 1.0),
+                 std::max(0.0, drive.clutch_force));
+    drive_impulse = transmitted * ratio * timestep;
+    for (size_t i = 0; i < wheels.size(); ++i)
+      if (wheels[i].enabled)
+        state[i].spin += drive_impulse * drive.wheels[i].weight /
+                         (weights * wheel_inertia);
+  } else if (weights > 0 && ratio != 0 && shift_time_ == 0 && !direction_brake &&
       (engine_running || !drive.auto_clutch)) {
     const double transmission =
         wheel_inertia * weights * weights / square_weights;

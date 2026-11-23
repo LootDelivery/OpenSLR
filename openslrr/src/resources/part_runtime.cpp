@@ -2493,6 +2493,13 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.differential_lock = std::clamp(comp(chassis, "diff_lock"), 0.f, 1.f);
   // Player aid, off unless chosen; the physics reads 0 as "no launch hold".
   drive.launch_rpm = host_game_options().driving.launch_rpm;
+  // The original's coupling: ClutchF caps the torque the clutch passes, and the
+  // drive path itself is the recovered one unless the host model is asked for.
+  const float clutch_force = comp(chassis, "ClutchF");
+  drive.clutch_force = std::isfinite(clutch_force) && clutch_force > 0.f
+                           ? clutch_force
+                           : 500.0;
+  drive.faithful = host_game_options().driving.original_drive;
   drive.clutch = controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 0.f;
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
@@ -3728,14 +3735,17 @@ void advance_chassis_tick() {
         std::fprintf(stderr,
                      "[drive-trace] t=%.1f rpm=%.0f limit=%.0f idle=%.0f gear=%d "
                      "throttle=%.2f kph=%.1f torque=%.1f running=%d "
-                     "mode=%d(auto=%d,clutch=%d)\n",
+                     "mode=%d(auto=%d,clutch=%d) faith=%d cf=%.0f ratio=%.2f spin=%.1f\n",
                      engine_trace_clock, d.engine_omega * 9.54929658551372,
                      d.drive.limit, d.drive.idle, d.gear,
                      static_cast<double>(d.drive.throttle),
                      std::hypot(d.body.velocity.x, d.body.velocity.z) * 3.6,
                      d.drive.torque ? d.drive.torque(d.engine_omega * 9.54929658551372) : 0.0,
                      d.engine_running ? 1 : 0, rec.transmission,
-                     d.drive.automatic_shift ? 1 : 0, d.drive.auto_clutch ? 1 : 0);
+                     d.drive.automatic_shift ? 1 : 0, d.drive.auto_clutch ? 1 : 0,
+                     d.drive.faithful ? 1 : 0, d.drive.clutch_force,
+                     d.drive.ratios[d.gear],
+                     (d.state[2].spin + d.state[3].spin) * .5);
       }
     }
     if (!finite_frame(rec.dynamics.body.frame()))

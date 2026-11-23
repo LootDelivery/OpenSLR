@@ -174,12 +174,20 @@ struct DriveInput {
   double abs_strength = 0;
   double launch_help = 0;
   double differential_lock = 0;
-  // Launch aid: 0 off (default), or the fraction of the rev limit a slipping
-  // automatic clutch holds the engine at. Upstream hard-coded 0.4, which reads as
-  // "the engine stops at a quarter of the tachometer" and applied to every car
-  // with an automatic box; a driver aid has no business being a default. Host
-  // value, not recovered from the executable.
+  // Automatic clutch slip revs, used by the host model only (see `faithful`):
+  // the fraction of the rev limit the slipping clutch holds the engine at. 0 is
+  // not "off", it stalls the engine against the clutch, which is why the faithful
+  // path does not use this number at all.
   double launch_rpm = .4;
+  // The original's coupling: Chassis.ClutchF (default 500) caps the torque the
+  // clutch can pass. It is a force limit, not an engine-speed hold.
+  double clutch_force = 500, brake_balance = .5;
+  // Drive output the way the original computes it -- engage = 1 - clutch, thrust
+  // from the engine torque -- instead of the crank-inertia slip model. The engine
+  // is free to flare to its limiter and the clutch only limits what it hands to the
+  // wheels. Off in the header so the solver's own tests keep pinning the host
+  // model; the game turns it on.
+  bool faithful = false;
   double inertia = 0, idle = 0, limit = 0, starter = 0;
   double clutch = 1;
   // Net open-throttle crank torque (Nm) at the requested rpm, including

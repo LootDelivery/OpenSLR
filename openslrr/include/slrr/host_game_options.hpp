@@ -97,6 +97,10 @@ struct DrivingOptions {
   // every car with an automatic box, which is the "the engine stops at a quarter
   // of the tachometer" report.
   float launch_rpm = .4f;
+  // Drive the car the way the original does: thrust from the engine torque with
+  // ClutchF capping the clutch, no engine-speed hold. Off switches to the host's
+  // crank-inertia slip model, which is what the solver's own tests pin.
+  bool original_drive = true;
   bool operator==(const DrivingOptions&) const = default;
 };
 struct GameOptions {
@@ -120,5 +124,7 @@ void host_game_options_set_steering_help(Jvm& jvm, float strength);
 // 0 turns the launch aid off; anything else is the fraction of the rev limit the
 // slipping clutch holds. Written to Game Options, then applied like the rest.
 void host_game_options_set_launch_rpm(Jvm& jvm, float fraction);
+// True: the original's drive coupling. False: the host's crank-inertia model.
+void host_game_options_set_original_drive(Jvm& jvm, bool original);
 void host_game_options_update(Jvm& jvm, bool force = false);
 }

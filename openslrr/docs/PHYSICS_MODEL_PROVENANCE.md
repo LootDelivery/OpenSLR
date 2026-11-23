@@ -165,3 +165,43 @@ build without it, and `[drive-trace] aero ...` reporting both numbers.
 
 What this changes in practice: nothing for a complete car, and correct behaviour
 for a stripped one.
+
+## 10. The original coupling, implemented and measured
+
+Decision: the reference behaviour is the original game. Full throttle with no
+stability system has nothing to limit it, so nothing limits it here either;
+stability systems, when wanted, will be added as a separate layer.
+
+`DriveInput::faithful` implements the recovered contract and is what the game now
+runs (`player_originaldrive`, default on; F12 checkbox "Original drive coupling";
+`SLRR_DRIVE_MODEL=host` for the old path in the same binary):
+
+- the gearbox passes the engine's torque, `Chassis.ClutchF` (500) caps what the
+  clutch can carry, and the clutch release scales it -- `engage = 1 - clutch`, as
+  in `arcade_gear_engage`;
+- **no separately integrated crank while a gear is engaged**: the engine turns with
+  the driveline, so the tachometer follows the wheels and a spinning wheel flares
+  it. An independently integrated crank sat at the limiter with the clutch slipping
+  forever -- the car pulled away on a clutch that never locked, which is what the
+  first attempt did and why it was thrown away;
+- neutral still integrates freely, so the engine revs to its limiter standing still;
+- the limiter is the only ceiling, and it clamps the driveline coupling too.
+
+Measured on flat ground by `tests/test_drive_faithful.cpp` (1300 kg, rear drive,
+225 Nm curve, 7000 rpm limit), full throttle from rest, 25 s:
+
+| Coupling | 0-100 km/h | Top speed | Max rpm | Wheel slip |
+|---|---|---|---|---|
+| **original (default)** | **5.88 s** | 237.9 km/h | 7140 | up to 3.40 m/s |
+| host crank-inertia | 7.48 s | 222.2 km/h | 6926 | 0.30 m/s |
+
+The original coupling is 1.6 s quicker to 100 km/h and lets the tyres break
+traction -- the difference a driver described as "in the original it spins because
+the engine revs" against "this drives like a small car". The six tests pin it:
+not slower than the host model, 0-100 under 15 s, revs used without passing the
+limiter, gears used, torque reaching the road, and a clutch force above the engine
+torque not holding the car back.
+
+`test_vehicle_dynamics` (35 cases) still runs the host model, because
+`DriveInput::faithful` defaults to false there: the solver's own suite keeps
+pinning what upstream wrote, and the game chooses the other path explicitly.

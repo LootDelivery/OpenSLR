@@ -124,11 +124,17 @@ void draw_tuning(Jvm* vm) {
     if (ImGui::SliderFloat("Clutch slip revs", &launch, 10.f, 100.f, "%.0f%%",
                            ImGuiSliderFlags_NoInput))
       host_game_options_set_launch_rpm(*vm, launch / 100.f);
-    ImGui::SetItemTooltip("Saved in Game Options, off by default. A slipping "
-                          "automatic clutch normally holds the engine at this "
-                          "share of the rev limit; upstream held every automatic "
-                          "car at 40%, which is what reads as a quarter of the "
-                          "tachometer. A player aid, not part of the gearbox.");
+    ImGui::SetItemTooltip("Saved in Game Options. Only used when the original "
+                          "coupling below is off: the host model holds the engine "
+                          "at this share of the rev limit while the clutch slips.");
+    ImGui::SameLine();
+    bool original_drive = host_game_options().driving.original_drive;
+    if (ImGui::Checkbox("Original drive coupling", &original_drive))
+      host_game_options_set_original_drive(*vm, original_drive);
+    ImGui::SetItemTooltip("On by default. Thrust from the engine torque with ClutchF "
+                          "capping the clutch and no limit on the engine -- the "
+                          "original's contract. Off: the host's crank-inertia slip "
+                          "model.");
     ImGui::SeparatorText("Session");
     ImGui::Text("Simulation time: %.2f s", vm->sim_time());
     float warp = vm->time_warp(-1.f);
