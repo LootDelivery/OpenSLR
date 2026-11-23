@@ -1268,10 +1268,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
           break;
         }
     const bool show_debug = debug_overlay_.visible();
-    // The driving readout is drawn with the debug window closed, so it has to be
-    // able to bring up the interface pass on its own.
-    const bool drive_hud = host_game_options().driving.drive_hud;
-    if (shown_ && !show && !show_debug && !drive_hud && !debug_was_visible_) return;
+    if (shown_ && !show && !show_debug && !debug_was_visible_) return;
     // Offscreen shadow views run before either world view.
     float render_proj[16];
     std::memcpy(render_proj, proj, sizeof(render_proj));
@@ -1468,7 +1465,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
           BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
     }
 
-    if (show_debug || drive_hud) {
+    if (show_debug) {
       perf::Scope scope(perf::Zone::Osd);
       std::vector<Object*> vehicles;
       std::unordered_set<Object*> seen;

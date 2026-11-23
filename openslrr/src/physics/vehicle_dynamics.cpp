@@ -815,7 +815,9 @@ void VehicleDynamics::step_drive() {
     // slip-proportional clutch had the engine locked almost at once, because
     // ClutchF 500 is more than the engine makes.
     const double stall_rpm =
-        drive.idle + (drive.limit - drive.idle) * 0.45 * std::clamp(gas, 0.0, 1.0);
+        drive.idle + (drive.limit - drive.idle) *
+                         std::clamp(drive.converter_stall, 0.0, 1.0) *
+                         std::clamp(gas, 0.0, 1.0);
     const double driveline_omega = std::abs(shaft * ratio);
     const double target = std::max(driveline_omega, stall_rpm / rpm_per_rad);
     // The converter takes a moment to reach its stall speed, then holds there.
@@ -823,9 +825,19 @@ void VehicleDynamics::step_drive() {
     engine_omega = std::clamp(engine_omega + (target - engine_omega) * flare,
                               std::max(0.0, drive.idle * .5 / rpm_per_rad),
                               drive.limit * 1.02 / rpm_per_rad);
-    // Full engine torque at the speed it is actually turning, capped by what the
-    // gearbox can carry. `drive.clutch` is engagement here (1 = engaged).
-    const double requested = drive.torque(std::max(engine_omega * rpm_per_rad, drive.idle)) * gas;
+    // A converter multiplies torque while it slips: about twice the engine's at a
+    // standstill, one to one once the two halves turn together. Without this the
+    // wheels only ever saw the engine's own torque, and a 225 Nm car asked its
+    // tyres for 0.4 g -- so no launch could break traction, whatever the revs said.
+    const double slip_share =
+        std::clamp((stall_rpm / rpm_per_rad - driveline_omega) /
+                       std::max(.1, stall_rpm / rpm_per_rad), 0.0, 1.0);
+    const double multiplication = 1.0 + slip_share;  // 2 at stall, 1 when locked
+    // Full engine torque at the speed it is actually turning, times the converter's
+    // multiplication, capped by what the clutch can carry. `drive.clutch` is
+    // engagement here (1 = engaged).
+    const double requested =
+        drive.torque(std::max(engine_omega * rpm_per_rad, drive.idle)) * gas * multiplication;
     const double transmitted =
         std::min(std::max(0.0, requested) * std::clamp(drive.clutch, 0.0, 1.0),
                  std::max(0.0, drive.clutch_force));

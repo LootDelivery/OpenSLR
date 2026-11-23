@@ -47,8 +47,6 @@ class DebugOverlay {
 
  private:
   void draw_vehicle_tab(std::span<Object* const> vehicles);
-  // Corner readout drawn with the window closed: speed, rpm, gear.
-  void draw_drive_hud(std::span<Object* const> vehicles);
   bool open_ = false;
   bool initialized_ = false;
   bool shortcut_down_ = false;

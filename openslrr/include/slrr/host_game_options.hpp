@@ -103,6 +103,8 @@ struct DrivingOptions {
   bool original_drive = true;
   // A driving readout in the corner: speed, rpm and gear. Off hides it.
   bool drive_hud = true;
+  // Torque converter stall point, as a fraction of the rev limit.
+  float converter_stall = .8f;
   bool operator==(const DrivingOptions&) const = default;
 };
 struct GameOptions {
@@ -130,5 +132,7 @@ void host_game_options_set_launch_rpm(Jvm& jvm, float fraction);
 void host_game_options_set_original_drive(Jvm& jvm, bool original);
 // Show the corner speed/rpm/gear readout.
 void host_game_options_set_drive_hud(Jvm& jvm, bool show);
+// Torque converter stall point, as a fraction of the rev limit.
+void host_game_options_set_converter_stall(Jvm& jvm, float fraction);
 void host_game_options_update(Jvm& jvm, bool force = false);
 }

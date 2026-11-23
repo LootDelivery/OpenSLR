@@ -2500,6 +2500,7 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
                            ? clutch_force
                            : 500.0;
   drive.faithful = host_game_options().driving.original_drive;
+  drive.converter_stall = host_game_options().driving.converter_stall;
   drive.clutch = controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 0.f;
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));

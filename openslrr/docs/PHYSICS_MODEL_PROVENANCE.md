@@ -248,3 +248,44 @@ Also added: a driving readout in the corner -- speed, rpm and gear -- drawn with
 debug window closed (`player_drivehud`, F12 "Drive readout", on by default), because
 the numbers this section is about had to be readable while driving rather than
 inferred from a log.
+
+### 11.1 Torque multiplication, and why nothing ever spun a tyre
+
+A converter does not pass the engine's torque while it slips; it multiplies it.
+Without that term the wheels only ever saw the engine's own 225 Nm, asked the tyres
+for 0.4 g, and no launch could break traction however high the revs were -- which is
+exactly what a driver reported after the revs were fixed: "the revs are right now,
+but there is still no wheelspin".
+
+```
+slip_share     = clamp((stall_rpm - driveline_rpm) / stall_rpm, 0, 1)
+multiplication = 1 + slip_share        // 2 at a standstill, 1 once locked
+thrust         = min(torque(rpm) * throttle * multiplication, ClutchF) * ratio / radius
+```
+
+The same fixture, again full throttle from rest (1 300 kg, 225 Nm, 7 000 limit):
+
+| | 0-100 km/h | Top speed | Wheel slip | rpm at 0.5 s |
+|---|---|---|---|---|
+| no multiplication | 6.27 s | 224.9 km/h | 44.8 m/s | 6248 |
+| **with multiplication** | **5.37 s** | **242.3 km/h** | **55.9 m/s** | 7140 (on the limiter, spinning) |
+
+On the test car the driven wheels outrun the car badly enough that the gearbox
+drives the engine into the limiter -- what a real car does with the tyres alight in
+first. On the Mazda the arithmetic is 450 Nm through 8.61 and a .31 m radius =
+12.5 kN over 1 566 kg = **0.81 g** against roughly 1 g of grip: spin becomes
+possible on a launch, not guaranteed. A heavier right foot cannot conjure it on a
+car that does not have the torque; a stronger car will.
+
+### 11.2 The readout belongs to the game's OSD, not to a second interface
+
+The first version of the speed/rpm/gear readout was an ImGui window drawn with the
+debug overlay closed. That meant forcing the interface pass on every frame --
+including menus, where it drew over the main menu and the menu's own labels stopped
+appearing. The game already owns a text layer that knows about layers, groups and
+menus (`slrr_text_create` / `slrr_text_update`, the same one every menu label uses),
+so the readout is one line of that text now, created each frame (a section change
+clears the text store, so a cached key would go silent) and hidden outright in any
+section whose name contains `Menu`, `Splash` or `Loading`. No extra pass, no second
+interface, and it cannot take anything from a menu. Position: right of centre,
+vertically centred -- `x = .66`, `y = -.02` in OSD space.

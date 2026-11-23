@@ -182,6 +182,11 @@ struct DriveInput {
   // The original's coupling: Chassis.ClutchF (default 500) caps the torque the
   // clutch can pass. It is a force limit, not an engine-speed hold.
   double clutch_force = 500, brake_balance = .5;
+  // Where the torque converter holds the engine under full throttle, as a fraction
+  // of the rev limit. It is a tuning number with no recovered counterpart; the
+  // driver's report that the engine never passed 3800 on a 6500 block set the
+  // default high enough to hear the engine work at a launch.
+  double converter_stall = .8;
   // Drive output the way the original computes it -- engage = 1 - clutch, thrust
   // from the engine torque -- instead of the crank-inertia slip model. The engine
   // is free to flare to its limiter and the clutch only limits what it hands to the

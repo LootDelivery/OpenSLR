@@ -91,10 +91,15 @@ GameOptions read_options(Jvm& jvm) {
   options.driving.launch_rpm = std::clamp(read("player_launchrpm", .4f), .1f, 1.f);
   options.driving.original_drive = integer("player_originaldrive", 1) != 0;
   options.driving.drive_hud = integer("player_drivehud", 1) != 0;
+  options.driving.converter_stall =
+      std::clamp(read("player_converterstall", .8f), .1f, 1.f);
   if (const char *forced = std::getenv("SLRR_DRIVE_MODEL"))
     options.driving.original_drive = std::string(forced) != "host";;
   // SLRR_LAUNCH_RPM is the A/B switch for the launch aid: one binary, two
   // settings, which is how a feel change gets judged.
+  if (const char *forced = std::getenv("SLRR_CONVERTER_STALL"))
+    options.driving.converter_stall =
+        std::clamp(static_cast<float>(std::atof(forced)), .1f, 1.f);
   if (const char *forced = std::getenv("SLRR_LAUNCH_RPM"))
     options.driving.launch_rpm = std::clamp(static_cast<float>(std::atof(forced)), .1f, 1.f);
   options.driving.abs = read("player_abs", 0.f);
@@ -209,6 +214,13 @@ bool host_commit_video_dialog(Jvm& jvm, Object* handler, int command) {
   jvm.invoke(handler->class_name, "changeMode", "(I)V",
              {Value::make_obj(handler), group->second}, false);
   return true;
+}
+
+void host_game_options_set_converter_stall(Jvm& jvm, float fraction) {
+  if (!loaded || !std::isfinite(fraction)) return;
+  jvm.set_static("java.util.Config", "player_converterstall",
+                 Value::make_float(std::clamp(fraction, .1f, 1.f)));
+  host_game_options_apply(jvm);
 }
 
 void host_game_options_set_drive_hud(Jvm& jvm, bool show) {
