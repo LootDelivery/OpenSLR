@@ -807,6 +807,58 @@ porting `0x0044DD70` as if `0x1DBC` were a launch regulator with a round trip. T
 move is to re-read the live row against the field map -- find which `car+` offset actually
 returns to zero over those 235 ms -- before writing any more of this.
 
+### 12.10 The polarity, settled from the main step; and what is actually left
+
+`0x00454500` lines 683-700, read line by line, confirm 4 exactly and settle the sign
+question that cost a day:
+
+```
+k        = inv_d/(K*J_engine + inv_d)
+rpm_free = rpm + M/J_engine
+shaft    = wheel_shaft*ratio
+delta    = (shaft - rpm_free)*k
+engage   = 1 - clutch
+shaft'   = ((delta + rpm_free) - shaft)*engage*0.999 + shaft
+rpm'     = ((delta + rpm_free) - rpm_free)*engage*0.999 + rpm_free
+car[0x1E24] = (engage*delta/k^2)*10            // next line: the gearbox wear formula reads it
+```
+
+Three consequences, each checkable against the writers table in 12.9:
+
+1. **`engage = 1 - clutch`, so `clutch = 0` is a locked clutch** and the port's `engage = 1`
+   during a launch is right. The launch row's 0 -> 0.312 -> 0.357 -> 0 is `car+0x1E24`, the
+   slip measure -- the only quantity in this block that rises and returns to zero -- not
+   `car+0x1DBC`, which 12.9 shows can only rise.
+2. **There is no continuous clutch regulator to port.** The original's launch is a locked
+   driveline, exactly as this port already models it.
+3. **My "torque cap" was fiction.** It bounded the very term the listing applies
+   unconditionally. Removed; the block is the recovered formula and nothing else.
+
+Measured on the 105-degree slide after the removal (`SLRR_SLIDE_TRACE`, first gear, full
+throttle):
+
+```
+spin= 48.52  road=-5.85  Flong=2943  rpm=7008  shaft=625.9  gap=+107.9
+spin= 15.27  road=-5.69  Flong=3315  rpm=6735  shaft=197.0  gap=+508.3
+spin= -5.83  road=-5.69  Flong=3613  rpm=6603  shaft=-75.2  gap=+766.7
+```
+
+The engine is thousands of rpm above the shaft and the exchange is running (the gap is
+positive and growing, and the driven wheels share the correction by `|drive|/sum|drive|` =
+0.5 each). The wheel still crosses zero. So the coupling is not what loses the fight -- the
+**tyre is**, and it wins on arithmetic:
+
+| | at the contact patch |
+| --- | --- |
+| driveline through a locked clutch at 1st, 500 Nm | 13.5 kN |
+| same at the recovered 628 Nm peak | 17.0 kN |
+| tyre grip, 10 860 N x 1.95 | 21.2 kN |
+
+First gear is traction limited in this car under every clutch model. That is where the
+remaining difference from the original lives, and it is a tyre/gearing question, not a
+driveline one. Re-checking `max_load` (per wheel or per axle) and the friction scaling
+against the script values is the next measurement.
+
 ### 12.2 The engine's own numbers, from the game's engine screen
 
 Same engine, with and without a supercharger, as the game itself reports them:

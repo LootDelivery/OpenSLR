@@ -966,28 +966,19 @@ void VehicleDynamics::step_drive() {
       if (idle_and_stopped || braking_at_rest || idling_against_a_stop || dragged_backwards)
         engage = 0.0;
     }
-    // A clutch transmits TORQUE, not speed, and this link is the speed form of it. The
-    // difference is what a slide exposes: the tyre can bring a driven wheel to a stop in
-    // a single step (20 kN at 0.318 m against 1.6 kg*m^2 is 33 rad/s in one tick), and a
-    // speed constraint then drags the engine down with it -- the reported "the wheels
-    // stop and the revs fall" at 100-110 degrees of yaw, where the wheel's forward axis
-    // turns against the car's motion and the tyre force reverses.
+    // The recovered exchange, exactly as 0x00454500 (683-695) writes it:
     //
-    // So the most the link may take off the crank in one step is what the engine is
-    // making, times engagement, divided by its inertia. Ask for more and a real clutch
-    // slips: the engine keeps its speed, the wheel gets what the clutch can give.
-    const double engine_table_now =
-        drive.torque(std::max(engine_omega * rpm_per_rad, drive.idle));
-    const double clutch_torque = std::max(0.0, engine_table_now) * gas * engage;
-    const double available_drop = clutch_torque / j_engine;
-    double gap_used = gap;
-    if (gap_used > 0 && engage > 0) {
-      const double drop = gap_used * engage * exchange * coupling_k;
-      if (drop > available_drop && drop > 0)
-        gap_used *= available_drop / drop;
-    }
-    const double shaft_new = shaft_omega + engage * exchange * (1.0 - coupling_k) * gap_used;
-    const double rpm_new = engine_omega - engage * exchange * coupling_k * gap_used;
+    //   shaft' = shaft + engage*0.999*(1-k)*(rpm_free - shaft)
+    //   rpm'   = rpm   - engage*0.999*k*(rpm_free - shaft)
+    //
+    // It was carrying an extra "torque cap" here for a while -- a bound on how much the link
+    // could take off the crank in one step -- on the reasoning that a clutch is a torque
+    // path, not a speed constraint. The recovery says otherwise: this IS a speed exchange,
+    // `clutch_torque` (car+0x1E24) is only a slip measure for gearbox wear, and there is no
+    // bound. That cap was the reason a driven wheel could be stopped by its own tyre in a
+    // slide: it limited precisely the term that outruns the tyre every frame.
+    const double shaft_new = shaft_omega + engage * exchange * (1.0 - coupling_k) * gap;
+    const double rpm_new = engine_omega - engage * exchange * coupling_k * gap;
     const double wheel_step = shaft_new / ratio - wheel_shaft;
     if (wh_abs > 1e-9)
       for (size_t i = 0; i < wheels.size(); ++i) {
@@ -1185,9 +1176,12 @@ void VehicleDynamics::step_drive() {
       if (slide_trace() && std::abs(cfg.weight) > 1e-3)
         std::fprintf(stderr,
                      "[slide] w%zu spin=%7.2f road=%7.2f slip=%7.2f lat=%7.2f "
-                     "Flong=%8.1f Flat=%8.1f load=%7.0f\n",
+                     "Flong=%8.1f Flat=%8.1f load=%7.0f rpm=%5.0f shaft=%7.1f "
+                     "gap=%7.1f gear=%d\n",
                      i, s.spin, (s.spin * wheel.radius - s.slip_speed), s.slip_speed,
-                     s.lateral_speed, force.longitudinal, force.lateral, s.force);
+                     s.lateral_speed, force.longitudinal, force.lateral, s.force,
+                     engine_omega * rpm_per_rad, s.spin * 12.9,
+                     engine_omega - s.spin * 12.9, gear);
       // Tried twice and reverted twice: letting the driveline own a driven wheel's speed
       // outright, with the tyre acting through force alone. It does not fix the wheel
       // stopping in a slide, and it removes torque sensitivity -- 200 against 600 Nm
