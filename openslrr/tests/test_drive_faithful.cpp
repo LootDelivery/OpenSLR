@@ -268,6 +268,60 @@ SLRR_TEST(the_mazda_launch_is_below_its_tyre_limit) {
                100.0 * max_force / (1.95 * load));
 }
 
+// Power has to reach the wheels. Two cars identical except for the engine, 200 Nm
+// against 600 Nm: the strong one must be far quicker and must break traction.
+//
+// This is the invariant that would have caught the ClutchF ceiling on its own. With
+// a 500 Nm cap on the driveline both cars made 500 Nm and the numbers came out
+// within a few km/h of each other -- which is exactly what a driver reported
+// comparing a turbo four with a supercharged V8 on the same stretch of road.
+Trace run_with_torque(double peak) {
+  auto car = make_car(true);
+  car.drive.torque = [peak](double rpm) {
+    return std::clamp(peak * (1.0 - std::abs(rpm - 4500.0) / 9000.0), 0.0, peak);
+  };
+  car.drive.throttle = 1;
+  Trace trace;
+  const double dt = 1. / 120;
+  for (double t = 0; t < 12; t += dt) {
+    car.advance(dt, flat);
+    const double kph = car.body.velocity.length() * 3.6;
+    const double rpm = car.engine_omega * 9.5493;
+    if (!std::isfinite(kph) || !std::isfinite(rpm)) {
+      trace.finite = false;
+      break;
+    }
+    trace.top_kmh = std::max(trace.top_kmh, kph);
+    if (trace.hundred_kmh < 0 && kph >= 100) trace.hundred_kmh = t;
+    if (t > 1) trace.max_rpm = std::max(trace.max_rpm, rpm);
+    trace.top_gear = std::max(trace.top_gear, car.gear);
+    for (size_t i = 2; i < 4; ++i) {
+      const double wheel_speed = std::abs(car.state[i].spin) * 0.31;
+      trace.max_slip_per_s =
+          std::max(trace.max_slip_per_s, std::abs(wheel_speed - kph / 3.6));
+    }
+  }
+  return trace;
+}
+
+SLRR_TEST(more_torque_reaches_the_road) {
+  const Trace weak = run_with_torque(200);
+  const Trace strong = run_with_torque(600);
+  std::fprintf(stderr,
+               "[drive_faithful] 200 Nm: 0-100 %5.2fs, top %6.1f km/h, slip %.2f m/s' + BS + 'n"
+               "[drive_faithful] 600 Nm: 0-100 %5.2fs, top %6.1f km/h, slip %.2f m/s' + BS + 'n",
+               weak.hundred_kmh, weak.top_kmh, weak.max_slip_per_s,
+               strong.hundred_kmh, strong.top_kmh, strong.max_slip_per_s);
+  SLRR_REQUIRE(weak.finite && strong.finite);
+  SLRR_REQUIRE(weak.hundred_kmh > 0 && strong.hundred_kmh > 0);
+  // Three times the torque must be worth more than a badge: at least a quarter of
+  // the weak car's time, and more than 10 km/h at the top.
+  SLRR_REQUIRE(strong.hundred_kmh < weak.hundred_kmh * .75);
+  SLRR_REQUIRE(strong.top_kmh > weak.top_kmh + 10);
+  // And the strong car is the one that breaks traction.
+  SLRR_REQUIRE(strong.max_slip_per_s > weak.max_slip_per_s + 1.0);
+}
+
 // Gears are used: a launch that stays in first past 100 km/h is the old slip bug.
 SLRR_TEST(the_gearbox_moves_through_the_gears) {
   const Trace trace = run_car(true);
@@ -306,6 +360,7 @@ int main() {
       a_stopped_car_is_in_first_gear,
       full_throttle_uses_the_whole_range,
       the_mazda_launch_is_below_its_tyre_limit,
+      more_torque_reaches_the_road,
       full_throttle_reaches_a_hundred_kilometres_an_hour,
       the_engine_revs_without_an_invented_ceiling,
       the_gearbox_moves_through_the_gears,

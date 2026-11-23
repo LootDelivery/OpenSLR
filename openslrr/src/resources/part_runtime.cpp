@@ -2563,6 +2563,23 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
                      double(wheel.friction), double(wheel.frictn_x),
                      double(wheel.sliction), double(wheel.max_load));
       }
+      // What the engine actually gives the driveline, sampled from the same curve
+      // the drive uses. Without it, "the V8 feels like an inline four" is a
+      // comparison of two numbers nobody has seen.
+      double peak_torque = 0, peak_rpm = 0, peak_hp = 0;
+      if (drive.torque) {
+        for (double rpm = drive.idle; rpm <= drive.limit; rpm += 50.0) {
+          const double torque = drive.torque(rpm);
+          if (torque > peak_torque) {
+            peak_torque = torque;
+            peak_rpm = rpm;
+          }
+          peak_hp = std::max(peak_hp, torque * rpm / 9549.0 * 1.34102);
+        }
+      }
+      std::fprintf(stderr,
+                   "[drive-trace] engine peak %.0f Nm @ %.0f rpm, %.0f hp\n",
+                   peak_torque, peak_rpm, peak_hp);
     }
   }
 

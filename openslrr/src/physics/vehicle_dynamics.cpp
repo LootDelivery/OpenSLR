@@ -856,13 +856,18 @@ void VehicleDynamics::step_drive() {
                        std::max(.1, stall_rpm / rpm_per_rad), 0.0, 1.0);
     const double multiplication = 1.0 + slip_share;  // 2 at stall, 1 when locked
     // Full engine torque at the speed it is actually turning, times the converter's
-    // multiplication, capped by what the clutch can carry. `drive.clutch` is
-    // engagement here (1 = engaged).
+    // multiplication, scaled by clutch engagement. `drive.clutch` is engagement
+    // here (1 = engaged), the complement of the pedal the original multiplies by.
+    //
+    // No ClutchF ceiling. The original reads Chassis.ClutchF into physics+0xC8 and
+    // never touches that offset in the physics step: the clutch there is the pedal
+    // input, full stop, and there is no "force the clutch can carry" limit to
+    // enforce. We had one, at 500 Nm, and it silently deleted every engine that
+    // made more -- a supercharged V8 arrived at the wheels as an inline four.
     const double requested =
         drive.torque(std::max(engine_omega * rpm_per_rad, drive.idle)) * gas * multiplication;
     const double transmitted =
-        std::min(std::max(0.0, requested) * std::clamp(drive.clutch, 0.0, 1.0),
-                 std::max(0.0, drive.clutch_force));
+        std::max(0.0, requested) * std::clamp(drive.clutch, 0.0, 1.0);
     drive_impulse = transmitted * ratio * timestep;
     for (size_t i = 0; i < wheels.size(); ++i)
       if (wheels[i].enabled)

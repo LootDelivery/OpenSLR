@@ -352,3 +352,73 @@ than a driver's suspicion.
 What would change it, each a decision and not a default: `ClutchF` (500 is the
 original's own number), the converter's 2:1 stall multiplication (physical, but the
 exact ratio is a design choice), or the tyre coefficient (game data, 1.95 as shipped).
+
+## 12. Correction: the executable has been decompiled, and `ClutchF` is not used
+
+The sections above were written from a partial reverse tree. The shipped
+`StreetLegal_Redline.exe` has since been decompiled in full (4393 functions,
+Ghidra 12.2) and its 353 native methods recovered. Two statements above are now
+superseded; the full extraction is in
+[CAR_MODEL_RECOVERY.md](CAR_MODEL_RECOVERY.md).
+
+- **`ClutchF` is read and stored, then never consumed.** `0x00448430` loads
+  `Chassis.ClutchF` into the physics struct at `+0xC8`; the vehicle step
+  `0x00454500` contains no reference to that offset at all. The original's clutch
+  is the input value `clutch` (car `+0x1DBC`, 0 = engaged, 1 = released) scaling
+  the torque that reaches the wheels as `1 - clutch` -- the `arcade_gear_engage`
+  contract recovered earlier is right, but it is the *whole* clutch model, not a
+  force limit on top of one. So "`ClutchF` caps what the clutch can carry, and the
+  release scales it" is not what the original does; the cap does not exist.
+- **The engine's torque tables are not authored values.** They are the output of a
+  simulated engine cycle (`0x004B77F0` sweep over `0x004B6BF0`/`0x004B7020`),
+  converged per rpm to within 5% over up to ten iterations, with bore, stroke,
+  compression, valve timing, spark timing, turbo/supercharger pressure, intercooler
+  and mixture as inputs. Runtime only interpolates those tables
+  (`0x0043BE70` / `0x0043BEE0`), piecewise-linearly, returning **0** outside the
+  table's range. The thermodynamics therefore never runs in the frame loop, which
+  is why the recovered runtime model is small: tables, friction, starter, a
+  rate-based limiter, nitro and wear.
+
+## 12. `ClutchF` is a phantom, and what removing it exposed
+
+Recovered from the original executable: `Chassis.ClutchF` is read into `physics+0xC8`
+and **that offset is never touched by the physics step**. The clutch in the original is
+the pedal input, `engage = 1 - clutch`, which scales torque. There is no "force the
+clutch can carry" limit anywhere in it.
+
+We had one, at 500 Nm, in the middle of the driveline:
+
+```
+thrust = min(torque(rpm) * throttle * multiplication, 500) * ratio / radius
+```
+
+That single line deleted every engine above 500 Nm. A driver comparing a turbo four
+with a supercharged V8 over the same stretch of road got **120 and 124 km/h** -- within
+three percent, because both were clipped to the same number. Installing a supercharger
+did nothing, for exactly this reason. The ceiling is gone; the clutch is now only the
+engagement input, as in the original.
+
+`more_torque_reaches_the_road` pins it: two identical cars, 200 Nm against 600 Nm, and
+the strong one must be at least a quarter quicker to 100 km/h, more than 10 km/h faster
+at the top, and the one that breaks traction. Measured now:
+
+| | 0-100 | top speed | wheel slip |
+|---|---|---|---|
+| 200 Nm | 6.36 s | 140.4 km/h | 13.1 m/s |
+| 600 Nm | 4.43 s | 246.7 km/h | **667 m/s** |
+
+### 12.1 The 667 m/s is the next defect, and it is mine
+
+That slip is not a physical number; it is an artefact of how the faithful branch
+couples the engine. It prescribes the engine's speed from a converter target and then
+pushes `torque * ratio` of impulse into the wheel's spin while nothing reacts on the
+engine side. A tyre can only take force back out of a wheel at `grip * radius /
+inertia`; past that, the wheel accelerates without limit and the car is dragged by a
+saturated tyre -- grip-limited acceleration that barely notices engine power, which is
+the same complaint in a different shape.
+
+The original does not have a torque balance there either: its drive is a **force**,
+`engage * clamp(drive) * radius_mul(radius)`, and how the wheel's spin follows is part
+of what has not been recovered yet. Inventing that here would be the third time this
+session that a plausible-looking number turned out to be the bug, so the runaway stays
+in place, visible and pinned, until the original's wheel/drive relationship is known.
