@@ -263,6 +263,18 @@ double turbo_pressure(const Bank& s, double rpm) {
 }
 
 void prepare(Bank& s) {
+  // Experiment hook: the charge heat is the one quantity in the sweep that no recovery
+  // has pinned, and every engine reads weak because of it. Scaled here so the response
+  // can be measured instead of guessed.
+  static const double heat_scale = [] {
+    const char *raw = std::getenv("SLRR_DYNO_HEAT");
+    const double x = raw ? std::atof(raw) : 0.0;
+    return x > 0 ? x : 1.0;
+  }();
+  if (heat_scale != 1.0) {
+    s.set(kMixtureHeat, s.get(kMixtureHeat) * heat_scale);
+    s.set(kEffectiveHeat, s.get(kEffectiveHeat) * heat_scale);
+  }
   mixture(s);
   s.set(kSpark, advance_timing(s, kSparkStart, kSparkShift, kSparkRpm0, kSparkRpm1));
   s.set(kIntakeOpen, advance_timing(s, kIntakeStart, kIntakeShift, kIntakeRpm0, kIntakeRpm1));
@@ -626,6 +638,19 @@ bool calculate_into(Session* session, const std::unordered_map<std::string, floa
   stats.rpm_step = next.rpm_step;
   stats.maximum_rpm = static_cast<float>(s.get(kMaximumRpm));
   stats.displacement = static_cast<float>(s.get(kDisplacement));
+  if (std::getenv("SLRR_DYNO_TRACE")) {
+    // What the sweep is actually working with: the charge pressure and the two limits
+    // that cut it. An engine that reads as weak is usually being starved here.
+    std::fprintf(stderr,
+                 "[dyno-fields] intake_p=%.0f eff_p=%.0f air=%.2f air_limit=%.2f "
+                 "fuel=%.4f fuel_limit=%.4f cyl=%.0f swept=%.6f rpm=%.0f "
+                 "indicated=%.1f net=%.1f heat=%.0f cv=%.0f\n",
+                 s.get(kIntakePressure), s.get(kEffectivePressure), s.get(kAirConsumption),
+                 s.get(kAirLimit), s.get(kFuelConsumption), s.get(kFuelLimit),
+                 s.get(kCylinders), s.get(kSweptVolume), s.get(kRpm),
+                 s.get(kTorque) + engine_friction_torque(s.get(kRpm)), s.get(kTorque),
+                 s.get(kMixtureHeat), s.get(kHeatCapacity));
+  }
   stats.compression = static_cast<float>(s.get(kCompression));
   stats.max_torque = static_cast<float>(s.get(kPeakTorque));
   stats.max_hp = static_cast<float>(s.get(kPeakHorsepower));
