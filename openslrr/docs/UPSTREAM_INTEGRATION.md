@@ -361,14 +361,63 @@ Deviations from #180 and from the recovered engine:
 | Topic | #180 / recovered engine | Ours |
 |---|---|---|
 | Driving | `drive.native_traffic` takes throttle/brake through the vehicle physics; the recovered `traffic_car_frame_update` @ 0x577FA0 also integrates a real body | The pose is published by the runtime and the physics body is skipped, because this tree's drive model is built around one controlled vehicle. Deferred to U2-F |
-| Signal phases | Cars stop at red/yellow inside the traffic step | Not in U2-B; only script halts are honoured. U2-C |
+| Signal phases | Cars stop at red/yellow inside the traffic step | **U2-C**: `race_traffic_signal_cap` caps the lane at the stop line; the rest of the block is described below |
 | Streaming | `streamed_hidden` marks a car hidden while it is out of the streamed set | This tree has no such flag, so cars are created and retired by distance instead of being hidden and re-shown |
 | Race bots | The same registry feeds the race brain, and `set_traffic_mode` switches a car between ambient and racing | The registry is shared and ready, but the commands are U2-D |
 | Font/UI, sounds, debug overlay | Upstream adds overlay counters and route ribbons | Not ported; `RenderRef.plotRoute` keeps its signature and returns 0 |
 
 | Tests | `test_traffic_runtime`, 4/4 pass: template registration (merge by type, junk refused, seeds, `delTraffic`), car lifecycle (idempotent attach, `remTrafficCar`, re-attach under a new id, death with the ground), road binding (snap to a crossing, project back onto the lane, flat pose, graphless ground registers but never places), and halt/idle behaviour (`haltTrafficCross`/`haltTrafficPath`/`clearHalts`, three no-op ticks without a world, reset). Movement needs the frame loop, so it is covered by the in-game run below and not by the suite. |
 | Runtime | `--bench-map ValoCity --bench-time 40 --bench-drive 20` with `SLRR_TRAFFIC_LOG=1`: 20 cars resident at `cap=20` from nine stock templates, moving along their lane at 4.9…6.3 m/s with `along` and the world pose advancing together (edge 1050, `along` 353→458 m, pos −229,955 → −208,1057), `total=26 dropped=6` at t=20, i.e. cars that fall behind the player are retired and replaced instead of accumulating. `drive done`, exit 0. Window captures at the same moment show a taxi and two sedans on the carriageway next to the player. With the spawn band forced out of range (no traffic at all) the player frame at t=10 is identical to the traffic run, so ambient traffic does not perturb the player body. |
-| Status | **Ported**, physics driving, signals, race brain and native vehicle assembly still open |
+| Status | **Ported**, physics driving, race brain and native vehicle assembly still open (signals closed in U2-C) |
+
+### U2-C. The lamp at the junction
+
+U2-B moved cars along their lanes and honoured script closures, but nothing read
+the phase the graph already computed: `RoadRoutes::signal` existed for the route
+queries, and the traffic step never asked. Ambient cars therefore drove through
+every crossing on the map.
+
+**The rule.** `race_traffic_signal_cap(graph, edge, along, speed, clock)` returns
+the speed a lamp allows, or infinity when nothing applies. It is a pure function of
+the graph, which is why the suite can pin it without a scene:
+
+- `-1` unregulated and `2` green: no cap.
+- `0` red: cap `sqrt(2 * a * d)` where `d` is the distance left to the stop line,
+  i.e. the same braking shape the lane spacing already uses, so the car comes to
+  rest exactly at the line, 5 m before the junction.
+- `1` amber: a cap only if the car can still stop (`d > v²/2a + 0.5`). A car that
+  cannot is committed, and stopping it inside the junction is worse than letting
+  it cross.
+- A car already past the line is never capped. A red light must not park a car
+  across the road it is crossing.
+- A crossing link itself is never capped; the junction is not a place to brake.
+- `-2`, a regulated approach whose lamp is missing: a timed stop on the graph's own
+  13 s cycle (5 s stop), never a permanent red — the map is missing a lamp, not
+  closing a road. That policy is the host's, and it is the one decision here that
+  has no original to copy.
+
+**Where it applies.** In the drive step, after the closure check:
+`desired = min(desired, cap)`. A closure outranks a lamp, because a closed lane is
+a wall and a red light is a wait.
+
+**Checked in game.** `SLRR_TRAFFIC_SIGNAL_TRACE=1` counts the lane steps a lamp
+capped, once a second. `--bench-map ValoCity --bench-time 20 --bench-drive 18`
+with the population at its default: 81, 126, 74, 68, 60, 92, 94, 43, 28, 83, 91,
+35, 0, 0, 0, 26, 27, 37 capped steps per second, `drive done`, exit 0. The three
+zero seconds are a stretch of road where no resident was approaching a red; the
+count returns when the band does.
+
+**Tests.** `test_traffic_runtime` 7/7, the new case `signal_stops_at_the_line`
+built on `city.trc` itself: green unlimited, red capped and shrinking as the line
+approaches, zero exactly at the line, unlimited past it, amber stopping a slow car
+30 m out but not a fast one 5.5 m out, crossing links and unregulated lanes
+unlimited. The suite has to call `open_all()` first — the signal heads are ICFG
+`trlight` placements in the ground map and its exterior maps, and a graph built
+without them has no lamps at all, which is also why the corpus test reports 1146
+heads.
+
+**Status: done.** The remaining #180 blocks are U2-D (race brain), U2-E (ROC) and
+U2-F (native vehicle assembly).
 
 ### U2-B.1. Traffic quality and the race transition
 
@@ -538,7 +587,7 @@ concrete incompatibility.
 
 | Item | Upstream | Status | Why |
 |---|---|---|---|
-| Roads / traffic / race AI | #180 | **Partially ported** | U2-A (graph, route queries) and U2-B (ambient traffic: natives, lifecycle, movement, external wheel animation) are in; signals, race brain, ROC and native vehicle assembly are the remaining U2 blocks. |
+| Roads / traffic / race AI | #180 | **Partially ported** | U2-A (graph, route queries), U2-B (ambient traffic) and U2-C (lamps stopping cars) are in; race brain, ROC and native vehicle assembly are the remaining U2 blocks. |
 | Vehicle contacts / dynamics | #205 + #48 | **Deferred** | Upstream replaced the single-car loop with a `ContactVehicle` architecture (shared 120 Hz substeps, mass/inertia ownership, wheel loss, flaps). A subsystem port, not a fix. Phase 2. |
 | RPK descriptor/property cache | #146 | **Deferred** | Changes `by_type_id` to lo16 and `find_entry` semantics plus payload/RSD caches and a `generation()`; must be designed against the B4.1.2 strict-resolution contract. Phase 3.1. |
 | GC finalizer/heap lookup | #200 | **Deferred** | 172 lines of `gc.cpp`; needs its own reachability/finalizer evidence against `VM_GC.md`. Phase 3.2. |

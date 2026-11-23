@@ -42,6 +42,22 @@ void register_traffic_natives(Jvm&, RpkIndex&, SectionMachine&);
 // non-negative (additive, so a caller with its own time base stays consistent).
 void race_traffic_tick(Jvm&, float seconds, double clock_seconds = -1);
 
+// U2-C: the speed a lamp allows a car on `edge` standing `along` metres into
+// it, at `speed`, on the shared phase clock. A finite answer is a cap; the car
+// brakes on the same ramp it uses for lane spacing and comes to rest at the stop
+// line, `kTrafficStopLine` metres before the junction. Infinity means no lamp
+// applies -- unregulated approach, green, or a car that is already committed and
+// must clear the junction instead of stopping on it.
+//
+// The phases are the graph's (`RoadRoutes::signal`): -1 unregulated, -2 a
+// regulated approach whose lamp is missing, 0 red, 1 amber, 2 green. -2 has no
+// lamp to obey, so it is a timed stop on the same 13 s cycle and never a
+// permanent red; that policy is the host's, not the original's.
+float race_traffic_signal_cap(const RoadRoutes&, size_t edge, float along,
+                              float speed, double clock_seconds);
+// The stop line used above, exported for tests and for the native trace.
+constexpr float kTrafficStopLine = 5.f;
+
 // Road closures (`haltTrafficPath`/`haltTrafficCross`/`clearHalts`).
 void race_halt_path(const RpkIndex&, void*, const RoadPoint&, const RoadPoint&);
 void race_halt_cross(const RpkIndex&, void*, const RoadPoint&, float seconds);

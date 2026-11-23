@@ -8,9 +8,9 @@
 // setTrafficCarBehaviour @ 0x00484BD0).
 //
 // Deliberately not ported, because this block must not grow into U2-C/D/F:
-//   * signal phases that stop cars (U2-C). The crossing expiry map and the
-//     shared clock exist, so the consumer can be added without reshaping the
-//     runtime, but nothing here reads `RoadRoutes::signal` yet;
+//   * signal phases that stop cars: U2-C, done -- `race_traffic_signal_cap`
+//     reads the graph's phase and caps the lane speed, so a car rests at the stop
+//     line instead of driving through the crossing;
 //   * race bot commands and physics driving of traffic (U2-D). Every car this
 //     module owns is driven through external motion, never through the drive
 //     model, so it cannot fight Race Brain or the vehicle dynamics;
@@ -419,6 +419,13 @@ void remove(int32_t id) {
     }
   }
 }
+// Metres before the junction where a lamp's stop line sits, and the braking the
+// cap is built from. Long enough that a car stopped at the line does not clip the
+// crossing traffic, short enough that the stop reads as being at the light.
+constexpr float kTrafficBrake = 5.f;       // m/s^2, the drive loop's own order
+constexpr double kTrafficLampCycle = 13.0; // matches RoadRoutes::signal
+constexpr double kTrafficLampStop = 5.0;
+
 bool blocked(const Population &p, const RoadRoutes::Edge &e) {
   for (auto id : e.roads)
     if (p.blocked.contains(id))
@@ -909,6 +916,50 @@ const Model *weighted_model(const Population &p) {
 }
 }  // namespace
 
+// U2-C: the lamp at the junction ahead. Nothing stopped a car at a red light
+// before this: the graph computed the phase for the route queries and the traffic
+// runtime never asked, so ambient cars drove through every crossing on the map.
+//
+// Two decisions are worth stating. A car that is already past the line is let go
+// rather than frozen inside the junction -- a red light must not park a car
+// across the road it is crossing. And an approach whose lamp is missing (-2) is a
+// timed stop on the graph's own cycle rather than a permanent red, because the
+// map is missing a lamp, not closing a road.
+float race_traffic_signal_cap(const RoadRoutes &graph, size_t edge, float along,
+                              float speed, double clock_seconds) {
+  const auto &edges = graph.traffic_edges();
+  if (edge >= edges.size())
+    return std::numeric_limits<float>::infinity();
+  const auto &e = edges[edge];
+  // A crossing link is the junction itself: never brake in the middle of it.
+  if (e.crossing)
+    return std::numeric_limits<float>::infinity();
+  const int phase = graph.traffic_signal(edge, clock_seconds);
+  if (phase < 0 && phase != -2)
+    return std::numeric_limits<float>::infinity(); // unregulated
+  if (phase == 2)
+    return std::numeric_limits<float>::infinity(); // green
+  // Strictly past the line is committed; standing exactly on it is not, and
+  // that is the state the car is supposed to rest in.
+  const float remaining = e.length - kTrafficStopLine - along;
+  if (remaining < 0.f)
+    return std::numeric_limits<float>::infinity();
+  bool stop = true;
+  if (phase == 1) {
+    // Amber: stop only if the car can still come to rest before the line. A car
+    // that cannot is committed, and stopping mid-junction is worse than crossing.
+    const float need = speed * speed / (2.f * kTrafficBrake);
+    stop = remaining > need + .5f;
+  } else if (phase == -2) {
+    stop = std::fmod(std::max(0., clock_seconds), kTrafficLampCycle) <
+           kTrafficLampStop;
+  }
+  if (!stop)
+    return std::numeric_limits<float>::infinity();
+  // The same shape the lane spacing uses -- sqrt(2 * a * d) -- so the last metres
+  // are walked rather than driven and nothing overshoots the line.
+  return std::sqrt(2.f * kTrafficBrake * remaining);
+}
 void race_traffic_forget(void *key) {
   populations.erase(key);
   std::vector<int32_t> ids;
@@ -1319,6 +1370,13 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
     for (const auto &e : registrations)
       if (e.second.ground == key)
         ids.push_back(e.first);
+    // Diagnostics, off unless asked for: how many lane steps a lamp capped in
+    // the last second. A red light is invisible in the frame log -- it changes
+    // no cost -- so the only way to confirm the consumer runs in game is to
+    // count the caps.
+    static const bool lamp_trace = std::getenv("SLRR_TRAFFIC_SIGNAL_TRACE") != nullptr;
+    static int lamp_stops = 0;
+    static double lamp_report = 0;
     std::sort(ids.begin(), ids.end());
     // Population target for the network around the player, from the slider and
     // the reachable lane length. A straight street holds more cars than the same
@@ -1405,6 +1463,12 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       if (r.owned) ++owned_count;
     }
     prof_add(kProfRetire, t);
+    if (lamp_trace && clock_seconds - lamp_report >= 1.0) {
+      lamp_report = clock_seconds;
+      std::fprintf(stderr, "[traffic-lamp] capped_steps=%d t=%.1f\n",
+                   lamp_stops, clock_seconds);
+      lamp_stops = 0;
+    }
     if (profiling()) {
       prof().active = visible;
       prof().cap = cap;
@@ -1442,6 +1506,16 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       float desired = r.cruise;
       if (blocked(*p, e))
         desired = 0;
+      // U2-C: the lamp at the junction ahead caps the speed; a closure outranks
+      // it, because a closed lane is a wall and a red light is a wait.
+      if (desired > 0) {
+        const float lamp = race_traffic_signal_cap(
+            *graph, r.edge, r.along, r.speed, clock_seconds);
+        if (lamp < desired) {
+          desired = lamp;
+          if (lamp_trace) ++lamp_stops;
+        }
+      }
       // Keep a gap to the car ahead on the same lane. This is spacing, not
       // collision: the runtime only slows down, it never applies impulses.
       for (const auto &entry : registrations) {

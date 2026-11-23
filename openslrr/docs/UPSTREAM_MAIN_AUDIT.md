@@ -65,7 +65,7 @@ block is in section 3.
 | Route queries: `findRoute`, `getRouteLength/Pos/Dist`, `alignToRoad`, `getStartDirection`, `getNearestCross` | **yes** | 38 hits in `race_runtime.*`, `test_road_routes.cpp` |
 | Road model from `city.trc` (edges, crossings, signal heads) | **yes** | `RoadRoutes`, `traffic_signal`, `traffic_project` — 73 hits |
 | Population, lifecycle, retirement by distance, lane movement, externally animated wheels | **yes** | `traffic_runtime.cpp`, `traffic_streaming.cpp` (ours, not upstream's design) |
-| Crossing permission and the signal phase consumer | **no** | `traffic_signal` computes the phase; nothing consumes it to stop a car. This is U2-C. |
+| Crossing permission and the signal phase consumer | **yes** | `race_traffic_signal_cap` in `traffic_runtime.cpp` caps the lane at the stop line (26…126 capped lane steps a second in a driven run) — U2-C, closed after this audit's first pass |
 | Race brain / rivals driving (`race_brain_command`, finish-plane runout) | **no** | zero hits for `race_brain`; U2-D |
 | ROC track / `race.spl` | **no** | zero hits for `ROC_track` or `.spl`; U2-E |
 | Native vehicle assembly for traffic (physics-driven template cars) | **no** | U2-F |

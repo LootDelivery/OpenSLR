@@ -19,6 +19,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -442,12 +443,97 @@ SLRR_TEST(race_section_clears_ambient) {
   std::puts("PASS a race section retires ambient traffic only and the city restores it");
 }
 
+// U2-C: a lamp at the junction ahead caps the lane speed, and a car resting at
+// the line is the point of it. Ambient traffic drove through every crossing on
+// the map before this, because the graph computed the phase for the route
+// queries and the runtime never asked.
+//
+// The cap is a pure function of the graph, so this pins the whole rule without a
+// scene: green and unregulated answers are unlimited, red approaches zero as the
+// line is reached, amber only stops a car that can still come to rest, and a car
+// already inside the junction is never frozen on it.
+SLRR_TEST(signal_stops_at_the_line) {
+  Fixture f;
+  if (!open(f)) {
+    std::puts("SKIP retail install not found (set SLRR_GAME_ROOT)");
+    return;
+  }
+  // Every pack open, as at boot: the signal heads are ICFG placements in the
+  // ground map and its exterior maps, and `race_ground_roads` can only bind them
+  // when those packs are readable.
+  f.packs.open_all();
+  auto graph = race_ground_roads(f.packs, &f.ground);
+  SLRR_REQUIRE(graph && !graph->traffic_edges().empty());
+  SLRR_REQUIRE(!graph->signals().empty());
+  const auto& edges = graph->traffic_edges();
+  constexpr float inf = std::numeric_limits<float>::infinity();
+  auto cap = [&](size_t edge, float along, float speed, double clock) {
+    return race_traffic_signal_cap(*graph, edge, along, speed, clock);
+  };
+  // A lane whose approach is regulated, plus a clock that shows red and one that
+  // shows green for it. Both exist on city.trc or the map has no signals at all.
+  size_t lane = edges.size();
+  double red = -1, green = -1;
+  for (size_t i = 0; i < edges.size() && lane == edges.size(); ++i) {
+    if (edges[i].crossing || edges[i].length < 12.f)
+      continue;
+    for (double t = 0; t < 26.0; t += .5) {
+      const int phase = graph->traffic_signal(i, t);
+      if (phase == 0 && red < 0) red = t;
+      if (phase == 2 && green < 0) green = t;
+    }
+    if (red >= 0 && green >= 0) lane = i;
+    else { red = green = -1; }
+  }
+  SLRR_REQUIRE(lane < edges.size());
+  const float length = edges[lane].length;
+  const float speed = 12.f;
+  // Green: nothing to obey.
+  SLRR_REQUIRE(cap(lane, length - 20.f, speed, green) == inf);
+  // Red: a cap, and it shrinks as the line is approached. The line is
+  // kTrafficStopLine before the end, so 20 m out allows more than 2 m out.
+  const float far = cap(lane, length - 20.f, speed, red);
+  const float near = cap(lane, length - kTrafficStopLine - 2.f, speed, red);
+  SLRR_REQUIRE(std::isfinite(far) && far > 0.f);
+  SLRR_REQUIRE(std::isfinite(near) && near > 0.f);
+  SLRR_REQUIRE(far > near);
+  // At the line the allowance is zero, i.e. the car rests there.
+  SLRR_REQUIRE(cap(lane, length - kTrafficStopLine, speed, red) == 0.f);
+  // Past the line the car is committed and must clear the junction, not stop on
+  // it -- a red light that parks a car across the road it is crossing is a crash.
+  SLRR_REQUIRE(cap(lane, length - 1.f, speed, red) == inf);
+  // Amber stops a car that can still come to rest (slow, far out) and releases
+  // one that cannot (fast, close).
+  double amber = -1;
+  for (double t = 0; t < 26.0 && amber < 0; t += .5)
+    if (graph->traffic_signal(lane, t) == 1) amber = t;
+  if (amber >= 0) {
+    SLRR_REQUIRE(std::isfinite(cap(lane, length - 30.f, 5.f, amber)));
+    SLRR_REQUIRE(cap(lane, length - kTrafficStopLine - .5f, 25.f, amber) == inf);
+  }
+  // A crossing link is the junction itself: never braked on.
+  for (size_t i = 0; i < edges.size(); ++i)
+    if (edges[i].crossing) {
+      SLRR_REQUIRE(cap(i, edges[i].length * .5f, speed, red) == inf);
+      break;
+    }
+  // An unregulated lane has no cycle at all.
+  for (size_t i = 0; i < edges.size(); ++i)
+    if (!edges[i].crossing && graph->traffic_signal(i, red) == -1) {
+      SLRR_REQUIRE(cap(i, edges[i].length * .5f, speed, red) == inf);
+      break;
+    }
+  gameref_clear();
+  std::puts("PASS a red light caps the lane at the stop line and never freezes a car in the junction");
+}
+
 int main() {
   const standalone::Test tests[] = {template_registration,
                                     car_lifecycle,
                                     road_binding,
                                     halts_and_idle_tick,
                                     junction_continuity,
-                                    race_section_clears_ambient};
+                                    race_section_clears_ambient,
+                                    signal_stops_at_the_line};
   return standalone::run("traffic_runtime", tests);
 }
