@@ -1,6 +1,5 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/part_runtime.hpp"
-#include "slrr/paint_texture.hpp"
 #include "slrr/pedestrian_lines.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/gameref.hpp"
@@ -244,8 +243,6 @@ float ped_backlog = 0.f;
 VehicleHudLayout hud_preview;
 std::string hud_preview_directory;
 constexpr double kPhysicsTick = 1.0 / physics::VehicleDynamics::update_frequency;
-// Simulation seconds, for the drive trace only.
-static double engine_trace_clock = 0;
 constexpr unsigned kMaxPhysicsTicksPerFrame = 4;
 double physics_elapsed = 0;
 std::unordered_map<uint32_t, std::shared_ptr<const PartConfig>> configurations;
@@ -1507,8 +1504,6 @@ bool part_command(Object *part, const std::string &command) {
     int mode;
     if (!rec || !(input >> mode)) return false;
     rec->transmission = mode;
-    if (std::getenv("SLRR_DRIVE_TRACE"))
-      std::fprintf(stderr, "[drive-trace] transmission command mode=%d\n", mode);
     return true;
   }
   if (verb == "damage_multiplier") {
@@ -1698,43 +1693,6 @@ Object *part_render_car(void *key) {
     if (!ref) return nullptr;
     key = ref->parent;
   }
-  return nullptr;
-}
-// A Painter texture belongs to the parts that show it. One that no live part
-// uses any more can be freed; a copied texture may be shared by two parts, which
-// is why the caller asks before releasing.
-bool texture_in_use(uint32_t texture, const Object *except) {
-  for (const auto &entry : records)
-    if (entry.first != except && entry.second.state.texture == texture)
-      return true;
-  return false;
-}
-bool part_paint_textures(Object *part, uint32_t *current, uint32_t *source) {
-  auto *rec = record(part);
-  if (!rec)
-    return false;
-  if (current)
-    *current = rec->state.texture;
-  if (source)
-    *source = rec->config->texture;
-  return true;
-}
-bool part_set_paint_texture(Object *part, uint32_t texture) {
-  auto *rec = record(part);
-  if (!rec || !rec->config->texture)
-    return false;
-  paint_one(canonical(part), texture);
-  return true;
-}
-bool part_paint_texture_shared(uint32_t texture, Object *part) {
-  return texture_in_use(texture, canonical(part));
-}
-Object *part_showing_texture(uint32_t texture) {
-  if (!texture)
-    return nullptr;
-  for (const auto &entry : records)
-    if (entry.second.state.texture == texture)
-      return entry.first;
   return nullptr;
 }
 bool part_destroy(Object *part) {
@@ -2406,60 +2364,6 @@ void update_steering(Record &rec, bool controls) {
 }
 
 void configure_drive(Object *chassis, Record &rec, bool controlled) {
-  // Chassis.updatevariables: C_drag = fully_stripped_drag minus the
-  // drag_reduction of every installed body part, floored at zero. The EXE
-  // applies it at 0x456A83 as -C |v| v above 1 m/s about drag_center, on
-  // every scripted car, driven or not -- so this runs before the
-  // controlled-car gate below. Without it a car had no aerodynamic drag.
-  {
-    auto &aero = rec.dynamics.aero;
-    aero.drag = 0;
-    aero.drag_center = {};
-    // The script's own formula, because C_drag is not on the object in this
-    // host: Chassis.updatevariables is what creates it, and it is not running
-    // here (the field reads 0 while fully_stripped_drag reads 0.55 on the same
-    // car). So: fully_stripped_drag minus each installed part's drag_reduction.
-    float drag = comp(chassis, "C_drag");
-    const float stripped = comp(chassis, "fully_stripped_drag");
-    if (!(drag > 0.f) && stripped > 0.f) {
-      drag = stripped;
-      float reduced = 0.f;
-      int parts = 0;
-      for (const auto &installed : part_installed_tree(chassis)) {
-        if (!installed.object || installed.object == chassis)
-          continue;
-        const float reduction = comp(installed.object, "drag_reduction");
-        if (std::isfinite(reduction) && reduction != 0.f) {
-          reduced += reduction;
-          ++parts;
-        }
-      }
-      if (std::getenv("SLRR_DRIVE_TRACE"))
-        std::fprintf(stderr,
-                     "[drive-trace] aero drag_reduction parts=%d sum=%.4f\n",
-                     parts, static_cast<double>(reduced));
-      drag = std::max(0.f, drag - reduced);
-    }
-    if (std::getenv("SLRR_DRIVE_TRACE"))
-      std::fprintf(stderr,
-                   "[drive-trace] aero C_drag=%.4f stripped=%.4f\n",
-                   static_cast<double>(drag),
-                   static_cast<double>(stripped));
-    if (std::isfinite(drag) && drag > 0.f) {
-      // SLRR_AERO_DRAG=0 runs the same build without drag, for an A/B.
-      static const bool enabled = [] {
-        const char *e = std::getenv("SLRR_AERO_DRAG");
-        return !(e && std::atof(e) == 0.0);
-      }();
-      aero.drag = enabled ? drag : 0.f;
-      if (auto *center = part_field(chassis, "drag_center")) {
-        const physics::Vec3 point{comp(center, "x"), comp(center, "y"),
-                                  comp(center, "z")};
-        if (point.finite())
-          aero.drag_center = point;
-      }
-    }
-  }
   auto &drive = rec.dynamics.drive;
   drive.torque = {};
   if (!controlled) {
@@ -2491,33 +2395,10 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.abs_strength = rec.abs_strength;
   drive.launch_help = rec.launch_help;
   drive.differential_lock = std::clamp(comp(chassis, "diff_lock"), 0.f, 1.f);
-  // Player aid, off unless chosen; the physics reads 0 as "no launch hold".
-  drive.launch_rpm = host_game_options().driving.launch_rpm;
-  // The original's coupling: ClutchF caps the torque the clutch passes, and the
-  // drive path itself is the recovered one unless the host model is asked for.
-  const float clutch_force = comp(chassis, "ClutchF");
-  drive.clutch_force = std::isfinite(clutch_force) && clutch_force > 0.f
-                           ? clutch_force
-                           : 500.0;
-  drive.faithful = host_game_options().driving.original_drive;
-  drive.converter_stall = host_game_options().driving.converter_stall;
   drive.clutch = controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 0.f;
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
-  // `engine_inertia` IS the recovered physics+0xE0, not a number to be rescaled: the
-  // MC GT declares 13.5 and the live game reads 13.5162 on a car of that class. The old
-  // `.28 + .01*x` shrank it twelvefold, which made the two-inertia coupling four times
-  // too stiff (k = 0.73 against a recovered 0.14-0.31) and let it yank the engine to the
-  // wheels -- the revs falling to idle mid-spin.
-  {
-    const float declared = comp(chassis, "engine_inertia");
-    drive.inertia = declared > 0 ? double(declared) : .38;
-    drive.host_inertia = .28 + .01 * std::max(0.f, declared);
-  }
-  // Recovered engine losses (3.5) and the rpm that scales them.
-  drive.friction_fwd = comp(chassis, "engine_friction_fwd");
-  drive.friction_rev = comp(chassis, "engine_friction_rev");
-  drive.max_rpm = comp(chassis, "maxRPM");
+  drive.inertia = .28 + .01 * std::max(0.f, comp(chassis, "engine_inertia"));
   drive.torque = [dyno](double rpm) { return dyno_sample(dyno, float(rpm), 0, false); };
   drive.engaged = rec.physics_released;
   drive.reverse = controls && in.drive_reverse;
@@ -2550,83 +2431,17 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
       }
     }
   }
-  {
-    // One line, once per car: the gearing and mass a launch's traction
-    // arithmetic needs. Without them "it does not spin" is an opinion.
-    static Object* dumped = nullptr;
-    if (std::getenv("SLRR_DRIVE_TRACE") && chassis != dumped &&
-        drive.ratios[1] != 0) {
-      dumped = chassis;
-      std::fprintf(stderr,
-                   "[drive-trace] car limit=%.0f idle=%.0f cf=%.0f mass=%.0f "
-                   "ratio1=%.2f driven=%zu\n",
-                   drive.limit, drive.idle, drive.clutch_force,
-                   double(comp(chassis, "mass")), drive.ratios[1],
-                   drive.wheels.size());
-      // The traction arithmetic needs what the tyres and the driven wheels
-      // actually are: a launch with no spin is either below the tyre or the
-      // drive never reaches it.
-      for (size_t i = 0; i < rec.wheels.size() && i < 4; ++i) {
-        const auto& wheel = rec.wheels[i];
-        std::fprintf(stderr,
-                     "[drive-trace] wheel %zu drive=%.2f radius=%.3f \n"
-                     "                    friction=%.2f long_grip=%.2f "
-                     "lat_grip=%.2f maxload=%.0f\n",
-                     i, double(wheel.drive), double(wheel.radius),
-                     double(wheel.friction), double(wheel.frictn_x),
-                     double(wheel.sliction), double(wheel.max_load));
-      }
-      // What the engine actually gives the driveline, sampled from the same curve
-      // the drive uses. Without it, "the V8 feels like an inline four" is a
-      // comparison of two numbers nobody has seen.
-      double peak_torque = 0, peak_rpm = 0, peak_hp = 0;
-      if (drive.torque) {
-        for (double rpm = drive.idle; rpm <= drive.limit; rpm += 50.0) {
-          const double torque = drive.torque(rpm);
-          if (torque > peak_torque) {
-            peak_torque = torque;
-            peak_rpm = rpm;
-          }
-          peak_hp = std::max(peak_hp, torque * rpm / 9549.0 * 1.34102);
-        }
-      }
-      std::fprintf(stderr,
-                   "[drive-trace] engine peak %.0f Nm @ %.0f rpm, %.0f hp\n",
-                   peak_torque, peak_rpm, peak_hp);
-    }
-  }
-
   rec.horn_down = horn;
   for (size_t i = 0; i < drive.wheels.size(); ++i) {
     auto &out = drive.wheels[i];
     const auto &wheel = rec.wheels[i];
     out.weight = std::max(0.f, wheel.drive);
     out.brake = std::max(0.f, wheel.brake);
-    // No shipped wheel script writes hbrake, so every car's handbrake torque was zero
-    // and the control did nothing at all -- measured on the stand as 60 -> 58.6 km/h
-    // with it held for 4 s, and reported by the driver long before that. Fall back to
-    // the part's own rear brake torque rather than inventing a value: the handbrake acts
-    // on the same rear brakes. A script that does provide hbrake still wins.
-    if (wheel.hbrake > 0.f) {
-      out.handbrake = wheel.hbrake;
-    } else {
-      out.handbrake = i >= 2 ? std::max(0.f, wheel.brake) : 0.f;
-    }
+    out.handbrake = std::max(0.f, wheel.hbrake);
     out.bearing = std::max(0.f, wheel.bearing);
     out.rolling_resistance = std::max(0., wheel.roll_res - .003625);
-    // Assign by name: this struct was reordered upstream (load_smoothing and
-    // longitudinal_grip swapped places), and the positional form silently put
-    // the longitudinal grip (1.0) into the load smoothing and the smoothing
-    // (0.4) into the longitudinal grip. That cost 60% of the driving force and
-    // made the rear axle let go, from one aggregate initializer.
-    out.tyre.friction = wheel.friction;
-    out.tyre.stiffness = wheel.stiffness;
-    out.tyre.sliction = wheel.sliction;
-    out.tyre.maximum_load = wheel.max_load;
-    out.tyre.load_smoothing = wheel.load_smooth;
-    out.tyre.longitudinal_grip = wheel.frictn_x;
-    // setCPatch stores the sine of the scripted patch angle.
-    out.tyre.patch_angle = std::asin(std::clamp(wheel.cpatch_ang, 0.f, 1.f));
+    out.tyre = {wheel.friction, wheel.stiffness, wheel.sliction,
+                wheel.max_load, wheel.frictn_x, wheel.load_smooth};
   }
 }
 
@@ -3791,80 +3606,6 @@ void advance_chassis_tick() {
       rec.mileage += static_cast<float>(std::hypot(delta.x, delta.z) * .1);
     }
     rec.engine_running = rec.dynamics.drive.torque && rec.dynamics.engine_running;
-    {
-      // Drive trace: what the engine is allowed to do and what it is doing.
-      // `limit` is the rpm the solver refuses to pass, `gear` the engaged ratio
-      // index, `torque` the net curve value the drive uses at that rpm.
-      static const bool trace = std::getenv("SLRR_DRIVE_TRACE") != nullptr;
-      static double next_report = 0;
-      // A slide is over in a few hundred milliseconds and 0.5 s sampling misses it
-      // entirely, which is why "the wheels stop and the revs fall in a spin" could not be
-      // read out of a log. While the car is moving sideways -- body velocity against the
-      // heading -- report every frame instead, with the numbers that decide it.
-      const auto &ds = rec.dynamics;
-      const double forward_speed_now = -ds.body.orientation.inverse_rotate(ds.body.velocity).z;
-      const double sideways = std::abs(ds.body.orientation.inverse_rotate(ds.body.velocity).x);
-      // A hot window, not a gate on the current angle: the reported failure is what happens
-      // AFTER the car is spun, and by then the velocity is nearly all sideways and the
-      // forward component has collapsed. Gating on `forward > 4` ended the log exactly
-      // there -- the first run missed the event for that reason.
-      static double slide_until = -1;
-      const double speed_now = std::hypot(ds.body.velocity.x, ds.body.velocity.z);
-      if (speed_now > 3.0 && sideways > 1.5)
-        slide_until = engine_trace_clock + 4.0;
-      const bool sliding = engine_trace_clock < slide_until;
-      if (trace && sliding) {
-        const double ratio = ds.drive.ratios[std::max(1, ds.gear)];
-        std::fprintf(stderr,
-                     "[slide-trace] t=%.2f rpm=%.0f gear=%d thr=%.2f fwd=%.1f side=%.1f "
-                     "spin=%.1f spinL=%.1f F=%.0f load=%.0f ratio=%.2f shaft=%.1f "
-                     "gap=%.1f running=%d clutch=%.2f gas=%.2f\n",
-                     engine_trace_clock, ds.engine_omega * 9.54929658551372, ds.gear,
-                     static_cast<double>(ds.drive.throttle), forward_speed_now, sideways,
-                     (ds.state[2].spin + ds.state[3].spin) * .5, ds.state[2].spin,
-                     std::abs(ds.state[2].tire_force.longitudinal +
-                              ds.state[3].tire_force.longitudinal),
-                     ds.state[2].force + ds.state[3].force, ratio,
-                     (ds.state[2].spin + ds.state[3].spin) * .5 * ratio,
-                     ds.engine_omega - (ds.state[2].spin + ds.state[3].spin) * .5 * ratio,
-                     ds.engine_running ? 1 : 0, ds.drive.clutch,
-                     static_cast<double>(ds.drive.throttle));
-      }
-      if (trace && (chassis == controlled || rec.dynamics.drive.throttle > .5) &&
-          engine_trace_clock >= next_report) {
-        next_report = engine_trace_clock + .5;
-        const auto &d = rec.dynamics;
-        std::fprintf(stderr,
-                     "[drive-trace] t=%.1f rpm=%.0f limit=%.0f idle=%.0f gear=%d "
-                     "throttle=%.2f kph=%.1f torque=%.1f running=%d "
-                     "mode=%d(auto=%d,clutch=%d) faith=%d cf=%.0f ratio=%.2f "
-                     "spin=%.1f slip=%.1f force=%.0f load=%.0f\n",
-                     engine_trace_clock, d.engine_omega * 9.54929658551372,
-                     d.drive.limit, d.drive.idle, d.gear,
-                     static_cast<double>(d.drive.throttle),
-                     std::hypot(d.body.velocity.x, d.body.velocity.z) * 3.6,
-                     d.drive.torque ? d.drive.torque(d.engine_omega * 9.54929658551372) : 0.0,
-                     d.engine_running ? 1 : 0, rec.transmission,
-                     d.drive.automatic_shift ? 1 : 0, d.drive.auto_clutch ? 1 : 0,
-                     d.drive.faithful ? 1 : 0, d.drive.clutch_force,
-                     d.drive.ratios[d.gear],
-                     (d.state[2].spin + d.state[3].spin) * .5,
-                     std::abs((d.state[2].spin + d.state[3].spin) * .5) -
-                         std::hypot(d.body.velocity.x, d.body.velocity.z),
-                     std::abs(d.state[2].tire_force.longitudinal +
-                              d.state[3].tire_force.longitudinal),
-                     // Driven axle load: the other half of "why no wheelspin".
-                     // Thrust against tyre = friction * this.
-                     d.state[2].force + d.state[3].force);
-        {
-          const double ratio = d.drive.ratios[std::max(1, d.gear)];
-          const double inv_d = ratio != 0 ? d.drive.driveline_inertia / (ratio * ratio) : 0;
-          const double k = inv_d / (d.drive.coupling_ratio * std::max(1e-9, d.drive.inertia) + inv_d);
-          std::fprintf(stderr, "[drive-trace] j_engine=%.3f j_drive=%.1f k=%.3f\n",
-                       d.drive.inertia, d.drive.driveline_inertia, k);
-        }
-      }
-    }
     if (!finite_frame(rec.dynamics.body.frame()))
       throw std::runtime_error("non-finite chassis output");
     if (steps) {
@@ -4802,7 +4543,6 @@ void part_physics_advance(double seconds) {
   }
 
   // Ignore excess time after a long stall so the next frame can still render.
-  engine_trace_clock += std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
   physics_elapsed += std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
   constexpr double tolerance = kPhysicsTick * 1e-10;
   if (physics_elapsed + tolerance >= kPhysicsTick) {
@@ -5459,19 +5199,6 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
         write_dyno(self, "RPM_maxTorque", stats.torque_rpm);
         write_dyno(self, "maxHP", stats.max_hp);
         write_dyno(self, "RPM_maxHP", stats.hp_rpm);
-        if (std::getenv("SLRR_DYNO_TRACE")) {
-          // One line per recalculation: the number the physics will use, next to
-          // the engine's own displacement and the rpm it peaks at.
-          std::fprintf(stderr,
-                       "[dyno-trace] disp=%.2fL cr=%.2f torque=%.1f Nm @%.0f "
-                       "power=%.1f hp @%.0f\n",
-                       static_cast<double>(stats.displacement),
-                       static_cast<double>(stats.compression),
-                       static_cast<double>(stats.max_torque),
-                       static_cast<double>(stats.torque_rpm),
-                       static_cast<double>(stats.max_hp),
-                       static_cast<double>(stats.hp_rpm));
-        }
         const auto rpm = fields.find("maxRPM");
         if (rpm == fields.end() || !(rpm->second > 0.f))
           write_dyno(self, "maxRPM", stats.maximum_rpm);
@@ -5560,11 +5287,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     // 0, and anything that is not a texture record, leaves the part as it
     // is. A loaded car writes 0 for an unpainted piece and a factory color
     // for the rest; clearing the render there made the panels vanish.
-    // A Painter texture has an id outside every pack, so the pack lookup below
-    // can never resolve it. It is assigned by id, like the Painter does.
-    const bool painted = paint_texture_exists(id);
-    const RpkEntry *entry = !painted && id && index ? index->resolve(id) : nullptr;
-    if (!painted && (!entry || entry->typeof_ != 7))
+    const RpkEntry *entry = id && index ? index->resolve(id) : nullptr;
+    if (!entry || entry->typeof_ != 7)
       return Value::make_int(old);
     p->state.texture = static_cast<int>(id);
     for (auto *render : p->renders)

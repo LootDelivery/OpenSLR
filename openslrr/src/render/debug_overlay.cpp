@@ -120,36 +120,6 @@ void draw_tuning(Jvm* vm) {
       host_game_options_set_steering_help(*vm, help / 100.f);
     ImGui::SetItemTooltip("Saved in Game Options. Slows keyboard steering at speed "
                           "and helps countersteer during a slide.");
-    float launch = host_game_options().driving.launch_rpm * 100.f;
-    if (ImGui::SliderFloat("Clutch slip revs", &launch, 10.f, 100.f, "%.0f%%",
-                           ImGuiSliderFlags_NoInput))
-      host_game_options_set_launch_rpm(*vm, launch / 100.f);
-    ImGui::SetItemTooltip("Saved in Game Options. Only used when the original "
-                          "coupling below is off: the host model holds the engine "
-                          "at this share of the rev limit while the clutch slips.");
-    ImGui::SameLine();
-    bool original_drive = host_game_options().driving.original_drive;
-    if (ImGui::Checkbox("Original drive coupling", &original_drive))
-      host_game_options_set_original_drive(*vm, original_drive);
-    ImGui::SameLine();
-    bool drive_hud = host_game_options().driving.drive_hud;
-    if (ImGui::Checkbox("Drive readout", &drive_hud)) {
-      auto driving = host_game_options().driving;
-      driving.drive_hud = drive_hud;
-      host_game_options_set_drive_hud(*vm, drive_hud);
-    }
-    ImGui::SetItemTooltip("Speed, rpm and gear in the corner while driving.");
-    float stall = host_game_options().driving.converter_stall * 100.f;
-    ImGui::SetNextItemWidth(160.f);
-    if (ImGui::SliderFloat("Converter stall", &stall, 10.f, 100.f, "%.0f%%")) {
-      host_game_options_set_converter_stall(*vm, stall / 100.f);
-    }
-    ImGui::SetItemTooltip("Where full throttle holds the engine, as a share of the "
-                          "rev limit. Higher flares the revs harder at a launch.");
-    ImGui::SetItemTooltip("On by default. Thrust from the engine torque with ClutchF "
-                          "capping the clutch and no limit on the engine -- the "
-                          "original's contract. Off: the host's crank-inertia slip "
-                          "model.");
     ImGui::SeparatorText("Session");
     ImGui::Text("Simulation time: %.2f s", vm->sim_time());
     float warp = vm->time_warp(-1.f);

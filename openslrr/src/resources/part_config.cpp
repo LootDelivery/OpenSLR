@@ -90,16 +90,6 @@ PartMatrix part_matrix_inverse_rigid(const PartMatrix &m) {
     out[12 + r] = -(out[r] * m[12] + out[4 + r] * m[13] + out[8 + r] * m[14]);
   return out;
 }
-float cockpit_needle_angle(const CockpitNeedle &needle, double value) {
-  if (!std::isfinite(value))
-    value = 0;
-  float angle = static_cast<float>(value) * needle.factor + needle.offset;
-  if (angle < needle.low)
-    angle = needle.low;
-  else if (angle > needle.high)
-    angle = needle.high;
-  return std::isfinite(angle) ? angle : needle.offset;
-}
 bool part_parked_spring_length(float rest, float minimum, float maximum,
                                float force, float mass_on_wheel,
                                float &length) {
@@ -110,23 +100,6 @@ bool part_parked_spring_length(float rest, float minimum, float maximum,
   const float sag = mass_on_wheel * 9.81f / force;
   length = std::clamp(rest - sag, low, high);
   return true;
-}
-
-namespace {
-// The SLRR method's exponents: 0.666 for surfaces, 0.667 for wings.
-bool slrr_method(const PartWing &wing) {
-  return std::abs(wing.exponent - .6665f) < .002f;
-}
-} // namespace
-
-bool part_wing_is_airfoil(const PartWing &wing) {
-  return wing.type == 5 || (wing.type == 4 && std::abs(wing.exponent - .667f) < 5e-4f);
-}
-
-float part_wing_area(const PartWing &wing) {
-  if (slrr_method(wing))
-    return wing.area / (part_wing_is_airfoil(wing) ? 90.f : 30.f);
-  return wing.area / 1.27f;
 }
 
 bool part_slot_matrix(const PartConfig &config, const PartSlot &slot,
@@ -224,24 +197,6 @@ PartConfig parse_part_config(const std::string &source,
           item.defined = true;
           out.hud[slot] = std::move(item);
         }
-      } else if (command == "cockpit_rpm" || command == "cockpit_speed") {
-        // The original scanner keeps the defaults of every field after the
-        // first it cannot read. Without a render id there is no pin to draw,
-        // so a line shorter than the pose and id is reported as unknown.
-        if (t.size() < 8) {
-          out.unknown.push_back(raw);
-          continue;
-        }
-        const bool rpm = command == "cockpit_rpm";
-        CockpitNeedle item;
-        item.factor = rpm ? -0.0005f : -0.02f;
-        item.pose = pose(t);
-        item.resource = rid(t[7]);
-        float *fields[] = {&item.offset, &item.factor, &item.low, &item.high};
-        for (size_t i = 0; i < 4 && 8 + i < t.size(); ++i)
-          *fields[i] = number(t, 8 + i);
-        item.defined = item.resource != 0;
-        out.cockpit[static_cast<size_t>(rpm ? CockpitGauge::Rpm : CockpitGauge::Speed)] = item;
       } else if (command == "slot") {
         open_wheel = -1;
         PartSlot slot;
@@ -342,12 +297,6 @@ PartConfig parse_part_config(const std::string &source,
         open_wheel = -1;
         for (int i = 0; i < 3; ++i) out.pedals[i] = number(t, 1 + i);
         out.has_pedals = true;
-      } else if (command == "shifter" && t.size() >= 4) {
-        open_wheel = -1;
-        for (int i = 0; i < 3; ++i) out.shifter[i] = number(t, 1 + i);
-      } else if (command == "sfx_loop" && t.size() >= 2) {
-        open_wheel = -1;
-        out.sfx_loop = rid(t[1]);
       } else if (command == "stockpart") {
         open_wheel = -1;
         out.stock.push_back(rid(t.at(1)));
@@ -382,11 +331,7 @@ PartConfig parse_part_config(const std::string &source,
           deformable_pose = pose(t, 2);
       } else if (command == "flags" && !out.renders.empty())
         out.renders.back().flags |= static_cast<uint32_t>(integer(t, 1));
-      else if (command == "lods") {
-        out.lod_sizes.clear();
-        for (size_t i = 2; i < t.size(); ++i) out.lod_sizes.push_back(number(t, i));
-        if (!std::is_sorted(out.lod_sizes.begin(), out.lod_sizes.end())) out.lod_sizes.clear();
-      } else if (command == "lod" && !out.renders.empty()) {
+      else if (command == "lod" && !out.renders.empty()) {
         out.renders.back().lod_level = integer(t, 1);
         out.renders.back().lod_last = t.size() > 2 ? integer(t, 2) : out.renders.back().lod_level;
       } else if (command == "linked" && !out.renders.empty()) {
@@ -454,33 +399,6 @@ PartConfig parse_part_config(const std::string &source,
         }
         out.bodies.push_back(body);
         out.mass += body.mass;
-      } else if (command == "wing") {
-        // EXE sscanf "%d %f..." (0x4443C0): the values after the first one
-        // that fails keep their defaults, so a malformed line never
-        // invalidates the part. Fields after the exponent are read but unused.
-        float value[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
-        size_t parsed = 0;
-        for (; parsed < std::size(value) && parsed + 1 < t.size(); ++parsed) {
-          try {
-            value[parsed] = number(t, parsed + 1);
-          } catch (const std::exception &) {
-            break;
-          }
-        }
-        if (parsed > 0 && std::floor(value[0]) == value[0] &&
-            std::abs(value[0]) <= 65535 && out.wings.size() < 16) {
-          PartWing wing;
-          wing.type = static_cast<int>(value[0]);
-          const float length = std::hypot(value[4], value[5], value[6]);
-          for (size_t i = 0; i < 3; ++i) {
-            wing.position[i] = value[1 + i];
-            wing.normal[i] = length > 0.f ? value[4 + i] / length : 0.f;
-          }
-          wing.area = std::abs(value[7]);
-          wing.suction = std::abs(value[8]);
-          wing.exponent = value[9];
-          out.wings.push_back(wing);
-        }
       } else if (command == "nocollision" && !out.bodies.empty()) {
         out.bodies.back().collision = false;
         out.bodies.back().collision_mesh.clear();
@@ -495,11 +413,6 @@ PartConfig parse_part_config(const std::string &source,
         out.unknown.push_back(raw);
     } catch (const std::exception &e) {
       if (command.starts_with("osd_")) continue;
-      // A malformed instrument line loses the pin, not the whole chassis.
-      if (command.starts_with("cockpit_")) {
-        out.unknown.push_back(raw);
-        continue;
-      }
       out.errors.push_back("line " + std::to_string(line) + " (" + command +
                            "): " + e.what());
     }

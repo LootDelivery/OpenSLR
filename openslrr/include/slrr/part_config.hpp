@@ -40,18 +40,6 @@ struct PartWheelSpring {
   float mass = 0.f;
   bool authored = false;
 };
-// `wing type x y z nx ny nz area suction exponent`: one aerodynamic panel in
-// the part's frame. As the MWM EXE's CFG handler (0x4443C0) does, the normal
-// is stored normalised, the area and suction factor as magnitudes, and a
-// missing exponent is 1. Only type 4 occurs in the stock CFGs.
-struct PartWing {
-  int type = 0;
-  std::array<float, 3> position{};
-  std::array<float, 3> normal{};
-  float area = 0.f;
-  float suction = 0.f;
-  float exponent = 1.f;
-};
 struct PartSlotLink {
   uint32_t resource = 0;
   int slot = 0;
@@ -107,25 +95,6 @@ struct HudElement {
   std::string format;
 };
 using VehicleHudLayout = std::array<HudElement, static_cast<size_t>(HudSlot::Count)>;
-// Chassis `cockpit_rpm` / `cockpit_speed` (#301): a 3D pin on the dashboard,
-// distinct from the overlay `osd_rpmpin` / `osd_spdpin`. MWM build 606 reads
-// `x y z yaw pitch roll render offset factor low high`
-// (0x00444B60 rpm, 0x00444CB0 speed) and draws the pin at
-// (yaw, pitch, roll + angle), angle = value * factor + offset limited to
-// [low, high] (0x0043C0A0). Values: |engine rad/s| * 9.5493 rpm and
-// |velocity| * 3.6 km/h. Absent fields keep the build-606 defaults.
-enum class CockpitGauge : size_t { Rpm, Speed, Count };
-struct CockpitNeedle {
-  bool defined = false;
-  uint32_t resource = 0;
-  PartPose pose;
-  float offset = 2.2f, factor = 0.f, low = -2.2f, high = 2.2f;
-};
-using CockpitNeedles =
-    std::array<CockpitNeedle, static_cast<size_t>(CockpitGauge::Count)>;
-// Below `low` gives `low`, otherwise above `high` gives `high`, in that
-// order (no swap when low > high); a non-finite value reads as 0.
-float cockpit_needle_angle(const CockpitNeedle &needle, double value);
 struct PartConfig {
   uint32_t resource = 0;
   std::string source;
@@ -134,8 +103,6 @@ struct PartConfig {
   int category = 0;
   float mass = 0;
   std::vector<PartBody> bodies;
-  // At most 16, the EXE's per-part capacity.
-  std::vector<PartWing> wings;
   std::vector<PartWheelSpring> wheel_springs;
   uint32_t render = 0, mesh = 0, texture = 0;
   PartPose render_pose;
@@ -147,10 +114,6 @@ struct PartConfig {
   bool has_seat = false;
   float pedals[3] = {};
   bool has_pedals = false;
-  // Gear lever knob, chassis-local metres (`shifter x y z`). Build 606
-  // stores it at car+0x9AC and keeps it at the origin when the cfg has no
-  // line, which is the case for every stock racer.
-  float shifter[3] = {};
   std::vector<PartPose> wheels;
   float max_steer = .6f, ackermann_length = 0;
   std::vector<PartPose> cameras;
@@ -159,15 +122,8 @@ struct PartConfig {
   std::vector<float> wheel_steering;
   std::vector<PartSlot> slots;
   std::vector<uint32_t> stock;
-  // `sfx_loop <sound>` of a native car: the sound resource of its radio loop.
-  uint32_t sfx_loop = 0;
   std::vector<PartRender> renders;
-  // `lods N s0 s1 ...` (map objects): the size ratios at which the object
-  // switches to LOD level 1, 2, ... (ascending). Renders choose their levels
-  // with `lod first last`. Empty when the cfg has no `lods` line.
-  std::vector<float> lod_sizes;
   VehicleHudLayout hud{};
-  CockpitNeedles cockpit{};
   std::vector<std::string> unknown;
   std::vector<std::string> errors;
   bool valid = false;
@@ -188,11 +144,4 @@ bool part_slot_matrix(const PartConfig &config, const PartSlot &slot,
 // `force` is the spring rate in N/m. Returns false when the spring is unset.
 bool part_parked_spring_length(float rest, float minimum, float maximum,
                                float force, float mass_on_wheel, float &length);
-// How the original Invictus Aero calculator authored a `wing` line: a wing
-// (airfoil) face or a body surface, and the face's flattened area in m².
-// Its SLRR method stores 30× that area for surfaces and 90× for wings
-// (exponent 0.667); its CRC and Experimental methods store about 1.27× and
-// write wings as type 5.
-bool part_wing_is_airfoil(const PartWing &wing);
-float part_wing_area(const PartWing &wing);
 } // namespace slrr

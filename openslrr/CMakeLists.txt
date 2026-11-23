@@ -65,8 +65,6 @@ add_executable(slrr_host
   src/resources/scene_sun.cpp
   src/resources/part_config.cpp
   src/resources/part_runtime.cpp
-  src/resources/paint_texture.cpp
-  src/resources/light_resource.cpp
   src/resources/pedestrian_lines.cpp
   src/formats/walk.cpp
   src/formats/rest.cpp
@@ -164,7 +162,6 @@ set(_bgfx_shader_inc "${BGFX_DIR}/src")
 set(SLRR_IMGUI_DIR "${BGFX_DIR}/3rdparty/dear-imgui")
 target_sources(slrr_host PRIVATE
   src/render/debug_overlay.cpp
-  src/render/drive_hud.cpp
   "${BGFX_DIR}/examples/common/imgui/imgui.cpp"
   "${SLRR_IMGUI_DIR}/imgui.cpp"
   "${SLRR_IMGUI_DIR}/imgui_draw.cpp"

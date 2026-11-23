@@ -52,19 +52,6 @@ Object *part_render_owner(void *key);
 // their own, so part_render_owner stops at the part; this walks on to the first
 // record whose native kind is "car".
 Object *part_render_car(void *key);
-// Painter textures (paint_texture.hpp) live outside every pack, so they cannot
-// be resolved through RpkIndex. These three are how the Painter reads and
-// writes the paint slot of a part without going through the pack rules:
-// `part_paint_textures` reports what the part shows and what its resource
-// paints, `part_set_paint_texture` assigns any texture id to a part that has a
-// paint slot, and `part_paint_texture_shared` tells the Painter whether another
-// live part still shows a texture it is about to release.
-bool part_paint_textures(Object *part, uint32_t *current, uint32_t *source);
-bool part_set_paint_texture(Object *part, uint32_t texture);
-bool part_paint_texture_shared(uint32_t texture, Object *part);
-// The part that shows a texture, or null. Used to restore the paint slot when a
-// temporary decal is dropped.
-Object *part_showing_texture(uint32_t texture);
 // World height of the tyre contact under a car. The camera's `move` spring
 // hangs on this point; `look` stays on the chassis origin.
 bool part_car_ground(void *key, float *y);
