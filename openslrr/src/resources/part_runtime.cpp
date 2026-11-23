@@ -244,6 +244,8 @@ float ped_backlog = 0.f;
 VehicleHudLayout hud_preview;
 std::string hud_preview_directory;
 constexpr double kPhysicsTick = 1.0 / physics::VehicleDynamics::update_frequency;
+// Simulation seconds, for the drive trace only.
+static double engine_trace_clock = 0;
 constexpr unsigned kMaxPhysicsTicksPerFrame = 4;
 double physics_elapsed = 0;
 std::unordered_map<uint32_t, std::shared_ptr<const PartConfig>> configurations;
@@ -1505,6 +1507,8 @@ bool part_command(Object *part, const std::string &command) {
     int mode;
     if (!rec || !(input >> mode)) return false;
     rec->transmission = mode;
+    if (std::getenv("SLRR_DRIVE_TRACE"))
+      std::fprintf(stderr, "[drive-trace] transmission command mode=%d\n", mode);
     return true;
   }
   if (verb == "damage_multiplier") {
@@ -2433,6 +2437,8 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.abs_strength = rec.abs_strength;
   drive.launch_help = rec.launch_help;
   drive.differential_lock = std::clamp(comp(chassis, "diff_lock"), 0.f, 1.f);
+  // Player aid, off unless chosen; the physics reads 0 as "no launch hold".
+  drive.launch_rpm = host_game_options().driving.launch_rpm;
   drive.clutch = controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 0.f;
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
@@ -3655,6 +3661,29 @@ void advance_chassis_tick() {
       rec.mileage += static_cast<float>(std::hypot(delta.x, delta.z) * .1);
     }
     rec.engine_running = rec.dynamics.drive.torque && rec.dynamics.engine_running;
+    {
+      // Drive trace: what the engine is allowed to do and what it is doing.
+      // `limit` is the rpm the solver refuses to pass, `gear` the engaged ratio
+      // index, `torque` the net curve value the drive uses at that rpm.
+      static const bool trace = std::getenv("SLRR_DRIVE_TRACE") != nullptr;
+      static double next_report = 0;
+      if (trace && chassis == controlled && rec.dynamics.engine_running &&
+          engine_trace_clock >= next_report) {
+        next_report = engine_trace_clock + .5;
+        const auto &d = rec.dynamics;
+        std::fprintf(stderr,
+                     "[drive-trace] t=%.1f rpm=%.0f limit=%.0f idle=%.0f gear=%d "
+                     "throttle=%.2f kph=%.1f torque=%.1f running=%d "
+                     "mode=%d(auto=%d,clutch=%d)\n",
+                     engine_trace_clock, d.engine_omega * 9.54929658551372,
+                     d.drive.limit, d.drive.idle, d.gear,
+                     static_cast<double>(d.drive.throttle),
+                     std::hypot(d.body.velocity.x, d.body.velocity.z) * 3.6,
+                     d.drive.torque ? d.drive.torque(d.engine_omega * 9.54929658551372) : 0.0,
+                     d.engine_running ? 1 : 0, rec.transmission,
+                     d.drive.automatic_shift ? 1 : 0, d.drive.auto_clutch ? 1 : 0);
+      }
+    }
     if (!finite_frame(rec.dynamics.body.frame()))
       throw std::runtime_error("non-finite chassis output");
     if (steps) {
@@ -4592,6 +4621,7 @@ void part_physics_advance(double seconds) {
   }
 
   // Ignore excess time after a long stall so the next frame can still render.
+  engine_trace_clock += std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
   physics_elapsed += std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
   constexpr double tolerance = kPhysicsTick * 1e-10;
   if (physics_elapsed + tolerance >= kPhysicsTick) {

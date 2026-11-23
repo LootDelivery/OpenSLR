@@ -120,6 +120,15 @@ void draw_tuning(Jvm* vm) {
       host_game_options_set_steering_help(*vm, help / 100.f);
     ImGui::SetItemTooltip("Saved in Game Options. Slows keyboard steering at speed "
                           "and helps countersteer during a slide.");
+    float launch = host_game_options().driving.launch_rpm * 100.f;
+    if (ImGui::SliderFloat("Clutch slip revs", &launch, 10.f, 100.f, "%.0f%%",
+                           ImGuiSliderFlags_NoInput))
+      host_game_options_set_launch_rpm(*vm, launch / 100.f);
+    ImGui::SetItemTooltip("Saved in Game Options, off by default. A slipping "
+                          "automatic clutch normally holds the engine at this "
+                          "share of the rev limit; upstream held every automatic "
+                          "car at 40%, which is what reads as a quarter of the "
+                          "tachometer. A player aid, not part of the gearbox.");
     ImGui::SeparatorText("Session");
     ImGui::Text("Simulation time: %.2f s", vm->sim_time());
     float warp = vm->time_warp(-1.f);

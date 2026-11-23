@@ -1,0 +1,92 @@
+# Provenance of the car physics: recovered, adapted, invented
+
+**Why this document exists.** A driver compared the car with the original game and
+asked whether the physics being installed is a port of the original or something
+new. It is something new, and the code says so in its own comments. This file
+records which parts are which, with the evidence, so a fidelity decision is made
+on facts rather than on the resemblance of the file names.
+
+## 1. What the original actually contains
+
+The original keeps almost nothing in the scripts. Decompiled from the shipped
+classes:
+
+| Original script | What it is | Where |
+|---|---|---|
+| `Clutch` | one field: `float maxF = 500.0;` and a name. No model. | `parts/scripts/enginepart/slidingenginepart/reciprocatingenginepart/Clutch.java` |
+| `Transmission` | ratios, `end_ratio`, `starter_torque`, drive split (`drive_front`), `diff_lock`, `capacity`; writes them into `the_car` (`gears`, `ratio[]`, `rearend_ratio`, `diff_lock`, `setDrive` per wheel) | same directory, `Transmission.java` |
+| `Chassis` | parameters only: `engine_rpm_idle = 800`, `gears`, `rpm_trans_fwd = 1400`, `sfx_starter_rpm = 200` | `parts/scripts/bodypart/Chassis.java` (decompiled with SLRR Class Reader from `Chassis.class`) |
+
+So the scripts hand over constants, and the physics is native.
+
+## 2. What the reverse work recovered of the native side
+
+`slrr-reverse/engine/Runtime/Parts/world_state.cpp` carries the recovered
+contracts, marked "Soft PE":
+
+```
+arcade_gear_engage(gear, clutch) = gear == N ? 0 : clamp(1 - clutch, 0, 1)
+arcade_drive_thrust(drive, radius, gear, clutch) =
+    engage * clamp(drive) * radius_mul(radius)
+```
+
+That is the whole of the recovered drive model: **thrust scales with the clutch
+release, and there is no engine-rpm hold anywhere in it**. The engine's own rpm
+is not recovered: the only `engine_rpm` in the reverse tree is a default value in
+a state struct (`PhysicsRef.cpp:53`).
+
+## 3. What this tree runs
+
+`src/physics/vehicle_dynamics.cpp` is a crank-inertia model: an engine with its
+own rotational inertia, a slipping clutch that exchanges momentum with the
+driveline, a Magic-Formula tyre, and a suspension solver. Its provenance, from
+its own comments:
+
+- "Adapted contracts: SLRR_rev a2ee10de, rigid-body-3d.ts" -- a TypeScript
+  reimplementation, not the executable.
+- "the 8ac2ba9 fallback uses a solid box of 0.75 times the bounds dimensions
+  (host tuning, not the collision dimensions or the original game's compound
+  inertia)".
+- `ENGINE_CONTRACT §11` aerodynamics, `Wind`, `AeroWing`: host additions.
+- The automatic launch hold was `drive.limit * .4` -- a constant with no recovered
+  counterpart anywhere. It applies to every car whose gearbox reports automatic,
+  and it is what a driver sees as "the engine stops at a quarter of the
+  tachometer".
+
+## 4. The consequence, measured
+
+Mazda 3, throttle held from standstill, 120 Hz solver, `SLRR_DRIVE_TRACE=1`:
+
+| Clutch slip revs | Engine behaviour | Speed at t = 5.8 s |
+|---|---|---|
+| 0 (no hold) | **stalls against the clutch**: 323 rpm, torque -6 Nm | 5.9 km/h |
+| 0.4 (upstream) | held at 2600 of 6500 | 29.6 km/h |
+| 0.95 | held at 6175 of 6500 | 22.0 km/h |
+| 1.0 | held at 6500, clutch barely engages | 8.6 km/h |
+
+Two things follow. The 40% hold is not a driver aid that can simply be turned
+off -- without it this model stalls -- and no setting of it gives both "the
+engine screams to the limit" and "the car pulls away hard", because a fixed rpm
+hold spends the difference in slip.
+
+## 5. The choice
+
+1. **Fidelity.** Implement the recovered contract: thrust from
+   `drive * (1 - clutch)`, engine rpm as an output of the driveline rather than a
+   separately integrated crank, `Clutch.maxF` as the coupling limit. That is what
+   the original does, and it is a rewrite of `step_drive`, not a tuning change.
+2. **Upstream's model, exposed.** Keep the crank-inertia solver and the slip
+   point as a player setting (`Clutch slip revs`, F12; `SLRR_LAUNCH_RPM` for A/B).
+   Already implemented; the default stays at upstream's 0.4 so nothing changes
+   silently.
+
+The traffic complaint is the same question in another place: ambient speed comes
+from this host's route model, not from the original's traffic natives, so
+"slower than the original" is a host value to measure and set, not a bug.
+
+## 6. What was not claimed
+
+Nothing here says the original's internals are recovered. `Clutch.maxF`,
+`Transmission`'s ratios and the `1 - clutch` thrust are; the crank inertia, the
+tyre model, the aerodynamics, the launch hold and the ambient traffic speeds are
+not.

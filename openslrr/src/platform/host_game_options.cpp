@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 
@@ -69,9 +70,29 @@ GameOptions read_options(Jvm& jvm) {
   video.shadow_size = std::clamp(integer("shadow_size", 256), 32, 1024);
   video.shadows = std::clamp(integer("shadows", 1), 0, 2);
   video.flares = integer("flares", 1) != 0;
+  if (std::getenv("SLRR_DRIVE_TRACE")) {
+    // Whether the game's own settings carry this key or we are inventing it.
+    const auto raw = jvm.get_static("java.util.Config", "player_transmission");
+    std::fprintf(stderr, "[drive-trace] config player_transmission tag=%d int=%d\n",
+                 static_cast<int>(raw.tag),
+                 raw.tag == ValueTag::Int ? raw.v.i : -999);
+  }
   const int mode = integer("player_transmission", 1);
   options.driving.transmission = mode == 0 || mode == 2 || mode == 5 ? mode : 1;
+  // The gearbox mode is a player setting in the original game, and the physics
+  // reads it: automatic holds a slipping launch, manual does not. SLRR_TRANSMISSION
+  // overrides the Config value for A/B driving from one binary.
+  if (const char *forced = std::getenv("SLRR_TRANSMISSION")) {
+    const int value = std::atoi(forced);
+    if (value == 0 || value == 1 || value == 2 || value == 5)
+      options.driving.transmission = value;
+  }
   options.driving.steering_help = std::clamp(read("player_steeringhelp", .666f), 0.f, 1.f);
+  options.driving.launch_rpm = std::clamp(read("player_launchrpm", .4f), .1f, 1.f);
+  // SLRR_LAUNCH_RPM is the A/B switch for the launch aid: one binary, two
+  // settings, which is how a feel change gets judged.
+  if (const char *forced = std::getenv("SLRR_LAUNCH_RPM"))
+    options.driving.launch_rpm = std::clamp(static_cast<float>(std::atof(forced)), .1f, 1.f);
   options.driving.abs = read("player_abs", 0.f);
   options.driving.asr = read("player_asr", 0.f);
   options.gps_mode = std::clamp(integer("gpsMode", 0), 0, 3);
@@ -184,6 +205,13 @@ bool host_commit_video_dialog(Jvm& jvm, Object* handler, int command) {
   jvm.invoke(handler->class_name, "changeMode", "(I)V",
              {Value::make_obj(handler), group->second}, false);
   return true;
+}
+
+void host_game_options_set_launch_rpm(Jvm& jvm, float fraction) {
+  if (!loaded || !std::isfinite(fraction)) return;
+  jvm.set_static("java.util.Config", "player_launchrpm",
+                 Value::make_float(std::clamp(fraction, 0.f, 1.f)));
+  host_game_options_apply(jvm);
 }
 
 void host_game_options_set_steering_help(Jvm& jvm, float strength) {

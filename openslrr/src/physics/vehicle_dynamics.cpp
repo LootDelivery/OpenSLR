@@ -813,12 +813,20 @@ void VehicleDynamics::step_drive() {
          std::min(rpm, std::abs(shaft * ratio) * rpm_per_rad)) /
             std::max(1.0, drive.idle * .5),
         0.0, 1.0);
-    if (drive.auto_clutch && closed_delta < 0) {
+    // Launch aid. Off by 0: the clutch transmits what it is asked to, the engine
+    // revs freely and the wheels take the torque -- which is what a driver
+    // comparing with the original game expects. A positive fraction holds the
+    // slipping clutch at that fraction of the rev limit until the shaft catches
+    // up, which is a player aid, not a property of the gearbox.
+    if (drive.auto_clutch && drive.launch_rpm > 0 && closed_delta < 0) {
       double engagement_rpm = drive.idle * .85;
       if (drive.automatic_shift && (gear == 1 || gear == 7) &&
           drive.brake < .05 && drive.handbrake < .05 && gas > 0) {
         engagement_rpm = std::lerp(
-            engagement_rpm, std::max(engagement_rpm, drive.limit * .4), gas);
+            engagement_rpm,
+            std::max(engagement_rpm,
+                     drive.limit * std::clamp(drive.launch_rpm, .0, 1.0)),
+            gas);
       }
       grip = std::min(grip,
                       std::max(0.0, engine_omega - engagement_rpm / rpm_per_rad) /

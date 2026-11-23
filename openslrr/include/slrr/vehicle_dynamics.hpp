@@ -174,6 +174,12 @@ struct DriveInput {
   double abs_strength = 0;
   double launch_help = 0;
   double differential_lock = 0;
+  // Launch aid: 0 off (default), or the fraction of the rev limit a slipping
+  // automatic clutch holds the engine at. Upstream hard-coded 0.4, which reads as
+  // "the engine stops at a quarter of the tachometer" and applied to every car
+  // with an automatic box; a driver aid has no business being a default. Host
+  // value, not recovered from the executable.
+  double launch_rpm = .4;
   double inertia = 0, idle = 0, limit = 0, starter = 0;
   double clutch = 1;
   // Net open-throttle crank torque (Nm) at the requested rpm, including
