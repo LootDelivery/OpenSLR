@@ -148,6 +148,8 @@ struct WheelState {
   Quaternion hub_rotation;
   double spin = 0, rotation = 0;
   double slip_speed = 0, lateral_speed = 0;
+  // Unspent slip carried between steps for the low-speed path (0x0043BBD0).
+  TireSlipState slip_state;
   // Unspent brake/bearing budget at the patch (N s), not free tyre grip.
   double holding_impulse = 0;
   TireForces tire_force{};

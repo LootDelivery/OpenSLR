@@ -1169,7 +1169,10 @@ void VehicleDynamics::step_drive() {
         const double factor = slip > 1e-9 ? .4 * s.force / slip : 0;
         force = {s.slip_speed * factor, -lateral * factor};
       } else {
-        force = tire_forces(s.force, alignment, s.spin * wheel.radius, road, lateral, cfg.tyre);
+        // The low-speed path needs the wheel's own slip memory and the step:
+        // 0x0043BBD0 is fed the timestep and stores its result in the wheel.
+        force = tire_forces(s.force, alignment, s.spin * wheel.radius, road,
+                            lateral, cfg.tyre, s.slip_state, timestep);
       }
 
       const Vec3 arm = s.patch - body.position;

@@ -859,6 +859,47 @@ remaining difference from the original lives, and it is a tyre/gearing question,
 driveline one. Re-checking `max_load` (per wheel or per axle) and the friction scaling
 against the script values is the next measurement.
 
+### 12.12 The low-speed tyre caps were ours; the original solves it in the input
+
+`tire_model.cpp` had two lines that made the tyre force proportional to the slip
+*velocity*:
+
+```cpp
+low_speed_lateral_cap      = aligned_load * 0.95;
+lateral = copysign(min(|lateral_curve|, |lateral_speed| * cap), ...);
+low_speed_longitudinal_cap = aligned_load * 0.85;   // same shape
+```
+
+That is a viscous damper wearing a tyre's clothes: whatever the slip, the force can only be
+`load * 0.95 * v`. The original has nothing of the kind. `0x0043BBD0` takes the *inputs* to
+the force law and, below a speed band, replaces the geometric slip and slip angle with an
+accumulated, clamped solution blended in by weight:
+
+```
+w        = clamp((|v_road| - 0.1) * 0.1, 0, 1)          // full at 10.1 m/s
+geo      = (wheel_speed - v_road)/|v_road|,  atan2(lat, |v_road|)
+filtered = clamp((0.3*prev + slip*dt) / ((dt*5 + 1)*0.3), +-1)
+           clamp((lat*dt + 0.5*prev)  / ((dt*10 + 1)*0.5), +-1)
+out      = geo*w + filtered*(1 - w)
+```
+
+Steady state of the filters is `slip/1.5` and `angle/5`; the clamps are `+-1.0`. The values
+are the EXE's own `.data` image (`0x0060E02C` 1.0, `E030` 1.0, `E034` 0.3, `E038` 0.5, `E03C`
+0.1, `E040` 0.1, `E044` 0.1, `E048` 0.2), read out of the section table rather than
+remembered. The caller passes `dt` -- `param_4` of the original is the physics timestep --
+and the live state sits in the wheel (`wheel+0x14C`/`0x150`), so `WheelState` now carries a
+`TireSlipState` and the step passes it in.
+
+Both caps are gone. `force_from_slip` no longer knows the slip velocity at all, which is the
+point: it cannot become a damper.
+
+What this proves and what it does not: the code now matches the recovered listing, and the
+52 stand tests are green (`test_drive_faithful` 17, `test_vehicle_dynamics` 35, the slide
+numbers unchanged at 60 km/h because that is above the band). Whether the *felt* behaviour
+-- "the car stops abruptly in a slow slide" -- is fixed is not proven by any number here;
+that is the driver's call, and it is the reason the change is worth making: it removes an
+invented rule rather than tuning one.
+
 ### 12.11 The spin stall: the throttle was being cut by the game, not by the driveline
 
 Captured with the per-frame slide trace in the live game, exactly as reported ("the wheels

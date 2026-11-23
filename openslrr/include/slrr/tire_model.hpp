@@ -27,6 +27,24 @@ struct TireForces {
   double longitudinal, lateral;
 };
 
+// Per-wheel memory of the low-speed slip path (the EXE keeps it at
+// wheel+0x14C / wheel+0x150). Unspent slip accumulates here instead of
+// being converted to force through a velocity-proportional cap.
+struct TireSlipState {
+  double slip = 0, angle = 0;
+};
+
+// The normalised slip and slip angle the force law is evaluated at, as
+// 0x0043BBD0 produces them: geometric at speed, an accumulated and clamped
+// solution blended in below 10.1 m/s so the geometry cannot blow up as the
+// speed approaches zero.
+struct TireSlipInputs {
+  double slip, angle;
+};
+TireSlipInputs tire_slip_inputs(double wheel_speed, double road_speed,
+                                double lateral_speed, double dt,
+                                TireSlipState &state);
+
 struct TireTuning {
   float lateral_grip = 1.f;
   float longitudinal_grip = 1.f;
@@ -47,5 +65,12 @@ TireForces tire_friction_limits(double load, double alignment,
 TireForces tire_forces(double load, double alignment, double wheel_speed,
                        double road_speed, double lateral_speed,
                        const TireParameters& tire);
+
+// The same curves evaluated at the recovered low-speed slip inputs. state and
+// dt carry the per-wheel filter that replaces the invented velocity cap.
+TireForces tire_forces(double load, double alignment, double wheel_speed,
+                       double road_speed, double lateral_speed,
+                       const TireParameters& tire, TireSlipState& state,
+                       double dt);
 
 } // namespace slrr::physics
