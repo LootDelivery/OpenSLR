@@ -12,6 +12,10 @@ namespace slrr::perf {
 enum class Zone : uint8_t {
   Scripts,      // script threads, messages, callbacks and GameType timers
   Physics,      // part_physics_advance
+  Traffic,      // race_traffic_tick, split out of Physics for traffic work
+  Ambience,     // scene_ambience_tick + scene_triggers_tick
+  Pump,         // window pump + section render sync, before the frame proper
+  Gc,           // jvm.gc_safe_point(): the stop-the-world sweep
   Flush,        // render.flush(), all of it
   Collect,      // scene collection and GPU residency (sync_instances)
   Shadows,      // map and vehicle shadow maps

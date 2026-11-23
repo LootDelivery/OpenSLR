@@ -33,6 +33,10 @@ bool part_command(Object *part, const std::string &command);
 // Car setMatrix: loaded springs, contacts on the given point, body asleep.
 // shift is false for reset, which tucks the springs and does not move the body.
 void part_park_chassis(Object *car, bool shift = true);
+// Host-driven chassis: the owner publishes its pose and the physics step skips
+// it. `part_animate_external_wheels` spins/steers the cfg wheel meshes.
+void part_set_external_motion(Object *car, bool external);
+void part_animate_external_wheels(Object *car, float metres, float steer);
 // setState supplies world-space linear/angular velocity after setting the pose.
 void part_apply_state(Object *car, const float* velocity, const float* angular_velocity);
 // The point setMatrix consumed to produce the current pose: the midpoint of
@@ -44,6 +48,23 @@ bool part_car_script_pos(void *key, float *x, float *y, float *z);
 bool part_lamp_lit(void *part, uint32_t flags, bool preview);
 // Render node or one of its parents, when that node is an installed part.
 Object *part_render_owner(void *key);
+// The car an installed part belongs to. Doors, hood and trunk are records of
+// their own, so part_render_owner stops at the part; this walks on to the first
+// record whose native kind is "car".
+Object *part_render_car(void *key);
+// Painter textures (paint_texture.hpp) live outside every pack, so they cannot
+// be resolved through RpkIndex. These three are how the Painter reads and
+// writes the paint slot of a part without going through the pack rules:
+// `part_paint_textures` reports what the part shows and what its resource
+// paints, `part_set_paint_texture` assigns any texture id to a part that has a
+// paint slot, and `part_paint_texture_shared` tells the Painter whether another
+// live part still shows a texture it is about to release.
+bool part_paint_textures(Object *part, uint32_t *current, uint32_t *source);
+bool part_set_paint_texture(Object *part, uint32_t texture);
+bool part_paint_texture_shared(uint32_t texture, Object *part);
+// The part that shows a texture, or null. Used to restore the paint slot when a
+// temporary decal is dropped.
+Object *part_showing_texture(uint32_t texture);
 // World height of the tyre contact under a car. The camera's `move` spring
 // hangs on this point; `look` stays on the chassis origin.
 bool part_car_ground(void *key, float *y);

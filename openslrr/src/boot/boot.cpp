@@ -1,5 +1,6 @@
 #include "slrr/boot.hpp"
 #include "slrr/frame_profiler.hpp"
+#include "slrr/stack_sampler.hpp"
 
 #include <algorithm>
 
@@ -10,6 +11,7 @@
 #include "slrr/host_music.hpp"
 #include "slrr/host_game_options.hpp"
 #include "slrr/render_backend.hpp"
+#include "slrr/race_runtime.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/mainloop.hpp"
 #include "slrr/natives_boot.hpp"
@@ -574,6 +576,9 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     const bool until_quit = opt.max_frames <= 0;
     if (until_quit)
       std::printf("[boot] Soft MainLoop until window close\n");
+    // Sampling profiler (SLRR_STACK_SAMPLE=1): starts on the loop's own
+    // thread, so every sample describes the frame that is being measured.
+    stack_sample::start();
     if (opt.perf_log) perf::enable(opt.perf_log_path);
     if (!opt.perf_frames_path.empty()) perf::enable_frames(opt.perf_frames_path);
     // Development benchmark: a straight full-throttle run from the spot
@@ -615,13 +620,21 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
 #endif
       // Soft PollWindowQuit adjacency — pump before Input/sim like stock
       // neighbors (Input_tick still inside mainloop_frame).
-      render.pump(16);
-      mainloop_sync_section_render(render, sections);
+      {
+        perf::Scope pump_scope(perf::Zone::Pump);
+        render.pump(16);
+        mainloop_sync_section_render(render, sections);
+      }
       const double real_dt = elapsed();
       MainLoopFrameResult fr = mainloop_frame(
           jvm, render, sections,
           bench_running && !opt.bench_manual ? 1.0 / kBenchRate : real_dt);
-      jvm.gc_safe_point();
+      {
+        // A stop-the-world sweep is the one thing that can stall a frame for
+        // tens of milliseconds without showing up in any scene zone.
+        perf::Scope gc_scope(perf::Zone::Gc);
+        jvm.gc_safe_point();
+      }
       perf::end_frame();
       if (bench_running) ++bench_frames;
       ++frames;
@@ -681,11 +694,63 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
                       opt.bench_drive_seconds);
         }
         if (bench_running && bench_frames == 0 && opt.perf_log) perf::restart(kBenchRate);
-        input.bench_throttle = !bench_running || opt.bench_manual
-                                   ? -1.f
-                                   : bench_frames >= 0 ? 1.f : 0.f;
+        // --bench-route drives the city: the steering comes from the road
+        // graph and the throttle follows a modest target speed, so the run
+        // covers streets and junctions instead of a straight line.
+        float route_speed = 0.f;
+        if (bench_running && opt.bench_route && !opt.bench_manual) {
+          if (auto* car = part_controlled_chassis()) {
+            auto* n = gameref_get(car);
+            if (n) route_speed = std::sqrt(n->vel[0] * n->vel[0] + n->vel[2] * n->vel[2]);
+          }
+          float steer = 0.f;
+          if (race_traffic_steer(route_speed, &steer)) input.bench_steer = steer;
+          if (bench_frames >= 0) {
+            static int route_tick = -1;
+            if (route_tick < 0) route_tick = 0;
+            if (bench_frames % 60 == 0 && (bench_frames / 60) != route_tick) {
+              route_tick = bench_frames / 60;
+              if (auto* car = part_controlled_chassis())
+                if (auto* n = gameref_get(car))
+                  std::printf("[route] t=%d pos=%.1f,%.1f v=%.1f m/s\n",
+                              route_tick, n->pos[0], n->pos[2], route_speed);
+            }
+          }
+        }
+        // A car that stops against a kerb would end the measurement there, so
+        // the follower backs off for a second and tries the junction again.
+        static int route_stuck = 0, route_reverse = 0;
+        bool reversing = false;
+        if (bench_running && opt.bench_route && !opt.bench_manual && bench_frames >= 0) {
+          if (route_reverse > 0) {
+            --route_reverse;
+            reversing = true;
+          } else if (route_speed < 1.f) {
+            if (++route_stuck > 60) {
+              route_stuck = 0;
+              route_reverse = 60;
+            }
+          } else {
+            route_stuck = 0;
+          }
+        }
+        input.bench_reverse = reversing;
+        input.bench_throttle =
+            !bench_running || opt.bench_manual
+                ? -1.f
+                : bench_frames < 0 ? 0.f
+                                   : reversing ? 0.f
+                                   : (opt.bench_route ? (route_speed < 16.f ? .55f : .2f) : 1.f);
+        // Temporary diagnostic: SLRR_BENCH_SHOT_FRAMES shortens the ten second
+        // interval so a run can sample many consecutive frames and show a
+        // per-frame oscillation instead of a handful of moments.
+        static const int bench_shot_frames = [] {
+          const char* e = std::getenv("SLRR_BENCH_SHOT_FRAMES");
+          const int v = e ? std::atoi(e) : 0;
+          return v > 0 ? v : 10 * 60;
+        }();
         if (bench_running && !opt.bench_shots.empty() && bench_frames >= 0 &&
-            bench_frames >= 10 * kBenchRate * bench_shot) {
+            bench_frames >= bench_shot_frames * bench_shot) {
           char name[32];
           std::snprintf(name, sizeof(name), "\\t%02d", bench_shot * 10);
           render.request_screenshot(opt.bench_shots + name);
@@ -706,6 +771,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
 #endif
       }
     }
+    stack_sample::stop();
     host_set_script_pump(nullptr);
     script_threads_shutdown(jvm);
     video_fmv_close();

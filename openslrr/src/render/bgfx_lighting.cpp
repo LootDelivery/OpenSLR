@@ -174,6 +174,62 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
     if (bgfx::isValid(u_fog_range_)) bgfx::setUniform(u_fog_range_, fog_range);
     if (bgfx::isValid(u_fog_eye_)) bgfx::setUniform(u_fog_eye_, fog_eye);
   }
+// U2-B.4 measurement. Counts vehicle submits per frame and the distinct groups
+// they belong to: a group is (geometry, material branch, bound texture, view),
+// which is exactly the key an instanced path would batch on.
+namespace {
+struct BatchProbe {
+  const bool enabled = std::getenv("SLRR_BATCH_PROBE") != nullptr;
+  std::unordered_map<uint64_t, int> groups;
+  int submits = 0, singles = 0, frames = 0;
+  std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+};
+BatchProbe &batch_probe() {
+  static BatchProbe probe;
+  return probe;
+}
+}  // namespace
+
+void batch_probe_begin_frame() {
+  auto &p = batch_probe();
+  if (!p.enabled) return;
+  p.groups.clear();
+  p.submits = 0;
+  p.singles = 0;
+  ++p.frames;
+}
+
+void batch_probe_note(uint64_t key) {
+  auto &p = batch_probe();
+  if (!p.enabled) return;
+  ++p.groups[key];
+  ++p.submits;
+}
+
+void batch_probe_report() {
+  auto &p = batch_probe();
+  if (!p.enabled) return;
+  const auto now = std::chrono::steady_clock::now();
+  const double dt = std::chrono::duration<double>(now - p.last).count();
+  if (dt < 1.) return;
+  int multi = 0, merged = 0;
+  for (const auto &entry : p.groups)
+    if (entry.second > 1) {
+      ++multi;
+      merged += entry.second;
+    }
+  const double rate = p.frames > 0 ? double(p.submits) / double(p.frames) : 0.;
+  (void)rate;
+  std::fprintf(stderr,
+               "[batch] submits=%d merged=%d groups=%zu (multi=%d) saved=%.0f%%\n",
+               p.submits, merged, p.groups.size(), multi,
+               p.submits > 0 ? 100. * double(p.submits - int(p.groups.size())) /
+                                   double(p.submits)
+                             : 0.);
+  p.last = now;
+  p.frames = 0;
+}
+
   void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials)
 {
     // preview alone means "an inset render", which uses a trimmed material.
@@ -296,6 +352,10 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         const float no_light[4]{};
         bgfx::setUniform(u_local_light_, simple ? no_light : local_light_.data());
         bgfx::setUniform(u_diffuse_,diffuse);
+        // U2-B.3: a streamed car dissolves in instead of popping. Everything
+        // else draws at 1 and takes the untouched shader path.
+        const float fade_in[4] = {instance.fade, 0.f, 0.f, 0.f};
+        bgfx::setUniform(u_vehicle_fade_, fade_in);
         const float spec[4] = {group.specular[0], group.specular[1], group.specular[2],
                                group.shininess > 0.f ? group.shininess : 1.f};
         bgfx::setUniform(u_spec_, spec);
@@ -328,11 +388,46 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         const float reflection[4] = {live_env ? 1.f : enhanced_env ? 2.f : 0.f,
                                      static_cast<float>(gfx.reflection_normal),
                                      env_debug, gfx.reflection_strength};
-        const float env_filter[4] = {gfx.reflection_spread, env_legacy, 0.f, 0.f};
+        // z flags the GGX cube, w is its top mip: the shader maps roughness onto
+        // that range instead of guessing a level.
+        const auto ggx_cube = reflection_ggx_to_sample();
+        const bool ggx_ready = bgfx::isValid(ggx_cube);
+        const float env_filter[4] = {gfx.reflection_spread, env_legacy,
+                                     ggx_ready ? 1.f : 0.f,
+                                     static_cast<float>(kReflectionGgxLevels - 1)};
         bgfx::setUniform(u_env_filter_, env_filter);
+        // Roughness-to-level mapping for the reflection chain. The panel decides,
+        // and SLRR_REFL_LOD / SLRR_REFL_LOD_CAP override it so a script can
+        // photograph both variants from one binary.
+        static const int env_lod_mode = [] {
+          const char* e = std::getenv("SLRR_REFL_LOD");
+          return e ? std::atoi(e) : -1;
+        }();
+        static const float env_lod_cap = [] {
+          const char* e = std::getenv("SLRR_REFL_LOD_CAP");
+          return e ? std::strtof(e, nullptr) : -1.f;
+        }();
+        const bool physical = env_lod_mode >= 0 ? env_lod_mode != 0
+                                                : gfx.reflection_physical_roughness;
+        const float cap = env_lod_cap >= 0.f ? env_lod_cap
+                                             : gfx.reflection_roughness_cap;
+        const float spread = std::max(gfx.reflection_spread, 0.05f);
+        const float env_lod[4] = {physical ? 1.f : 0.f, std::log2(spread), cap, 0.f};
+        bgfx::setUniform(u_env_lod_, env_lod);
         bgfx::setUniform(u_dynamic_reflection_, reflection);
+        // The diffuse probe. x says whether the material may use it at all:
+        // until a whole generation has been integrated the shader keeps the
+        // flat ambient, so switching the probe on does not flash a black car.
+        const auto irr_cube = reflection_irr_to_sample();
+        const bool irr_ready = bgfx::isValid(irr_cube);
+        const float irr_params[4] = {irr_ready ? 1.f : 0.f,
+                                     std::clamp(gfx.irradiance_strength, 0.f, 1.f),
+                                     std::max(gfx.irradiance_scale, 0.f), 0.f};
+        bgfx::setUniform(u_irr_params_, irr_params);
+        if (irr_ready) bgfx::setTexture(10, s_scene_irr_, irr_cube);
         if (live_env) {
-          bgfx::setTexture(4, s_reflection_cube_, reflection_cubes_[reflection_write_ ^ 1]);
+          bgfx::setTexture(4, s_reflection_cube_, reflection_cube_to_sample());
+          if (ggx_ready) bgfx::setTexture(9, s_reflection_ggx_, ggx_cube);
           const float probe[4] = {reflection_sample_origin_[0], reflection_sample_origin_[1],
               reflection_sample_origin_[2], reflection_box_valid_ ? 1.f : 0.f};
           const float low[4] = {reflection_box_min_[0], reflection_box_min_[1], reflection_box_min_[2], 0.f};
@@ -349,6 +444,16 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
           state |= BGFX_STATE_BLEND_ALPHA;
         else
           state |= BGFX_STATE_WRITE_Z;
+        if (!preview) {
+          const uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(&part.geo)) ^
+                               (uint64_t(group.material_type) << 40) ^
+                               (uint64_t(base.idx) << 20) ^
+                               (uint64_t(group.texture_index) << 8) ^
+                               uint64_t(group.mix_index) ^
+                               (uint64_t(group.reflection_index) << 48) ^
+                               (uint64_t(view_id) << 56) ^ uint64_t(pass);
+          batch_probe_note(key);
+        }
         bgfx::setState(state);bgfx::submit(view_id,vehicle_program_);
       }
       return;

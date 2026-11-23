@@ -41,6 +41,14 @@ struct MeshVertex {
   uint32_t rgba = 0xffffffffu;
 };
 
+// U2-B.4 measurement: how many vehicle submits a frame issues, and how many
+// distinct draw groups they fall into. A group is what instancing could merge:
+// same geometry, same material branch and the same bound texture. Enabled with
+// SLRR_BATCH_PROBE=1, silent otherwise.
+void batch_probe_begin_frame();
+void batch_probe_note(uint64_t key);
+void batch_probe_report();
+
 class LibBgfxBackend final : public IRenderBackend {
 
   // View 0 is the cached map shadow, followed by the vehicle shadow maps.
@@ -67,6 +75,11 @@ class LibBgfxBackend final : public IRenderBackend {
   // One view per pyramid level, after the world and the reflection faces.
   static constexpr uint16_t kHizView = 110;
   static constexpr int kHizLevels = 16;
+  // Reflection views. The capture and its seed blit run one below each other so
+  // the blit lands first, and the bake has its own range because it can be
+  // captured in the same frame as the moving layer.
+  static constexpr uint16_t kReflectionCaptureView = 130;
+  static constexpr uint16_t kReflectionBakeView = 150;
 
  public:
   const char* name() const override { return "bgfx"; }
@@ -358,7 +371,8 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_env_filter_=BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE,u_sun_diff_=BGFX_INVALID_HANDLE,u_sun_amb_=BGFX_INVALID_HANDLE,u_sun_spec_=BGFX_INVALID_HANDLE,u_sun_dir_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_env_lod_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE,u_vehicle_fade_=BGFX_INVALID_HANDLE,u_sun_diff_=BGFX_INVALID_HANDLE,u_sun_amb_=BGFX_INVALID_HANDLE,u_sun_spec_=BGFX_INVALID_HANDLE,u_sun_dir_=BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle shadow_program_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle shadow_recv_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_shadow_mtx_ = BGFX_INVALID_HANDLE;
@@ -392,6 +406,13 @@ class LibBgfxBackend final : public IRenderBackend {
       BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE}};
   size_t reflection_write_ = 0;
   bgfx::TextureHandle reflection_depth_ = BGFX_INVALID_HANDLE;
+  // One depth buffer per cube face, shared by the two cubes and by the
+  // moving layer drawn onto the bake. A face without one is not depth
+  // tested at all, which is what put every culled-in object on top of the
+  // garage wall in the paint.
+  std::array<bgfx::TextureHandle, 6> reflection_cube_depth_{{
+      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
+      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE}};
   bgfx::TextureHandle reflection_color_ = BGFX_INVALID_HANDLE;
   bgfx::FrameBufferHandle reflection_capture_ = BGFX_INVALID_HANDLE;
   // Prefilter chain (stage 2.2): every cube mip is filtered from the level
@@ -424,6 +445,61 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle u_reflection_probe_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_reflection_box_min_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_reflection_box_max_ = BGFX_INVALID_HANDLE;
+  // Stage 1: the static world does not change between frames, so it is captured
+  // once into its own cube and only recaptured when the world changes or the
+  // probe has moved far enough for the parallax box to be wrong. The per-frame
+  // capture then only has to deal with what actually moves.
+  // Double buffered for the same reason the capture cube is: a cube cannot be
+  // sampled while one of its faces is a render target.
+  bgfx::TextureHandle reflection_bake_cube_[2]{};
+  bgfx::FrameBufferHandle reflection_bake_fb_[2][6]{};
+  int reflection_bake_write_ = 0;
+  int reflection_bake_face_ = 0;
+  bool reflection_bake_ready_ = false;
+  int reflection_bake_batches_ = 0;
+  int reflection_bake_passes_ = 0;
+  uint32_t reflection_bake_frame_ = 0;
+  const void* reflection_bake_world_ = nullptr;
+  std::array<float, 3> reflection_bake_origin_{};
+  std::array<float, 3> reflection_bake_box_min_{}, reflection_bake_box_max_{};
+  bool reflection_bake_box_valid_ = false;
+  uint16_t reflection_bake_size_ = 0;
+  // The cube the materials sample: the bake when it exists, otherwise whatever
+  // the per-frame capture produced.
+  bgfx::TextureHandle reflection_cube_to_sample() const;
+  // Stage 1b: the environment convolved with GGX per mip, so a roughness
+  // selects a lobe instead of a box-filtered level. Rebuilt from the raw cube a
+  // level per frame and double buffered, because a cube cannot be sampled while
+  // one of its levels is a render target.
+  static constexpr uint16_t kReflectionGgxSize = 512;
+  static constexpr int kReflectionGgxLevels = 6;
+  static constexpr uint16_t kReflectionPrefilterView = 160;
+  // Sixteen texels a face is all a diffuse integral can use, and the
+  // view range is clear of the capture (130), the bake (150), the GGX
+  // chain (160-195) and the dump panels (240).
+  static constexpr uint16_t kReflectionIrrSize = 16;
+  static constexpr uint16_t kReflectionIrrView = 210;
+  bgfx::TextureHandle reflection_ggx_[2]{};
+  bgfx::FrameBufferHandle reflection_ggx_fb_[2][6][6]{};
+  int reflection_irr_write_ = 0;
+  bool reflection_irr_ready_ = false;
+  std::array<bgfx::TextureHandle, 2> reflection_irr_{{
+      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE}};
+  std::array<std::array<bgfx::FrameBufferHandle, 6>, 2> reflection_irr_fb_{};
+  bgfx::ProgramHandle irradiance_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_scene_irr_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_irr_params_ = BGFX_INVALID_HANDLE;
+  void build_irradiance_cube();
+  bgfx::TextureHandle reflection_irr_to_sample() const;
+  int reflection_ggx_level_ = 0;
+  int reflection_ggx_face_ = 0;
+  int reflection_ggx_write_ = 0;
+  bool reflection_ggx_ready_ = false;
+  // The cube the materials sample for rough reflections.
+  bgfx::TextureHandle reflection_ggx_to_sample() const;
+  void build_ggx_cube();
+  bgfx::UniformHandle s_reflection_ggx_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle prefilter_program_ = BGFX_INVALID_HANDLE;
   void* reflection_world_ = nullptr;
   size_t reflection_face_ = 0;
   bool reflection_ready_ = false;
@@ -491,7 +567,7 @@ class LibBgfxBackend final : public IRenderBackend {
   void draw_fullscreen(uint16_t view, bgfx::ProgramHandle program,
                        bgfx::TextureHandle texture, const float* hiz_params,
                        bgfx::UniformHandle sampler = BGFX_INVALID_HANDLE,
-                       uint64_t state = 0);
+                       uint64_t state = 0, uint64_t sampler_flags = 0);
   void present_scene(uint16_t view);
 
   struct HizLevel {

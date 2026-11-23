@@ -79,7 +79,28 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
   ImGui::Combo("Reflection normal", &enhanced.reflection_normal,
                "Authored\0Geometric\0Blend\0");
   ImGui::SliderFloat("Reflection blur", &enhanced.reflection_spread, 0.f, 3.f, "%.2f");
+  ImGui::Checkbox("Physical reflection roughness", &enhanced.reflection_physical_roughness);
+  ImGui::SetItemTooltip("Level of the reflection chain from a real GGX roughness "
+                        "instead of 1 - specularExponent/24. Off keeps paint on the "
+                        "sharp capture, which is why the GGX chain looked like it did "
+                        "nothing; on makes the blur follow the material.");
+  if (enhanced.reflection_physical_roughness)
+    ImGui::SliderFloat("Reflection roughness cap", &enhanced.reflection_roughness_cap,
+                       0.f, 4.f, "%.1f");
   ImGui::SliderFloat("Reflection strength", &enhanced.reflection_strength, 0.f, 1.f, "%.2f");
+  ImGui::Checkbox("GGX prefilter", &enhanced.ggx_reflections);
+  ImGui::Checkbox("Irradiance probe", &enhanced.irradiance_probe);
+  ImGui::SetItemTooltip("Diffuse ambient from the captured environment instead of "
+                        "one flat colour, so a car under a tree and a car in the "
+                        "open are lit differently.");
+  if (enhanced.irradiance_probe) {
+    ImGui::SliderFloat("Irradiance strength", &enhanced.irradiance_strength, 0.f, 1.f, "%.2f");
+    ImGui::SliderFloat("Irradiance scale", &enhanced.irradiance_scale, 0.f, 2.f, "%.2f");
+  }
+  ImGui::SetItemTooltip("Convolve the environment with a GGX lobe instead of a box "
+                        "average. Toggling it off falls back to the capture's mips "
+                        "immediately; toggling it on needs one full cycle (~36 frames) "
+                        "before the material samples it.");
   ImGui::Checkbox("Volumetric clouds", &enhanced.volumetric_clouds);
   ImGui::Combo("Anti-aliasing", &enhanced.msaa, "Off\0MSAA 2x\0MSAA 4x\0MSAA 8x\0");
   ImGui::Checkbox("Sun flare", &options.sun_flare);
@@ -99,6 +120,36 @@ void draw_tuning(Jvm* vm) {
       host_game_options_set_steering_help(*vm, help / 100.f);
     ImGui::SetItemTooltip("Saved in Game Options. Slows keyboard steering at speed "
                           "and helps countersteer during a slide.");
+    float launch = host_game_options().driving.launch_rpm * 100.f;
+    if (ImGui::SliderFloat("Clutch slip revs", &launch, 10.f, 100.f, "%.0f%%",
+                           ImGuiSliderFlags_NoInput))
+      host_game_options_set_launch_rpm(*vm, launch / 100.f);
+    ImGui::SetItemTooltip("Saved in Game Options. Only used when the original "
+                          "coupling below is off: the host model holds the engine "
+                          "at this share of the rev limit while the clutch slips.");
+    ImGui::SameLine();
+    bool original_drive = host_game_options().driving.original_drive;
+    if (ImGui::Checkbox("Original drive coupling", &original_drive))
+      host_game_options_set_original_drive(*vm, original_drive);
+    ImGui::SameLine();
+    bool drive_hud = host_game_options().driving.drive_hud;
+    if (ImGui::Checkbox("Drive readout", &drive_hud)) {
+      auto driving = host_game_options().driving;
+      driving.drive_hud = drive_hud;
+      host_game_options_set_drive_hud(*vm, drive_hud);
+    }
+    ImGui::SetItemTooltip("Speed, rpm and gear in the corner while driving.");
+    float stall = host_game_options().driving.converter_stall * 100.f;
+    ImGui::SetNextItemWidth(160.f);
+    if (ImGui::SliderFloat("Converter stall", &stall, 10.f, 100.f, "%.0f%%")) {
+      host_game_options_set_converter_stall(*vm, stall / 100.f);
+    }
+    ImGui::SetItemTooltip("Where full throttle holds the engine, as a share of the "
+                          "rev limit. Higher flares the revs harder at a launch.");
+    ImGui::SetItemTooltip("On by default. Thrust from the engine torque with ClutchF "
+                          "capping the clutch and no limit on the engine -- the "
+                          "original's contract. Off: the host's crank-inertia slip "
+                          "model.");
     ImGui::SeparatorText("Session");
     ImGui::Text("Simulation time: %.2f s", vm->sim_time());
     float warp = vm->time_warp(-1.f);

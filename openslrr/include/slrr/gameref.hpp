@@ -72,6 +72,10 @@ struct GameRefState {
   void* key = nullptr;  // java.util.resource.GameRef* / GameType*
   void* binding = nullptr; // reference handle alias; never another scene node
   int32_t live_id = 0; // independent from the RPK type ID
+  // Bumped on every upsert of this key. Natives that keep state across
+  // frames (route/traffic caches) compare it, so a reused address cannot
+  // inherit a graph built for the previous resource.
+  uint64_t incarnation = 0;
   void* parent = nullptr;
   void* script = nullptr;  // usually same as key for GameType
   GameRefKind kind = GameRefKind::Generic;

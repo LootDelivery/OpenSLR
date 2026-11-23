@@ -23,8 +23,51 @@ struct EnhancedGraphics {
   // direction, which is a perfect mirror and therefore shows every error in
   // the normal as a hard artefact.
   float reflection_spread = 1.0f;
+  // Which level of the reflection chain a material asks for.
+  //
+  // Off is the stock mapping, roughEnv * 1.68, where roughEnv is
+  // 1 - specularExponent/24 -- a normalisation for fresnel and occlusion, not a
+  // roughness. It puts car paint at about 0.3, below the first level of the
+  // chain, so paint reads the sharp capture and the GGX levels are only ever
+  // reached by rubber. On is the physical mapping, a Blinn-Phong exponent
+  // corresponding to a GGX roughness of sqrt(2/(e+2)) and level m standing for
+  // roughness 0.02 * 2^m, which puts paint at levels 3 to 4.
+  bool reflection_physical_roughness = true;
+  // Ceiling for that level. Four is what the mapping asks for on car paint and
+  // it reads as flat pearl; two keeps the shape of the reflected environment.
+  // 1.5 by the user's eye: above that the body stops reading as paint and starts
+  // reading as film. It also happens to be the range where the chain is barely
+  // used, which keeps the cycle's age out of sight.
+  float reflection_roughness_cap = 1.5f;
   // Head-on reflectance floor; the rest of the range is Fresnel.
   float reflection_strength = 0.35f;
+  // Sample the GGX-prefiltered cube instead of the box-filtered mips of the
+  // capture. Live, so the difference can be judged by toggling it while
+  // looking at the car; the chain keeps its double buffer, so switching on
+  // takes a full cycle before the material starts sampling it.
+  //
+  // Back on: the chain is being finished rather than parked. See
+  // docs/RENDER_FOUNDATION_PLAN.md 8.10 for the defects still open.
+  bool ggx_reflections = true;
+  // Diffuse ambient from the same capture the reflections use, instead of one
+  // flat colour for the whole car.
+  //
+  // On by default since the probe's basis, sampling and level were settled; see
+  // docs/RENDER_FOUNDATION_PLAN.md 8.14 for the two defects and the test that
+  // caught them. What is left is taste -- how much of the ambient the probe takes
+  // over, and how strongly -- and that is what the two values below are for.
+  bool irradiance_probe = true;
+  // How much of the ambient comes from the probe instead of the flat colour.
+  // 1.0 is physically what the environment gives -- and it makes a car's sides
+  // noticeably dimmer than the roof, because a vertical surface sees half sky
+  // and half road. The stock look lit both equally, so the default keeps some of
+  // that expectation; the whole range is on a slider because this is a taste
+  // call, not a correctness one.
+  float irradiance_strength = 0.7f;
+  // Multiplier on top of the shader's self-calibration, which anchors an
+  // upward-facing surface to the flat ambient the material used before. 1.0 means
+  // the probe changes the shape of the ambient and not its level.
+  float irradiance_scale = 1.0f;
 };
 EnhancedGraphics& host_enhanced_graphics();
 // Options -> Advanced Game Options -> Framerate Adaptive Behaviour.
@@ -48,6 +91,20 @@ struct VideoOptions {
 struct DrivingOptions {
   int transmission = 1;
   float steering_help = .666f, abs = 0.f, asr = 0.f;
+  // Launch aid, off by default: 0 disables it, otherwise the fraction of the rev
+  // limit a slipping automatic clutch holds the engine at. It belongs next to
+  // ABS and ASR as a player aid, so the default is off -- upstream applied 0.4 to
+  // every car with an automatic box, which is the "the engine stops at a quarter
+  // of the tachometer" report.
+  float launch_rpm = .4f;
+  // Drive the car the way the original does: thrust from the engine torque with
+  // ClutchF capping the clutch, no engine-speed hold. Off switches to the host's
+  // crank-inertia slip model, which is what the solver's own tests pin.
+  bool original_drive = true;
+  // A driving readout in the corner: speed, rpm and gear. Off hides it.
+  bool drive_hud = true;
+  // Torque converter stall point, as a fraction of the rev limit.
+  float converter_stall = .8f;
   bool operator==(const DrivingOptions&) const = default;
 };
 struct GameOptions {
@@ -68,5 +125,14 @@ void host_set_video_mode(Jvm& jvm, VideoMode mode);
 bool host_commit_video_dialog(Jvm& jvm, Object* handler, int command);
 void host_game_options_apply(Jvm& jvm);
 void host_game_options_set_steering_help(Jvm& jvm, float strength);
+// 0 turns the launch aid off; anything else is the fraction of the rev limit the
+// slipping clutch holds. Written to Game Options, then applied like the rest.
+void host_game_options_set_launch_rpm(Jvm& jvm, float fraction);
+// True: the original's drive coupling. False: the host's crank-inertia model.
+void host_game_options_set_original_drive(Jvm& jvm, bool original);
+// Show the corner speed/rpm/gear readout.
+void host_game_options_set_drive_hud(Jvm& jvm, bool show);
+// Torque converter stall point, as a fraction of the rev limit.
+void host_game_options_set_converter_stall(Jvm& jvm, float fraction);
 void host_game_options_update(Jvm& jvm, bool force = false);
 }

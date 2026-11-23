@@ -19,6 +19,8 @@
 namespace slrr {
 namespace {
 
+uint64_t g_index_generation = 1;
+
 uint32_t rd_u32(const uint8_t* p) {
   return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
          (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
@@ -72,7 +74,10 @@ uint32_t cfg_render_id(const std::string& path) {
 
 }  // namespace
 
-void RpkIndex::set_root(std::string root) { root_ = std::move(root); }
+void RpkIndex::set_root(std::string root) {
+  if (root_ != root) generation_ = ++g_index_generation;
+  root_ = std::move(root);
+}
 
 std::string RpkIndex::resolve_disk_path(const std::string& path) const {
   std::string p = path;
@@ -241,6 +246,7 @@ int32_t RpkIndex::open_lib(const std::string& path) {
   pack.pack_id = id;
   pack.path = path;
   const std::string disk = resolve_disk_path(path);
+  generation_ = ++g_index_generation;
   if (!parse_rpak(disk, pack)) {
     std::printf("[rpk] openLib %s -> %d (no TOC)\n", path.c_str(), id);
   } else {

@@ -39,10 +39,12 @@ here is inferred from commit titles.
 | `shaders/fs_cubeview.sc` | Verified | New. On-screen cubemap face viewer, sampling the cube directly. |
 | `shaders/fs_hiz.sc` | Build-verified | New. HiZ reduction. |
 | `shaders/fs_blur.sc` | **Built, not called** | Compiled, embedded and `blur_program_` is created from it, but the only consumer, `build_reflection_mips()`, is never invoked anywhere in the runtime. See section 6. |
+| `shaders/fs_prefilter.sc` | Verified | New. GGX importance-sampled prefilter, one draw per level and face of the reflection chain (`build_ggx_cube`). Twelve plus eight taps per level, roughness `0.02*2^m`; the face basis is the capture's own lookAt rows with the v axis negated. |
+| `shaders/fs_irradiance.sc` | Verified | New. Cosine-sampled diffuse irradiance, ninety-six taps a face taken from capture mip 5, six faces in one frame (`build_irradiance_cube`). |
 | `shaders/fs_white.sc` | Build-verified | New. |
 | `shaders/fs_shadow_recv.sc`, `vs_shadow_cast.sc`, `vs_shadow_recv.sc` | Build-verified | New shadow passes. |
 | `shaders/fs_mesh.sc` | Verified | World material path. No environment lookup. |
-| `shaders/fs_vehicle.sc` | Verified | Vehicle material path: material kinds, environment lookup, `envPrefilter()`, layer mixing. Paint is still `mix(color, environment, k<=0.72)`. |
+| `shaders/fs_vehicle.sc` | Verified | Vehicle material path: material kinds, environment lookup, `envPrefilter()` (physical roughness to chain level, `u_envLod`), layer mixing, and the diffuse ambient mix with the irradiance probe. Paint is still `mix(color, environment, k<=0.72)`. |
 | `shaders/varying.def.sc`, `vs_mesh.sc` | Verified | Transform space is `S*v` with instance matrix `S*M*S`. |
 | `shaders/fs_osd_text.sc`, `vs_osd_text.sc` | ambiguous | Present upstream, absent here. Either upstream added a text batching shader after our snapshot, or our snapshot predates it. Not ours. |
 
@@ -94,28 +96,36 @@ Recorded because they explain the current design.
 | `sRGB` flag on all UI textures | Superseded | Scoped back to scene maps only; on interface it double-processed. |
 | `update_local_light` as the garage light | Present | One hardcoded point over `misc.garage:0x001D`, +3.3 in Y, radius 8, intensity 8, plus a x3.0 and warm tint in the shader. |
 
-## 6. Reflection blur — three separate mechanisms
+## 6. Reflection blur — four mechanisms, one of them current
 
 These are distinct and were previously conflated. Established by tracing the
 call graph at `9b9513f`.
 
-1. **Runtime blur: works in game, effect is weak.** The cubemap carries an
-   automatically generated mip chain (`BGFX_ATTACHMENT_AUTO_GEN_MIPS` on the
-   last face), and `envPrefilter()` in `shaders/fs_vehicle.sc` selects a level
-   with `textureCubeLod`, mixing two neighbouring levels. That level selection
-   over a downsampled chain is what produces the visible softening. This is
-   **not** a convolution and not GGX prefiltering.
+1. **The capture's own mip chain.** `BGFX_ATTACHMENT_AUTO_GEN_MIPS` on the
+   last face gives the capture cube an automatically generated chain, i.e. plain
+   downsampling. Materials no longer read it for paint or chrome -- those go to
+   mechanism 3 -- but a mirror (level below 0.5) and the diffuse probe still do,
+   so its level layout still matters.
 2. **Extra blur pipeline: built, never run.** `build_reflection_mips()` is
    defined at `bgfx_lib_backend.cpp:2124` and declared in the header, but a
    call-graph search finds no invocation. `fs_blur.sc` is embedded and
    `blur_program_` is created and destroyed, so the code is live in the build
    sense and inert in the runtime sense. Its own comment calls it "Stage 2.2:
    turn the six faces sitting in mip 0 into a prefilter chain".
-3. **GGX prefiltering: not implemented.** Neither of the above is it.
+3. **GGX prefiltering: implemented, and it is what is on screen.**
+   `build_ggx_cube()` builds a 512-square, six-level cube chain: level 0 is a
+   blit of the capture face which is skipped; levels 1-5 are convolution passes
+   through `fs_prefilter.sc`. The material selects a level from physical
+   roughness, so paint reads levels 3-4 and chrome 1-2. The chain is published
+   whole, thirty-six faces a gate, ten milliseconds of age.
+4. **The old blur chain: dead code.** `build_reflection_mips()` and
+   `fs_blur.sc` are unchanged and still have no call site. They are kept because
+   the pass compiles and the stage-2.2 design note lives in its comment, not
+   because anything draws with them.
 
 The absence of a call to `build_reflection_mips()` does not mean reflections
-are unblurred, and the presence of `fs_blur.sc` does not mean it is the
-mechanism in use. Both statements stand at once.
+are unblurred, and the presence of `fs_blur.sc` does not mean it is the mechanism
+in use. Both statements stood before the GGX chain existed and both still stand.
 
 ## 7. Not present here, present upstream
 

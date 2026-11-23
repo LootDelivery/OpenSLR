@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/pedestrian_lines.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/gameref.hpp"
@@ -29,6 +30,8 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -65,6 +68,19 @@ struct SfxItem {
   float pitch = 1, pmin = 0, pmax = 0, vmin = 0, vmax = 0;
 };
 struct Record {
+  // Traffic and other host-driven bodies: the runtime owns the pose and the
+  // physics step must not simulate this chassis.
+  bool external_motion = false;
+  // Cfg `render` lines that live under a `wheel` block, captured by render_part
+  // so the external driver can spin and steer them without a wheel part.
+  struct InlineWheel {
+    Object *node = nullptr;
+    PartMatrix base{}, mesh{};
+    float radius = 0, steer_factor = 0;
+    size_t corner = 0;
+    double spin = 0;
+  };
+  std::vector<InlineWheel> inline_wheels;
   std::unique_ptr<physics::DeformationCage> deformation;
   std::unique_ptr<ScxGeometry> collision, deformed_collision;
   unsigned deformation_upload_ticks = 0;
@@ -136,7 +152,7 @@ struct Record {
   std::array<bool, 4> geometry_solved{};
   physics::VehicleDynamics dynamics;
   bool physics_ready = false, physics_dirty = true, physics_suspended = false;
-  bool physics_reported = false;
+  bool physics_reported = false, physics_fault_reported = false;
   int reported_contacts = -1, physics_status_lines = 0;
   void *physics_parent = nullptr;
   PartMatrix published_frame{};
@@ -167,6 +183,7 @@ struct LoosePanel {
 std::unordered_map<Object *, LoosePanel> loose_panels;
 // Script PhysicsRef bodies released by setStatic(0), keyed by their GameRef.
 struct FreeBody {
+  bool configured = false;
   int32_t live_id = 0;  // guards against a reused key
   physics::RigidBody body;
   PartMatrix carrier_frame{};
@@ -175,6 +192,7 @@ struct FreeBody {
   float pos[3] = {}, ypr[3] = {};  // last published pose; a change is setMatrix
 };
 std::unordered_map<void *, FreeBody> free_bodies;
+std::unordered_set<uint32_t> invalid_dynamic_types;
 int32_t controlled_vehicle = 0;
 
 struct DriverSeat {
@@ -226,6 +244,8 @@ float ped_backlog = 0.f;
 VehicleHudLayout hud_preview;
 std::string hud_preview_directory;
 constexpr double kPhysicsTick = 1.0 / physics::VehicleDynamics::update_frequency;
+// Simulation seconds, for the drive trace only.
+static double engine_trace_clock = 0;
 constexpr unsigned kMaxPhysicsTicksPerFrame = 4;
 double physics_elapsed = 0;
 std::unordered_map<uint32_t, std::shared_ptr<const PartConfig>> configurations;
@@ -240,6 +260,7 @@ Record *record(Object *object) {
   return found == records.end() ? nullptr : &found->second;
 }
 void repair_part(Object *part, Record &rec);
+void pose_wheels(Object *chassis, Record &rec);
 Object *object(const std::vector<Value> &args, size_t i) {
   return i < args.size() && args[i].tag == ValueTag::Obj ? args[i].v.o
                                                          : nullptr;
@@ -424,6 +445,7 @@ Object *car(Object *self) {
   return nullptr;
 }
 void render_part(Jvm &jvm, Object *self, Record &rec) {
+  rec.inline_wheels.clear();
   auto paint_of = [&](const std::vector<uint32_t> &colors) {
     uint32_t paint = 0xffffff;
     if (!rec.colour_set || colors.empty())
@@ -520,7 +542,20 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
       PartMatrix local = part_matrix_multiply(
           part_pose_matrix(rec.config->wheels[static_cast<size_t>(r.wheel)]),
           part_pose_matrix(r.pose));
+      const auto count = rec.renders.size();
       add(r.resource, local, &r.links, &r.colors);
+      if (rec.renders.size() > count) {
+        const auto i = static_cast<size_t>(r.wheel);
+        const float radius = i < rec.config->wheel_springs.size()
+                                 ? rec.config->wheel_springs[i].radius
+                                 : 0;
+        const float factor =
+            i < rec.config->wheel_steering.size() ? rec.config->wheel_steering[i] : 0;
+        rec.inline_wheels.push_back({rec.renders.back(),
+                                     part_pose_matrix(rec.config->wheels[i]),
+                                     part_pose_matrix(r.pose),
+                                     radius > 0 ? radius : .33f, factor, i, 0});
+      }
     }
   }
 }
@@ -1472,6 +1507,8 @@ bool part_command(Object *part, const std::string &command) {
     int mode;
     if (!rec || !(input >> mode)) return false;
     rec->transmission = mode;
+    if (std::getenv("SLRR_DRIVE_TRACE"))
+      std::fprintf(stderr, "[drive-trace] transmission command mode=%d\n", mode);
     return true;
   }
   if (verb == "damage_multiplier") {
@@ -1533,6 +1570,14 @@ bool part_command(Object *part, const std::string &command) {
     rec->steering_input = std::clamp(value, -1.f, 1.f);
     rec->steering_request = rec->steering_input;
     rec->steering_correction = 0.f;
+    if (rec->dynamic_frames) {
+      // A parked chassis already has suspension/hub frames. Rebuild them with
+      // the new steering before placing parts, not at the next repair: the
+      // steering wheel would otherwise read the new scalar while the wheels
+      // keep the previous pose.
+      pose_wheels(part, *rec);
+      return true;
+    }
     for (const auto &slot : rec->config->slots)
       if (slot.type >= 101 && slot.type <= 304)
         place_child(part, slot.id, false);
@@ -1644,6 +1689,54 @@ Object *part_render_owner(void *key) {
   }
   return nullptr;
 }
+Object *part_render_car(void *key) {
+  for (int depth = 0; key && depth < 64; ++depth) {
+    auto *node = static_cast<Object *>(key);
+    if (auto *rec = record(node); rec && rec->config->native_kind == "car")
+      return canonical(node);
+    auto *ref = gameref_get(key);
+    if (!ref) return nullptr;
+    key = ref->parent;
+  }
+  return nullptr;
+}
+// A Painter texture belongs to the parts that show it. One that no live part
+// uses any more can be freed; a copied texture may be shared by two parts, which
+// is why the caller asks before releasing.
+bool texture_in_use(uint32_t texture, const Object *except) {
+  for (const auto &entry : records)
+    if (entry.first != except && entry.second.state.texture == texture)
+      return true;
+  return false;
+}
+bool part_paint_textures(Object *part, uint32_t *current, uint32_t *source) {
+  auto *rec = record(part);
+  if (!rec)
+    return false;
+  if (current)
+    *current = rec->state.texture;
+  if (source)
+    *source = rec->config->texture;
+  return true;
+}
+bool part_set_paint_texture(Object *part, uint32_t texture) {
+  auto *rec = record(part);
+  if (!rec || !rec->config->texture)
+    return false;
+  paint_one(canonical(part), texture);
+  return true;
+}
+bool part_paint_texture_shared(uint32_t texture, Object *part) {
+  return texture_in_use(texture, canonical(part));
+}
+Object *part_showing_texture(uint32_t texture) {
+  if (!texture)
+    return nullptr;
+  for (const auto &entry : records)
+    if (entry.second.state.texture == texture)
+      return entry.first;
+  return nullptr;
+}
 bool part_destroy(Object *part) {
   part = canonical(part);
   auto *rec = record(part);
@@ -1689,6 +1782,24 @@ std::vector<InstalledPart> part_installed_tree(Object *root) {
 }
 
 namespace {
+bool finite_frame(const PartMatrix& frame) {
+  return std::all_of(frame.begin(),frame.end(),[](float value){return std::isfinite(value);});
+}
+bool initialize_loose_body(physics::RigidBody& body,double mass,
+                           physics::Vec3 lo,physics::Vec3 hi,physics::Vec3 center,
+                           const PartMatrix* frame,uint32_t resource) {
+  try {
+    auto candidate = body;
+    candidate.configure(mass,lo,hi,center);
+    if (frame) candidate.set_frame(*frame);
+    body = candidate;
+    return true;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr,"[phys] rejected loose body type=0x%x: %s\n",resource,error.what());
+    return false;
+  }
+}
+
 bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   auto unavailable = [&](const char *reason) {
     if (!rec.physics_reported) {
@@ -1731,9 +1842,23 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
                    geometry.info.bbox_max[2] * scale};
   const auto velocity = rec.dynamics.body.velocity,
              momentum = rec.dynamics.body.momentum;
-  rec.dynamics.body.configure(mass, lo, hi, {com[0], com[1], com[2]});
+  // Configure a candidate: a bad bound/frame cannot poison the existing body.
+  auto candidate = rec.dynamics.body;
+  try {
+    candidate.configure(mass, lo, hi, {com[0], com[1], com[2]});
+    candidate.set_frame(frame);
+  } catch (const std::exception& error) {
+    rec.physics_ready = false;
+    rec.physics_suspended = true;
+    rec.physics_pending_placement = false;
+    if (!rec.physics_fault_reported) {
+      std::fprintf(stderr,"[phys] suspended chassis type=0x%x: %s\n",rec.state.resource,error.what());
+      rec.physics_fault_reported = true;
+    }
+    return false;
+  }
   const bool held = rec.physics_ready;
-  rec.dynamics.body.set_frame(frame);
+  rec.dynamics.body = candidate;
   if (held) {
     rec.dynamics.body.velocity = velocity;
     rec.dynamics.body.momentum = momentum;
@@ -1832,7 +1957,13 @@ void dynamics_wheels(Record &rec) {
     // on it, so the car rests on the brake instead of passing through the
     // floor, or on an outer dually wheel.
     const double reach = mount ? 0 : corner_hardware_reach(rec, i);
-    if (!mount && !(reach > 0))
+    // A cfg wheel render with no rim part in the slot is the traffic case: the
+    // authored wheel is all there is. It still needs a contact point, or the
+    // parked body rests on its shell instead of on the tyre.
+    const bool inline_wheel =
+        !mount && std::any_of(rec.inline_wheels.begin(), rec.inline_wheels.end(),
+                              [&](const auto &w) { return w.corner == i; });
+    if (!mount && !inline_wheel && !(reach > 0))
       continue;
     const auto fallback = i < rec.config->wheel_springs.size()
                               ? rec.config->wheel_springs[i]
@@ -1857,7 +1988,9 @@ void dynamics_wheels(Record &rec) {
         (physics::wheel_steering(ypr[0]) *
          physics::Quaternion{std::sin(ypr[1] * .5), 0, 0, std::cos(ypr[1] * .5)} *
          physics::Quaternion{0, 0, std::sin(ypr[2] * .5), std::cos(ypr[2] * .5)}).normalized();
-    cfg.radius = !mount ? reach : live.radius > 0 ? live.radius : fallback.radius;
+    cfg.radius = inline_wheel ? fallback.radius
+                 : !mount    ? reach
+                             : live.radius > 0 ? live.radius : fallback.radius;
     cfg.rest = live.rest;
     cfg.anchor = fallback.base + fallback.travel;
     cfg.minimum = std::max(0.f, live.min_len);
@@ -1866,6 +1999,21 @@ void dynamics_wheels(Record &rec) {
     cfg.bump_damping = live.damp_bound;
     cfg.rebound_damping = live.damp_rebound;
     cfg.unsprung = fallback.mass;
+    if (inline_wheel) {
+      // Traffic templates carry no wheel part, so their authored spring data
+      // would leave the body hanging. Use the nominal traffic suspension the
+      // external driver is modelled on: .25 m spring, .1 m static sag at the
+      // loaded corner, .65 damping.
+      cfg.rest = .25;
+      cfg.anchor = .25;
+      cfg.minimum = .05;
+      cfg.maximum = .45;
+      const double mass = rec.config->mass > 0 ? rec.config->mass : 1400;
+      cfg.spring = mass * 9.81 / 4 / .1;
+      cfg.bump_damping = cfg.rebound_damping =
+          2 * std::sqrt(cfg.spring * mass / 4) * .65;
+      cfg.unsprung = 0;
+    }
     cfg.arm_length = 0;
     cfg.has_hub = false;
     cfg.hub = {};
@@ -1952,6 +2100,15 @@ void pose_wheels(Object *chassis, Record &rec) {
     const physics::Quaternion rolling{std::sin(spin * .5), 0, 0, std::cos(spin * .5)};
     rec.rolling_frame[i] = part_matrix_multiply(
         physics::corner_matrix(frames.hub_origin, hub_steered * rolling), inverse);
+  }
+  for (auto &wheel : rec.inline_wheels) {
+    auto local = part_matrix_multiply(
+        rec.rolling_frame[wheel.corner],
+        part_matrix_multiply(wheel.base, wheel.mesh));
+    if (auto *n = gameref_get(wheel.node)) {
+      std::copy(local.begin(), local.end(), n->local_matrix);
+      n->matrix_override = true;
+    }
   }
   for (const auto &slot : rec.config->slots)
     if (corner_gear(slot.type))
@@ -2126,6 +2283,46 @@ bool script_pos(void *key, float *x, float *y, float *z) {
 }
 } // namespace
 void part_park_chassis(Object *car, bool shift) { park_chassis(car, shift); }
+// External motion contract: while set, the physics step skips this chassis and
+// the owner publishes the pose itself (traffic, scripted props). park_chassis
+// has already suspended it; the flag survives a later release attempt.
+void part_set_external_motion(Object *car, bool external) {
+  auto *rec = record(as_part(car));
+  if (!rec)
+    return;
+  rec->external_motion = external;
+  if (!external) {
+    // Handing the body back: the next prepare must rebuild it, because the
+    // pose was published by us while the flag was set.
+    rec->physics_ready = false;
+    rec->physics_dirty = true;
+  }
+}
+// Advance the cfg wheel meshes of an externally driven car: `metres` is the
+// distance travelled since the previous call, `steer` the yaw change per metre
+// (the caller converts its heading delta). Rotation and steering are clamped,
+// so a bad frame cannot spin the wheels inside out.
+void part_animate_external_wheels(Object *car, float metres, float steer) {
+  auto *rec = record(as_part(car));
+  if (!rec || !rec->external_motion || !std::isfinite(metres) ||
+      !std::isfinite(steer))
+    return;
+  for (auto &wheel : rec->inline_wheels) {
+    if (!(wheel.radius > 0.f))
+      continue;
+    wheel.spin =
+        std::remainder(wheel.spin - metres / wheel.radius, 6.283185307179586);
+    PartPose rotation;
+    rotation.rotation = {std::clamp(steer, -.6f, .6f) * wheel.steer_factor,
+                         float(wheel.spin), 0};
+    auto local = part_matrix_multiply(
+        wheel.base, part_matrix_multiply(part_pose_matrix(rotation), wheel.mesh));
+    if (auto *n = gameref_get(wheel.node)) {
+      std::copy(local.begin(), local.end(), n->local_matrix);
+      n->matrix_override = true;
+    }
+  }
+}
 void part_apply_state(Object *object, const float* velocity, const float* angular) {
   Object* chassis = as_part(object);
   auto* rec = record(chassis);
@@ -2209,6 +2406,60 @@ void update_steering(Record &rec, bool controls) {
 }
 
 void configure_drive(Object *chassis, Record &rec, bool controlled) {
+  // Chassis.updatevariables: C_drag = fully_stripped_drag minus the
+  // drag_reduction of every installed body part, floored at zero. The EXE
+  // applies it at 0x456A83 as -C |v| v above 1 m/s about drag_center, on
+  // every scripted car, driven or not -- so this runs before the
+  // controlled-car gate below. Without it a car had no aerodynamic drag.
+  {
+    auto &aero = rec.dynamics.aero;
+    aero.drag = 0;
+    aero.drag_center = {};
+    // The script's own formula, because C_drag is not on the object in this
+    // host: Chassis.updatevariables is what creates it, and it is not running
+    // here (the field reads 0 while fully_stripped_drag reads 0.55 on the same
+    // car). So: fully_stripped_drag minus each installed part's drag_reduction.
+    float drag = comp(chassis, "C_drag");
+    const float stripped = comp(chassis, "fully_stripped_drag");
+    if (!(drag > 0.f) && stripped > 0.f) {
+      drag = stripped;
+      float reduced = 0.f;
+      int parts = 0;
+      for (const auto &installed : part_installed_tree(chassis)) {
+        if (!installed.object || installed.object == chassis)
+          continue;
+        const float reduction = comp(installed.object, "drag_reduction");
+        if (std::isfinite(reduction) && reduction != 0.f) {
+          reduced += reduction;
+          ++parts;
+        }
+      }
+      if (std::getenv("SLRR_DRIVE_TRACE"))
+        std::fprintf(stderr,
+                     "[drive-trace] aero drag_reduction parts=%d sum=%.4f\n",
+                     parts, static_cast<double>(reduced));
+      drag = std::max(0.f, drag - reduced);
+    }
+    if (std::getenv("SLRR_DRIVE_TRACE"))
+      std::fprintf(stderr,
+                   "[drive-trace] aero C_drag=%.4f stripped=%.4f\n",
+                   static_cast<double>(drag),
+                   static_cast<double>(stripped));
+    if (std::isfinite(drag) && drag > 0.f) {
+      // SLRR_AERO_DRAG=0 runs the same build without drag, for an A/B.
+      static const bool enabled = [] {
+        const char *e = std::getenv("SLRR_AERO_DRAG");
+        return !(e && std::atof(e) == 0.0);
+      }();
+      aero.drag = enabled ? drag : 0.f;
+      if (auto *center = part_field(chassis, "drag_center")) {
+        const physics::Vec3 point{comp(center, "x"), comp(center, "y"),
+                                  comp(center, "z")};
+        if (point.finite())
+          aero.drag_center = point;
+      }
+    }
+  }
   auto &drive = rec.dynamics.drive;
   drive.torque = {};
   if (!controlled) {
@@ -2240,10 +2491,24 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.abs_strength = rec.abs_strength;
   drive.launch_help = rec.launch_help;
   drive.differential_lock = std::clamp(comp(chassis, "diff_lock"), 0.f, 1.f);
+  // Player aid, off unless chosen; the physics reads 0 as "no launch hold".
+  drive.launch_rpm = host_game_options().driving.launch_rpm;
+  // The original's coupling: ClutchF caps the torque the clutch passes, and the
+  // drive path itself is the recovered one unless the host model is asked for.
+  const float clutch_force = comp(chassis, "ClutchF");
+  drive.clutch_force = std::isfinite(clutch_force) && clutch_force > 0.f
+                           ? clutch_force
+                           : 500.0;
+  drive.faithful = host_game_options().driving.original_drive;
+  drive.converter_stall = host_game_options().driving.converter_stall;
   drive.clutch = controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 0.f;
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
   drive.inertia = .28 + .01 * std::max(0.f, comp(chassis, "engine_inertia"));
+  // Recovered engine losses (3.5) and the rpm that scales them.
+  drive.friction_fwd = comp(chassis, "engine_friction_fwd");
+  drive.friction_rev = comp(chassis, "engine_friction_rev");
+  drive.max_rpm = comp(chassis, "maxRPM");
   drive.torque = [dyno](double rpm) { return dyno_sample(dyno, float(rpm), 0, false); };
   drive.engaged = rec.physics_released;
   drive.reverse = controls && in.drive_reverse;
@@ -2276,6 +2541,52 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
       }
     }
   }
+  {
+    // One line, once per car: the gearing and mass a launch's traction
+    // arithmetic needs. Without them "it does not spin" is an opinion.
+    static Object* dumped = nullptr;
+    if (std::getenv("SLRR_DRIVE_TRACE") && chassis != dumped &&
+        drive.ratios[1] != 0) {
+      dumped = chassis;
+      std::fprintf(stderr,
+                   "[drive-trace] car limit=%.0f idle=%.0f cf=%.0f mass=%.0f "
+                   "ratio1=%.2f driven=%zu\n",
+                   drive.limit, drive.idle, drive.clutch_force,
+                   double(comp(chassis, "mass")), drive.ratios[1],
+                   drive.wheels.size());
+      // The traction arithmetic needs what the tyres and the driven wheels
+      // actually are: a launch with no spin is either below the tyre or the
+      // drive never reaches it.
+      for (size_t i = 0; i < rec.wheels.size() && i < 4; ++i) {
+        const auto& wheel = rec.wheels[i];
+        std::fprintf(stderr,
+                     "[drive-trace] wheel %zu drive=%.2f radius=%.3f \n"
+                     "                    friction=%.2f long_grip=%.2f "
+                     "lat_grip=%.2f maxload=%.0f\n",
+                     i, double(wheel.drive), double(wheel.radius),
+                     double(wheel.friction), double(wheel.frictn_x),
+                     double(wheel.sliction), double(wheel.max_load));
+      }
+      // What the engine actually gives the driveline, sampled from the same curve
+      // the drive uses. Without it, "the V8 feels like an inline four" is a
+      // comparison of two numbers nobody has seen.
+      double peak_torque = 0, peak_rpm = 0, peak_hp = 0;
+      if (drive.torque) {
+        for (double rpm = drive.idle; rpm <= drive.limit; rpm += 50.0) {
+          const double torque = drive.torque(rpm);
+          if (torque > peak_torque) {
+            peak_torque = torque;
+            peak_rpm = rpm;
+          }
+          peak_hp = std::max(peak_hp, torque * rpm / 9549.0 * 1.34102);
+        }
+      }
+      std::fprintf(stderr,
+                   "[drive-trace] engine peak %.0f Nm @ %.0f rpm, %.0f hp\n",
+                   peak_torque, peak_rpm, peak_hp);
+    }
+  }
+
   rec.horn_down = horn;
   for (size_t i = 0; i < drive.wheels.size(); ++i) {
     auto &out = drive.wheels[i];
@@ -2285,8 +2596,19 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
     out.handbrake = std::max(0.f, wheel.hbrake);
     out.bearing = std::max(0.f, wheel.bearing);
     out.rolling_resistance = std::max(0., wheel.roll_res - .003625);
-    out.tyre = {wheel.friction, wheel.stiffness, wheel.sliction,
-                wheel.max_load, wheel.frictn_x, wheel.load_smooth};
+    // Assign by name: this struct was reordered upstream (load_smoothing and
+    // longitudinal_grip swapped places), and the positional form silently put
+    // the longitudinal grip (1.0) into the load smoothing and the smoothing
+    // (0.4) into the longitudinal grip. That cost 60% of the driving force and
+    // made the rear axle let go, from one aggregate initializer.
+    out.tyre.friction = wheel.friction;
+    out.tyre.stiffness = wheel.stiffness;
+    out.tyre.sliction = wheel.sliction;
+    out.tyre.maximum_load = wheel.max_load;
+    out.tyre.load_smoothing = wheel.load_smooth;
+    out.tyre.longitudinal_grip = wheel.frictn_x;
+    // setCPatch stores the sine of the scripted patch angle.
+    out.tyre.patch_angle = std::asin(std::clamp(wheel.cpatch_ang, 0.f, 1.f));
   }
 }
 
@@ -2781,9 +3103,11 @@ void detach_panel(Object* part, Record& rec, Object* chassis, Record& vehicle) {
   double mass = 0;
   for (const auto& item : part_installed_tree(part)) mass += record(item.object)->config->mass;
   const Vec3 padding{.005, .005, .005};
-  body.configure(std::max(2., mass), bounds.minimum - padding, bounds.maximum + padding,
-                 (bounds.minimum + bounds.maximum) * .5);
-  body.set_frame(frame);
+  if (!initialize_loose_body(body,std::max(2.,mass),bounds.minimum-padding,bounds.maximum+padding,
+                             (bounds.minimum+bounds.maximum)*.5,&frame,rec.state.resource)) {
+    loose_panels.erase(part);
+    return;
+  }
   const auto& carrier = vehicle.dynamics.body;
   loose.carrier_frame = carrier.frame();
   body.velocity = carrier.point_velocity(body.position);
@@ -2923,7 +3247,8 @@ unsigned map_object_quiet_ticks(const physics::RigidBody& body, bool free, unsig
 Object* part_add_dynamic_native(const PartConfig& config,
                                 const std::vector<PartRender>& renders,
                                 const PartMatrix& world, void* parent, int32_t seed) {
-  if (!runtime || !parent) return nullptr;
+  if (!runtime || !parent || !finite_frame(world) ||
+      invalid_dynamic_types.contains(config.resource)) return nullptr;
   // Mass and centre from the collision bodies; nocollision bodies do not move
   // the object.
   double mass = 0.0;
@@ -3002,7 +3327,12 @@ Object* part_add_dynamic_native(const PartConfig& config,
     return nullptr;
   }
   auto& loose = loose_panels[node];
-  loose.body.configure(mass, lo, hi, center / mass);
+  if (!initialize_loose_body(loose.body,mass,lo,hi,center/mass,nullptr,config.resource)) {
+    invalid_dynamic_types.insert(config.resource);
+    loose_panels.erase(node);
+    part_destroy(node);
+    return nullptr;
+  }
   loose.render_offsets = std::move(offsets);
   loose.vehicle = controlled_vehicle;
   loose.quiet_ticks = physics::VehicleDynamics::update_frequency / 2;
@@ -3029,14 +3359,18 @@ void advance_loose_panels() {
   using physics::Vec3;
   std::vector<std::pair<Object*, bool>> settled;  // keep the current pose?
   for (auto it = loose_panels.begin(); it != loose_panels.end();) {
-    auto* part = it->first;
-    auto& loose = it->second;
+    auto current = it++;
+    auto* part = current->first;
+    auto& loose = current->second;
     auto* node = gameref_get(part);
     auto* rec = record(part);
     const bool native_dynamic = rec && rec->config->native_kind == "native_dynamic";
+    Record* collision_vehicle = nullptr;
+    physics::RigidBody carrier_before;
+    try {
     PartMatrix parent_frame;
     if (!node || !node->parent) {
-      it = loose_panels.erase(it);
+      loose_panels.erase(current);
       part_destroy(part);
       continue;
     }
@@ -3049,7 +3383,7 @@ void advance_loose_panels() {
         const auto frame = loose.body.frame();
         scene_instances_settle_dynamic(part, frame.data());
       }
-      it = loose_panels.erase(it);
+      loose_panels.erase(current);
       part_destroy(part);
       continue;
     }
@@ -3057,18 +3391,18 @@ void advance_loose_panels() {
       loose.vehicle = controlled_vehicle;
     auto* owner = gameref_find_live(loose.vehicle);
     if (native_dynamic && (!owner || owner->parent != node->parent)) {
-      ++it;
       continue;
     }
     if (!owner) {
-      it = loose_panels.erase(it);
+      loose_panels.erase(current);
       part_destroy(part);
       continue;
     }
-    ++it;
     auto* chassis = static_cast<Object*>(owner->key);
     auto* vehicle = record(chassis);
     if (!vehicle || !vehicle->physics_ready) continue;
+    collision_vehicle = vehicle;
+    carrier_before = vehicle->dynamics.body;
     if (native_dynamic && !rec->physics_ready) {
       // The first active tick supplies the real ground-shell transform. The
       // placement was created before scene_instances_select was guaranteed.
@@ -3119,6 +3453,7 @@ void advance_loose_panels() {
     }
     if (loose.quiet_ticks >= rest_ticks) body.velocity = body.momentum = {};
     const auto local = part_matrix_multiply(part_matrix_inverse_rigid(parent_frame), body.frame());
+    if (!finite_frame(local)) throw std::runtime_error("non-finite loose-body frame");
     if (native_dynamic) {
       for (size_t i = 0; i < rec->renders.size() && i < loose.render_offsets.size(); ++i)
         if (auto* state = gameref_get(rec->renders[i])) {
@@ -3127,6 +3462,13 @@ void advance_loose_panels() {
         }
     } else {
       std::copy(local.begin(), local.end(), node->local_matrix);
+    }
+    } catch (const std::exception& error) {
+      if (collision_vehicle) collision_vehicle->dynamics.body = carrier_before;
+      std::fprintf(stderr,"[phys] removed loose body type=0x%x: %s\n",rec?rec->state.resource:0,error.what());
+      if (native_dynamic) scene_instances_settle_dynamic(part,nullptr);
+      loose_panels.erase(part);
+      part_destroy(part);
     }
   }
   for (const auto& [part, keep_pose] : settled) {
@@ -3228,6 +3570,16 @@ void publish_free_body(GameRefState& state, FreeBody& free, const PartMatrix& pa
 // the controlled car, like loose panels. Bodies outside the active world wait.
 void advance_free_bodies() {
   using physics::Vec3;
+  // Controlled vehicle and its script frame are invariant across this pass.
+  Object* chassis = nullptr;
+  Record* vehicle = nullptr;
+  if (const auto* owner = gameref_find_live(controlled_vehicle)) {
+    chassis = static_cast<Object*>(owner->key);
+    vehicle = record(chassis);
+    PartMatrix car_frame;
+    if (!vehicle || !vehicle->physics_ready ||
+        !scene_instances_script_matrix(chassis, car_frame.data())) vehicle = nullptr;
+  }
   std::unordered_set<void*> live;
   for (auto* state : gameref_simulated_bodies()) {
     void* key = state->key;
@@ -3236,17 +3588,30 @@ void advance_free_bodies() {
       continue;
     live.insert(key);
     auto& free = free_bodies[key];
+    // Keep the published pose until the complete step has succeeded.
+    const auto saved_pos = free.configured
+        ? std::array{free.pos[0],free.pos[1],free.pos[2]}
+        : std::array{state->pos[0],state->pos[1],state->pos[2]};
+    const auto saved_ypr = free.configured
+        ? std::array{free.ypr[0],free.ypr[1],free.ypr[2]}
+        : std::array{state->ypr[0],state->ypr[1],state->ypr[2]};
+    // A failed step must leave the car's body exactly as it was, so the
+    // carrier is captured outside the try block and restored in the handler.
+    // chassis/vehicle are resolved once per pass, above this loop.
+    physics::RigidBody carrier_before{};
+    try {
     const bool moved = !std::equal(free.pos, free.pos + 3, state->pos) ||
                        !std::equal(free.ypr, free.ypr + 3, state->ypr);
-    if (free.live_id != state->live_id || moved) {
+    if (!free.configured || free.live_id != state->live_id || moved) {
       // New body, reused key or setMatrix: start at rest at the script pose.
-      if (free.live_id != state->live_id) {
+      if (!free.configured || free.live_id != state->live_id) {
         free = FreeBody{};
         free.live_id = state->live_id;
         if (!configure_free_body(*state, free.body)) {
           gameref_set_physics_simulated(key, false);
           continue;
         }
+        free.configured = true;
       }
       float local[16];
       PartMatrix script_local;
@@ -3261,16 +3626,7 @@ void advance_free_bodies() {
     constexpr unsigned rest_ticks = physics::VehicleDynamics::update_frequency / 2;
     const bool sleeping = free.quiet_ticks >= rest_ticks;
     auto& body = free.body;
-    Object* chassis = nullptr;
-    Record* vehicle = nullptr;
-    if (const auto* owner = gameref_find_live(controlled_vehicle)) {
-      chassis = static_cast<Object*>(owner->key);
-      vehicle = record(chassis);
-      PartMatrix car_frame;
-      if (!vehicle || !vehicle->physics_ready ||
-          !scene_instances_script_matrix(chassis, car_frame.data()))
-        vehicle = nullptr;
-    }
+    if (vehicle) carrier_before = vehicle->dynamics.body;
     bool near = false;
     PartMatrix previous_carrier = free.carrier_frame;
     if (vehicle) {
@@ -3294,7 +3650,24 @@ void advance_free_bodies() {
     free.quiet_ticks = map_object_quiet_ticks(body, !carrier_contact && support.touching,
                                               free.quiet_ticks, free.rest_anchor);
     if (free.quiet_ticks >= rest_ticks) body.velocity = body.momentum = {};
+    const auto frame = body.frame();
+    if (!std::all_of(frame.begin(),frame.end(),[](float v){return std::isfinite(v);}))
+      throw std::runtime_error("non-finite free-body frame");
     publish_free_body(*state, free, parent_frame);
+    } catch (const std::exception& error) {
+      if (vehicle) vehicle->dynamics.body = carrier_before;
+      std::fprintf(stderr,"[phys] disabled PhysicsRef id=%d: %s\n",state->live_id,error.what());
+      state->matrix_override = false;
+      if (!std::all_of(saved_pos.begin(),saved_pos.end(),[](float v){return std::isfinite(v);}) ||
+          !std::all_of(saved_ypr.begin(),saved_ypr.end(),[](float v){return std::isfinite(v);}))
+        state->empty = true; // No finite pose exists to render; never publish NaNs.
+      std::copy(saved_pos.begin(),saved_pos.end(),state->pos);
+      std::copy(saved_ypr.begin(),saved_ypr.end(),state->ypr);
+      std::fill(std::begin(state->vel),std::end(state->vel),0.f);
+      std::fill(std::begin(state->angular_vel),std::end(state->angular_vel),0.f);
+      gameref_set_physics_simulated(key,false);
+      free_bodies.erase(key);
+    }
   }
   std::erase_if(free_bodies, [&](const auto& entry) { return !live.contains(entry.first); });
 }
@@ -3323,12 +3696,17 @@ void advance_chassis_tick() {
     }
     rec.engine_running = false;
     rec.render_blend = false;
-    if (rec.config->native_kind != "car" || rec.state.parent ||
+    if (rec.external_motion || rec.config->native_kind != "car" ||
+        rec.state.parent ||
         (rec.physics_suspended && !rec.physics_pending_placement))
       continue;
     auto *node = gameref_get(chassis);
     if (!node)
       continue;
+    const auto saved_body = rec.dynamics.body;
+    const auto saved_local = node_local(chassis);
+    const bool was_ready = rec.physics_ready;
+    try {
     PartMatrix frame, parent = eye_matrix();
     if (!scene_instances_script_matrix(chassis, frame.data()))
       continue;
@@ -3336,6 +3714,8 @@ void advance_chassis_tick() {
         !scene_instances_script_matrix(node->parent, parent.data()))
       continue;
     const auto local = node_local(chassis);
+    if (!finite_frame(frame) || !finite_frame(parent) || !finite_frame(local))
+      throw std::runtime_error("non-finite chassis frame");
     bool external = node->parent != rec.physics_parent;
     for (size_t i = 0; i < 16; ++i)
       external =
@@ -3393,6 +3773,42 @@ void advance_chassis_tick() {
       rec.mileage += static_cast<float>(std::hypot(delta.x, delta.z) * .1);
     }
     rec.engine_running = rec.dynamics.drive.torque && rec.dynamics.engine_running;
+    {
+      // Drive trace: what the engine is allowed to do and what it is doing.
+      // `limit` is the rpm the solver refuses to pass, `gear` the engaged ratio
+      // index, `torque` the net curve value the drive uses at that rpm.
+      static const bool trace = std::getenv("SLRR_DRIVE_TRACE") != nullptr;
+      static double next_report = 0;
+      if (trace && (chassis == controlled || rec.dynamics.drive.throttle > .5) &&
+          engine_trace_clock >= next_report) {
+        next_report = engine_trace_clock + .5;
+        const auto &d = rec.dynamics;
+        std::fprintf(stderr,
+                     "[drive-trace] t=%.1f rpm=%.0f limit=%.0f idle=%.0f gear=%d "
+                     "throttle=%.2f kph=%.1f torque=%.1f running=%d "
+                     "mode=%d(auto=%d,clutch=%d) faith=%d cf=%.0f ratio=%.2f "
+                     "spin=%.1f slip=%.1f force=%.0f load=%.0f\n",
+                     engine_trace_clock, d.engine_omega * 9.54929658551372,
+                     d.drive.limit, d.drive.idle, d.gear,
+                     static_cast<double>(d.drive.throttle),
+                     std::hypot(d.body.velocity.x, d.body.velocity.z) * 3.6,
+                     d.drive.torque ? d.drive.torque(d.engine_omega * 9.54929658551372) : 0.0,
+                     d.engine_running ? 1 : 0, rec.transmission,
+                     d.drive.automatic_shift ? 1 : 0, d.drive.auto_clutch ? 1 : 0,
+                     d.drive.faithful ? 1 : 0, d.drive.clutch_force,
+                     d.drive.ratios[d.gear],
+                     (d.state[2].spin + d.state[3].spin) * .5,
+                     std::abs((d.state[2].spin + d.state[3].spin) * .5) -
+                         std::hypot(d.body.velocity.x, d.body.velocity.z),
+                     std::abs(d.state[2].tire_force.longitudinal +
+                              d.state[3].tire_force.longitudinal),
+                     // Driven axle load: the other half of "why no wheelspin".
+                     // Thrust against tyre = friction * this.
+                     d.state[2].force + d.state[3].force);
+      }
+    }
+    if (!finite_frame(rec.dynamics.body.frame()))
+      throw std::runtime_error("non-finite chassis output");
     if (steps) {
       dynamics_sync(chassis, rec, parent);
       rec.render_blend = true;
@@ -3435,6 +3851,41 @@ void advance_chassis_tick() {
           rec.dynamics.body.momentum = {};
         }
       }
+    }
+    } catch (const std::exception& error) {
+      if (!rec.physics_fault_reported) {
+        std::fprintf(stderr,"[phys] suspended chassis type=0x%x: %s\n",rec.state.resource,error.what());
+        rec.physics_fault_reported = true;
+      }
+      rec.dynamics.body = saved_body;
+      rec.dynamics.body.velocity = rec.dynamics.body.momentum = {};
+      rec.dynamics.reset_clock();
+      rec.dynamics.reset_drive();
+      rec.dynamics.release_wheels();
+      rec.physics_ready = false;
+      rec.physics_suspended = true;
+      rec.physics_pending_placement = false;
+      rec.engine_running = rec.render_blend = false;
+      const auto& safe = finite_frame(saved_local) ? saved_local : rec.published_frame;
+      if (finite_frame(saved_local) || (was_ready && finite_frame(safe))) {
+        std::copy(safe.begin(),safe.end(),node->local_matrix);
+        std::copy(safe.begin()+12,safe.begin()+15,node->pos);
+        const double pitch = std::asin(std::clamp(-double(safe[9]),-1.0,1.0));
+        node->ypr[1] = static_cast<float>(pitch);
+        if (std::fabs(std::cos(pitch)) > 1e-6) {
+          node->ypr[0] = std::atan2(safe[8],safe[10]);
+          node->ypr[2] = std::atan2(safe[1],safe[5]);
+        } else {
+          node->ypr[0] = std::atan2(-safe[2],safe[0]);
+          node->ypr[2] = 0;
+        }
+        node->matrix_override = true;
+      } else {
+        node->empty = true; // No valid pose has ever been published for this body.
+      }
+      node->render_pose = false;
+      std::fill(std::begin(node->vel),std::end(node->vel),0.f);
+      std::fill(std::begin(node->angular_vel),std::end(node->angular_vel),0.f);
     }
   }
   // After the records loop: creating a loose body inserts into `records`.
@@ -3942,7 +4393,18 @@ PedView ped_view() {
   view.tan_x = view.tan_y * (800.f / 600.f);
   view.ok = true;
   return view;
+}// Profiling knob, not a gameplay setting: SLRR_PEDESTRIAN_DENSITY overrides the
+// shipped slider so one build can be measured at the slider's maximum.
+float pedestrian_slider() {
+  static const float override_value = [] {
+    const char* v = std::getenv("SLRR_PEDESTRIAN_DENSITY");
+    return v ? std::strtof(v, nullptr) : -1.f;
+  }();
+  const float slider = std::max(0.f, host_game_options().pedestrian_density);
+  return override_value >= 0.f ? override_value : slider;
 }
+
+
 
 void tick_pedestrians(double seconds) {
   const float dt = static_cast<float>(std::min(seconds, 0.1));
@@ -4010,7 +4472,7 @@ void tick_pedestrians(double seconds) {
     // Far enough that people are already on the sidewalk before they enter
     // the view. 150 m clipped them into existence along the street.
     constexpr float kRadius = 400.f;
-    const float slider = std::max(0.f, host_game_options().pedestrian_density);
+    const float slider = pedestrian_slider();
     // The map coefficients are people per square metre of sidewalk. At the
     // slider maximum that asked for about twenty people inside 150 m.
     constexpr float kDensityScale = 4.f;
@@ -4114,7 +4576,14 @@ void tick_pedestrians(double seconds) {
     if (routed && active < want && clock >= crowd.refill_at) {
       // A full refill in one tick is the hitch, and it puts people on the
       // street in front of the camera. A few per frame, off screen, walk in.
-      const int batch = 3;
+      //
+      // The first fill of a crowd is different: the player has just arrived and
+      // the street should already be busy, not fill up around him. That pass is
+      // therefore allowed to place people in view and takes a bigger batch; the
+      // scene appearing is the transition, so nothing pops in the middle of a
+      // settled street.
+      const bool warm = !crowd.stocked;
+      const int batch = warm ? 24 : 3;
       bool stalled = false;
       for (int made = 0; active < want && made < batch; ++made) {
         if (!spare) {
@@ -4135,7 +4604,7 @@ void tick_pedestrians(double seconds) {
             taken.push_back({other.line.x, other.line.y, other.line.z, 2.f});
         if (!lines.spawn(car_x, car_y, car_z, kRadius, 12.f, ped_rng, spare->line,
                          taken.data(), static_cast<int>(taken.size()),
-                         &ped_point_hidden, &view)) {
+                         warm ? nullptr : &ped_point_hidden, &view)) {
           stalled = true;
           break;
         }
@@ -4275,6 +4744,7 @@ void part_physics_advance(double seconds) {
   }
 
   // Ignore excess time after a long stall so the next frame can still render.
+  engine_trace_clock += std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
   physics_elapsed += std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
   constexpr double tolerance = kPhysicsTick * 1e-10;
   if (physics_elapsed + tolerance >= kPhysicsTick) {
@@ -4301,7 +4771,7 @@ void part_set_pedestrian_density(void* ground, float density) {
   // GroundRef.setPedestrianDensity already multiplied by the slider. Undo that
   // so a later move of the OptionsDialog control changes the live count.
   PedCrowd& crowd = crowds[ground];
-  const float slider = host_game_options().pedestrian_density;
+  const float slider = pedestrian_slider();
   crowd.map_density = slider > 1e-4f ? density / slider : density;
   crowd.density = crowd.map_density * std::max(0.f, slider);
 }
@@ -4597,6 +5067,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   // deliberately weak during GC, so world teardown must release it explicitly.
   dyno_clear_sessions();
   loose_panels.clear();
+  free_bodies.clear();
+  invalid_dynamic_types.clear();
   controlled_vehicle = 0;
   hud_preview = {};
   hud_preview_directory.clear();
@@ -4929,6 +5401,19 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
         write_dyno(self, "RPM_maxTorque", stats.torque_rpm);
         write_dyno(self, "maxHP", stats.max_hp);
         write_dyno(self, "RPM_maxHP", stats.hp_rpm);
+        if (std::getenv("SLRR_DYNO_TRACE")) {
+          // One line per recalculation: the number the physics will use, next to
+          // the engine's own displacement and the rpm it peaks at.
+          std::fprintf(stderr,
+                       "[dyno-trace] disp=%.2fL cr=%.2f torque=%.1f Nm @%.0f "
+                       "power=%.1f hp @%.0f\n",
+                       static_cast<double>(stats.displacement),
+                       static_cast<double>(stats.compression),
+                       static_cast<double>(stats.max_torque),
+                       static_cast<double>(stats.torque_rpm),
+                       static_cast<double>(stats.max_hp),
+                       static_cast<double>(stats.hp_rpm));
+        }
         const auto rpm = fields.find("maxRPM");
         if (rpm == fields.end() || !(rpm->second > 0.f))
           write_dyno(self, "maxRPM", stats.maximum_rpm);
@@ -5017,8 +5502,11 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     // 0, and anything that is not a texture record, leaves the part as it
     // is. A loaded car writes 0 for an unpainted piece and a factory color
     // for the rest; clearing the render there made the panels vanish.
-    const RpkEntry *entry = id && index ? index->resolve(id) : nullptr;
-    if (!entry || entry->typeof_ != 7)
+    // A Painter texture has an id outside every pack, so the pack lookup below
+    // can never resolve it. It is assigned by id, like the Painter does.
+    const bool painted = paint_texture_exists(id);
+    const RpkEntry *entry = !painted && id && index ? index->resolve(id) : nullptr;
+    if (!painted && (!entry || entry->typeof_ != 7))
       return Value::make_int(old);
     p->state.texture = static_cast<int>(id);
     for (auto *render : p->renders)
@@ -5069,13 +5557,13 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
        [&jvm](Object *s, const std::vector<Value> &a) {
          auto *p = record(s);
          const int i = number(a, 0);
-         std::string text;
-         if (p && i >= 0 && static_cast<size_t>(i) < p->config->slots.size()) {
-           auto it = p->slot_damage.find(i);
-           if (it != p->slot_damage.end())
-             text = it->second;
-         }
-         return Value::make_obj(jvm.new_string(text));
+         if (!p || i < 0 || static_cast<size_t>(i) >= p->config->slots.size())
+           return Value::make_obj(nullptr);
+         const auto damage = p->slot_damage.find(i);
+         // Part.save emits a record only for a non-null damage string or an
+         // attachment. Undamaged slots must not masquerade as empty strings.
+         return Value::make_obj(damage == p->slot_damage.end()
+             ? nullptr : jvm.new_string(damage->second));
        });
   bind("setSlotDamage", "(ILjava.lang.String;)V",
        [](Object *s, const std::vector<Value> &a) {
@@ -5486,8 +5974,20 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
         return Value::make_void();
       });
   auto wheel = [&](const char *name, const char *signature, NativeFn fn) {
+    const bool setter = std::string_view(name).starts_with("set");
     jvm.natives().register_method("java.game.parts.WheelRef", name, signature,
-                                  std::move(fn));
+      [setter,fn=std::move(fn)](Object* self,const std::vector<Value>& args) {
+        if (setter) for (const auto& arg:args) {
+          if (arg.tag==ValueTag::Float && !std::isfinite(arg.v.f)) return Value::make_void();
+          if (arg.tag==ValueTag::Obj && arg.v.o)
+            for (const char* field:{"x","y","z","p","r"}) {
+              const auto found=arg.v.o->fields.find(field);
+              if(found!=arg.v.o->fields.end() && found->second.tag==ValueTag::Float &&
+                 !std::isfinite(found->second.v.f)) return Value::make_void();
+            }
+        }
+        return fn(self,args);
+      });
   };
   wheel("finalize", "()V", [](Object *, const std::vector<Value> &) {
     return Value::make_void();

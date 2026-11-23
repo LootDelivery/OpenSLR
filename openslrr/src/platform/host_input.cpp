@@ -334,8 +334,9 @@ void host_input_update_controller(Object* controller, float dt) {
   if (in.bench_throttle >= 0.f) {
     in.drive_throttle = in.bench_throttle;
     in.drive_brake = 0.f;
-    in.drive_steer = 0.f;
-    in.drive_steer_analog = false;
+    in.drive_steer = in.bench_steer >= -1.f ? in.bench_steer : 0.f;
+    in.drive_steer_analog = in.bench_steer >= -1.f;
+    in.drive_reverse = in.bench_reverse;
     in.drive_handbrake = false;
     in.drive_reverse = false;
   }

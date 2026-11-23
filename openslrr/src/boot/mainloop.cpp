@@ -6,15 +6,18 @@
 #include "slrr/scene_ambience.hpp"
 #include "slrr/scene_triggers.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/skeleton.hpp"
 #include "slrr/scene_presentation.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/video_fmv.hpp"
 #include "slrr/host_music.hpp"
 #include "slrr/host_game_options.hpp"
+#include "slrr/drive_hud.hpp"
 #include "slrr/resource_loading.hpp"
 
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/race_runtime.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/object.hpp"
 #include "slrr/osd_registry.hpp"
@@ -387,6 +390,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   }
   MainLoopFrameResult out;
   mainloop_adopt_section(jvm, sections);
+  // Leaving the city for a race/track section retires the ambient traffic before
+  // the race scene is prepared; coming back to the city lets it refill. Script
+  // ownership decides what goes: only the cars this runtime created.
+  race_traffic_note_section(sections.actual_name());
   {
     perf::Scope scope(perf::Zone::Scripts);
     pump_async_messages(jvm, sections.actual());
@@ -771,10 +778,28 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   {
     perf::Scope scope(perf::Zone::Physics);
     sim_seconds = jvm.advance_sim_time(dt);
+    // Clip animation advances on the simulation clock, not on wall time, so a
+    // paused game holds its pose. The clock has to be published every frame:
+    // left at its default the clips stay on their first frame and every
+    // character walks in a frozen stride.
+    character_set_sim_time(jvm.sim_time());
     part_physics_advance(sim_seconds);
+    // The readout is the game's own OSD text, so it has to be refreshed where the
+    // car state is fresh -- and hidden by section, because a menu has no car.
+    drive_hud_tick(sections.actual_name());
   }
-  scene_ambience_tick(sim_seconds);
-  scene_triggers_tick(jvm);
+  // Traffic moves on the same bounded, pause-aware simulation step; its halt
+  // clock advances by that step as well, so a paused game is still. It has its
+  // own zone so its cost is not counted again inside `physics`.
+  {
+    perf::Scope scope(perf::Zone::Traffic);
+    race_traffic_tick(jvm, static_cast<float>(sim_seconds));
+  }
+  {
+    perf::Scope scope(perf::Zone::Ambience);
+    scene_ambience_tick(sim_seconds);
+    scene_triggers_tick(jvm);
+  }
 
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.

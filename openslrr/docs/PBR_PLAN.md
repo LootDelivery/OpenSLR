@@ -6,6 +6,12 @@ content keeps working.
 
 ## What must happen first (prerequisites)
 
+The frame itself also has to change shape before PBR is affordable: the city is
+currently rendered more than once per frame and every car is submitted as ~23
+separate draws. Probes, material sorting and parallel encoding are planned in
+[RENDER_FOUNDATION_PLAN.md](RENDER_FOUNDATION_PLAN.md), which also records the
+measured frame budget those stages are meant to move.
+
 1. **GFX-1: present program link failure** (see BACKLOG.md).
    The dead present path blocks the offscreen scene target, and the scene
    target is the backbone of everything PBR needs:
@@ -160,14 +166,18 @@ roughness_scale = 0.45
 
 ## Environment
 
-Current capture, as a reminder: 256² per face, **1 mip level**, six faces
-taken over several frames, probe at the car or the camera, the car itself
-excluded from the capture, box projection in the garage.
+Current capture, as a reminder: **512²** per face, two faces a gate so a cube
+is about 24 ms old, probe at the car or the camera, the car itself excluded from
+the capture, box projection in the garage, each face with its own depth buffer.
 
-1. **Roughness chain.** Give the cube GGX-prefiltered mip levels from that
-   single capture, so roughness has somewhere to go. This does not change
-   the geometric compression of a reflection, it just makes the PBR
-   response correct.
+1. **Roughness chain. Done** (stage 1b): `build_ggx_cube` produces six levels of
+   GGX-prefiltered cube from that single capture and the material selects a
+   level from physical roughness. The chain stops at roughness 0.64, so levels
+   for 8²/4² -- `alpha` 0.8 and 1.0 -- are still missing, and nothing needs them
+   until a material carries an authored roughness.
+   **Diffuse irradiance. Done**: a 16² probe integrated from the same capture,
+   on by default, self-anchored to the flat ambient. What PBR still wants here is
+   the DFG/env-BRDF LUT beside it.
 2. **Self-reflections.** The car is excluded from its own capture, so its
    own details cannot show in the body. That matters most for bumpers,
    mirrors, chrome and panel transitions.

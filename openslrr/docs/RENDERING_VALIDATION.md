@@ -52,7 +52,7 @@ Code exists; correctness not confirmed.
 | Problem | Status |
 |---|---|
 | Minimap in the city does not expand to full size | open, reported, not investigated |
-| Reflection blur is weaker than intended | open, cosmetic. **The blur works in game** and is visible; it is produced by the cubemap mip chain plus `envPrefilter()` level selection, not by the separate blur pipeline. GGX prefiltering is not implemented. |
+| Reflection blur is weaker than intended | **closed**: the blur is now a GGX prefiltered chain (`build_ggx_cube`, `fs_prefilter.sc`, six levels, thirty-six faces a gate) and the material selects a level from physical roughness instead of reading the capture's box mips. What stays open is the HDR half -- the cube is RGBA8, so a highlight is clipped before the filter sees it. |
 | Camera click-target mismatch (`scene_instances_pointer_ray` vs `SLRR_CAM_*`) | closed as situational: observed only in specific runs where the camera was changing |
 | MSAA toggle artefact | closed: not reproducible now |
 | `bind_baked_light()` binds `white_tex_` and discards its texture list | **deliberate**, not a defect -- the source comment says this avoids double-counting the sun and its shadows. The stock atlases were decoded for L1 and they are not uniform: garage/dealer `*shadow.dds` are dark masks (mean 0.19-0.37, 43-70 % of pixels below 0.10), `misc/garage/g4/t_01_shadow.dds` is a near-white multiply map (mean 0.88, 75 % above 0.97), city `*_lightmap.dds` are dark emissive masks. "The bake already contains the sun" is true for some atlases and false for others, so one verdict cannot cover all of them (`LIGHTING_AUDIT.md` §L1.8) |
@@ -61,15 +61,17 @@ Code exists; correctness not confirmed.
 
 Stated because the system is often described as done and it is not.
 
-- The mip chain is `AUTO_GEN_MIPS`, plain downsampling. **Not GGX
-  prefiltering.** `envPrefilter()` in `fs_vehicle.sc` picks a mip level with
-  `textureCubeLod` and mixes two neighbouring levels. That is the working
-  reflection blur; it is weak because level selection over a downsampled chain
-  is not a convolution.
+- Blur is a **GGX prefiltered chain** (`build_ggx_cube`, `fs_prefilter.sc`): 512
+  square, six levels, roughness `0.02*2^m` a level, thirty-six faces a gate so a
+  cycle is ten milliseconds old. `fs_vehicle.sc` selects the level from physical
+  roughness (`alpha = sqrt(2/(e+2))`), which is why paint reads levels 3-4 and
+  chrome 1-2 instead of everything sitting on the capture.
 - A separate blur pipeline (`fs_blur.sc`, `blur_program_`,
   `build_reflection_mips()`) is compiled but has no call site and does not run.
   Its absence does not make reflections sharp, and its presence is not the blur
   you see.
+- The capture cube is RGBA8, so the predecessor of a highlight is clipped before
+  the chain ever filters it.
 - The cubemap is **RGBA8 / LDR**. Bright sources clip. HDR capture is a
   separate task.
 - Box projection covers interiors only. Outdoors is direction-only.

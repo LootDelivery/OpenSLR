@@ -265,7 +265,14 @@ void Jvm::enrich_static_fields(const TufaClass& cls) {
     if (fname.empty()) continue;
     TufaMember m = f;
     if (m.locals < 1) m.locals = 1;
-    TreeEvalResult tr = tree_eval(this, cls, m, nullptr, {});
+    TreeEvalResult tr;
+    try {
+      tr = tree_eval(this, cls, m, nullptr, {});
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "[jvm] static initializer %s.%s: %s\n", owner.c_str(),
+                   fname.c_str(), error.what());
+      continue;
+    }
     if (!tr.ok || tr.value.tag == ValueTag::Void) continue;
     if (call && tr.value.tag != ValueTag::Obj) continue;
     statics_[owner][fname] = tr.value;

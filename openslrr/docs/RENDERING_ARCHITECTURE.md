@@ -46,57 +46,81 @@ Interface deliberately does **not** follow this. See section 4.
 
 ## 3. Reflections
 
-**Verified** in garage, catalogue and inspection mode. Not a complete system:
-see limitations.
+**Verified** in garage, catalogue, inspection mode and in dense traffic. The path
+is capture -> prefiltered chain -> material, plus a diffuse irradiance probe
+integrated from the same capture. The stages, and the defect that cost the most
+time in each, are in `RENDER_FOUNDATION_PLAN.md` 8.5-8.14; this section is the
+shape of what is there.
 
 Capture (`update_reflections`, `bgfx_lib_backend.cpp`):
-- one 512x512 RGBA8 cubemap per frame budget, six faces per frame;
-- faces render into `reflection_face_fb_[2][6]`, attachments built with
-  `AUTO_GEN_MIPS` on the last face only;
-- two cubes are kept and swapped: capture writes one, materials sample the
-  other (`reflection_cubes_[reflection_write_ ^ 1]`), so a half-built cube is
-  never read;
-- publication flips `reflection_write_` only after all six faces are in.
 
-Sampling is gated by `reflection_env_valid_`, which is **not** the same as
-whether a capture is running:
+- one 512x512 RGBA8 cubemap per slot, two slots swapped, so a half-built cube is
+  never sampled;
+- each face renders into its own framebuffer with its own `D24S8` depth texture
+  (`reflection_cube_depth_[6]`). The depth attachment must be created with
+  `BGFX_ATTACHMENT_NONE`: the default `AUTO_GEN_MIPS` makes bgfx reject it
+  silently, and without depth a face is painted in submission order, which is
+  what the "see-through reflections" family was;
+- opaque geometry, then the blended batch replayed into the same face, so glass,
+  decals and pylons are in the cube and not only in the framebuffer;
+- cadence: `kReflectionCycleMs = 16` ms and `kReflectionDynamicMs = 8` ms, two
+  faces per gate, so a whole cube is about 24 ms old -- the age glass and chrome
+  have always had;
+- a static garage bake (`reflection_bake_cube_`, `SLRR_REFL_BAKE`) can hold the
+  interior environment and keeps its baked depth, so only the moving layer is
+  redrawn when the camera or the car moves.
 
-- set only after a full capture is published;
-- cleared by `destroy_reflections()` and when the captured world differs from
-  the current one (`reflection_env_world_`);
-- deliberately **not** cleared when `reflection_scene_` goes false, because
-  stopping the capture does not make a captured environment unusable. That is
-  what lets the catalogue use the garage cubemap.
+Prefiltered chain (stage 1b, `build_ggx_cube`):
 
-Excluded from capture: `object.sky`, `vehicle_material` parts, the driver
-(`part_is_driver_render`, `part_runtime.cpp`), and skinless skinned meshes. The
-driver exclusion is precise rather than "no characters", so pedestrians still
-reflect.
+- `kReflectionGgxSize = 512`, `kReflectionGgxLevels = 6`, views 160-195;
+- level 0 is a blit of the capture face; levels 1-5 are drawn by
+  `fs_prefilter.sc` with twelve plus eight taps per level, importance sampled;
+- level m stands for roughness `0.02 * 2^m`, which is the angular size of `2^m`
+  capture texels, so a level replaces the box mip it used to be without changing
+  how soft the reflection is;
+- the whole chain is thirty-six faces and the budget is clamped at thirty-six, so
+  a cycle never spans two gates. `SLRR_REFL_AGE` prints the interval: ten
+  milliseconds at thirty-six faces, fifty-six at six, and anything near a slow
+  display's frame budget reads as an fps drop rather than as lag;
+- `fs_vehicle.sc` maps material roughness physically -- `alpha = sqrt(2/(e+2))`,
+  `lod = log2(alpha / 0.02) + bias`, capped by "Reflection roughness cap" -- so
+  paint lands on levels 3-4, chrome on 1-2, and a mirror below 0.5, which means
+  it reads the capture itself.
+
+Diffuse irradiance probe (`build_irradiance_cube`, view 210):
+
+- 16x16 a face, six faces integrated in one frame, no mip chain. Ninety-six taps
+  a face, taken from capture mip 5, where one tap already spans the size of a
+  probe face;
+- `fs_vehicle.sc` mixes the probe over the flat `u_sunAmb` by "Irradiance
+  strength" (default 0.7), scaled by `u_sunAmb / probe(up)` and by "Irradiance
+  scale", so switching it on changes the shape of the ambient and not its level.
+  A vertical panel still comes out darker than the roof, which is the point;
+- on by default.
+
+Diagnostics: `SLRR_REFL_DUMP=2` draws two rows of six faces -- row 0 the chain or
+the probe, row 1 the raw cube -- and is the only way to see a cube in this bgfx
+build, which has neither `bgfx::read` nor a working blit-to-screen path.
+`SLRR_REFL_DUMP_MIP` picks the level and `SLRR_REFL_DUMP_IRR` puts the probe in
+row 0. The two rows are compared face by face: an inverted chain keeps almost the
+same mean brightness, and only sky-at-the-top separates the orientations.
 
 **Limitations, stated because they matter:**
 
 - Face size is 512 by default (`reflection_face_size()`, clamped 64-2048,
-  overridable by `SLRR_REFL_RES`). Faces per frame: `reflection_faces = 6` by
-  default (`debug_overlay.hpp:27`).
-- The mip chain is `AUTO_GEN_MIPS`, i.e. plain downsampling. This is **not**
-  GGX prefiltering. `fs_vehicle.sc` `envPrefilter()` selects a mip level with
-  `textureCubeLod`, mixing two neighbouring levels; that level selection over
-  a downsampled chain is what visibly softens the reflection. It is a lookup,
-  not a convolution.
-- **Reflection blur in game works**, through that mip chain and level
-  selection; the effect is weak. A separate blur pipeline (`fs_blur.sc`,
-  `blur_program_`, `build_reflection_mips()`) is compiled and created but
-  **never invoked** -- no call site exists -- so it plays no part in what is on
-  screen.
-- The cubemap is **RGBA8 / LDR**. Bright sources clip. HDR reflection capture
-  is a separate task.
-- Box projection applies to interiors only; outdoors is direction-only lookup.
-  The bounds come from the garage shell geometry with a Z transform and a
-  fallback when the shell is absent -- not from the ground bbox alone. The
-  reflected direction **is** normalised after the correction (`fs_vehicle.sc`),
-  contrary to an earlier note.
-- The scene target is RGBA16F, but the cubemap is not: reflections are not end
-  to end HDR.
+  overridable by `SLRR_REFL_RES`).
+- The capture cube is **RGBA8 / LDR**. Bright sources clip, and the chain cannot
+  recover a highlight that was never written. HDR capture is separate work.
+- The chain stops at roughness 0.64 (level 5). Nothing needs the missing levels
+  until a material carries an authored roughness; a matte surface reads level 5.
+- Box projection applies to interiors only; outdoors is a direction-only lookup.
+- `fs_blur.sc` and `blur_program_` are still built and still never drawn:
+  `build_reflection_mips()` exists and has no call site. The blur on screen is
+  the GGX chain, not that pass.
+- Excluded from capture: `object.sky`, `vehicle_material` parts, the driver
+  (`part_is_driver_render`), and skinless skinned meshes. Pedestrians do reflect.
+- Reflections gather in concave geometry. That is correct behaviour, not a
+  defect; the fix is a layered paint BRDF, not suppression.
 
 ## 4. Interface, and why it cannot simply join the scene
 

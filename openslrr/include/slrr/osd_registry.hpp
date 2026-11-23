@@ -80,6 +80,8 @@ bool osd_has_modal();
 // Viewport priority stored by Viewport.create (menu 10, dialog 22, shield 21).
 int32_t osd_viewport_pri(Object* osd);
 const std::vector<OsdWidget>& osd_widgets();
+// True once the owner was shown (viewport activate / Osd.show / showGroup).
+bool osd_owner_shown(const Object* osd);
 void osd_sync_button_pictures();
 int32_t osd_widget_count();
 // Patch hit-rect after PhysicsRef.setMatrix (createButton TREE path).

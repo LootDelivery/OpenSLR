@@ -35,6 +35,9 @@ struct BootOptions {
   // --bench-map: from the garage, start the GameLogic.MapBox track whose
   // script class name contains this text (ValoCity_Track for the city).
   std::string bench_map;
+  // --bench-route: steer the benchmark car along the city road graph instead
+  // of driving straight, so a long run covers streets, junctions and turns.
+  bool bench_route = false;
   // --bench-time: game hour set when the benchmark drive starts (-1 keeps it).
   float bench_hour = -1.f;
   // --bench-shots: directory for window captures (TGA) at the start of the

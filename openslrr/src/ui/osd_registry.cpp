@@ -22,12 +22,22 @@ int32_t g_current_group = 0;
 bool g_took_zero = false;
 int32_t g_last_closed_group = -1;
 std::unordered_set<int32_t> g_hidden_groups;
+// OSDs an owner has actually shown (viewport activate / Osd.show /
+// showGroup). A freshly created Osd draws nothing: the stock Player
+// constructor builds the street HUD at boot and never shows it, so its
+// frame plates stayed off the main menu only because the constructor
+// used to be a no-op.
+std::unordered_set<Object*> g_shown_owners;
 int32_t g_fb_w = 800;
 int32_t g_fb_h = 600;
 int32_t g_hover_index = -1;
 int32_t g_string_focus = -1;
 std::string g_highlight_path;
 std::string g_disabled_highlight_path;
+
+bool osd_owner_shown_ptr(const Object* osd) {
+  return osd && g_shown_owners.count(const_cast<Object*>(osd)) != 0;
+}
 
 bool owner_suppressed(const OsdWidget& w) {
   if (!w.owner) return false;
@@ -156,6 +166,7 @@ void osd_clear_widgets() {
   g_took_zero = false;
   g_last_closed_group = -1;
   g_hidden_groups.clear();
+  g_shown_owners.clear();
   g_hover_index = -1;
   g_string_focus = -1;
 }
@@ -189,6 +200,7 @@ void osd_add_widget(OsdWidget w) {
   }
   if (w.layer == 0) w.layer = osd_viewport_pri(w.owner);
   if (owner_suppressed(w)) w.hidden = true;
+  if (!osd_owner_shown_ptr(w.owner)) w.hidden = true;
   g_widgets.push_back(std::move(w));
 }
 
@@ -303,6 +315,7 @@ void osd_hide_group(int32_t group) {
 void osd_show_group(int32_t group) {
   for (OsdWidget& w : g_widgets) {
     if (w.group != group) continue;
+    g_shown_owners.insert(w.owner);
     w.group_hidden = false;
     if (!w.dead && !owner_suppressed(w)) w.hidden = false;
   }
@@ -320,6 +333,7 @@ void osd_show_only_group(int32_t group) {
     w.group_hidden = w.group != group;
     if (w.group_hidden) g_hidden_groups.insert(w.group);
     else g_hidden_groups.erase(w.group);
+    if (!w.group_hidden) g_shown_owners.insert(w.owner);
     w.hidden = w.dead || owner_suppressed(w) || w.group_hidden;
   }
   slrr_text_show_only_group(group);
@@ -425,6 +439,7 @@ void restore_other_osds(Object* except) {
   std::vector<Object*> owners;
   for (const OsdWidget& w : g_widgets) {
     if (!w.owner || w.owner == except || !is_osd_class(w.owner)) continue;
+    if (!osd_owner_shown_ptr(w.owner)) continue;
     bool seen = false;
     for (Object* o : owners)
       if (o == w.owner) seen = true;
@@ -445,6 +460,7 @@ void restore_other_osds(Object* except) {
     }
     if (shield_only) continue;
     o->fields["_host_hidden"] = Value::make_int(0);
+    g_shown_owners.insert(o);
     for (OsdWidget& w : g_widgets) {
       if (w.owner != o || w.cmd == 9999999) continue;
       w.hidden = w.group_hidden;
@@ -600,8 +616,12 @@ void osd_ensure_loading_plate(Object* osd, const std::string& path) {
   slrr_text_set_osd_visible(osd, true);
 }
 
+bool osd_owner_shown(const Object* osd) { return osd_owner_shown_ptr(osd); }
+
 void osd_set_owner_visible(Object* osd, bool visible) {
   if (!osd) return;
+  if (visible) g_shown_owners.insert(osd);
+  else g_shown_owners.erase(osd);
   osd->fields["_host_hidden"] = Value::make_int(visible ? 0 : 1);
   if (!visible) {
     auto fit = osd->fields.find("flags");
@@ -1044,5 +1064,10 @@ void osd_visit_gc_roots(const GcRootVisitor& visit) {
     visit(w.handler); visit(w.owner); visit(w.button); visit(w.picture_source);
     visit(w.highlight_for); visit(w.label_src); visit(w.value_str); visit(w.gadget); visit(w.text_key);
   }
+  // g_shown_owners is a native registry of script objects too: an owner that
+  // was activated but never got a widget or a text has no other edge, so the
+  // set has to keep it alive. Otherwise the address could be freed and handed
+  // to an unrelated object that would read back as "already shown".
+  for (const Object* owner : g_shown_owners) visit(owner);
 }
 }  // namespace slrr

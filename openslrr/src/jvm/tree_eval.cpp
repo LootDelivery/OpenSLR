@@ -21,6 +21,31 @@ namespace {
 constexpr uint32_t kNativeFlag = 0x40;
 constexpr uint32_t kStaticFlag = 0x08;
 
+// Script-visible arrays are dense and 1-based in Java, 0-based here. A store
+// past the end grows them, but only inside this window: a corrupt index must
+// not resize the heap array to INT32_MAX entries.
+constexpr size_t kMaxArraySlots = 1u << 20;
+void store_array_slot(Object* array, int32_t index, Value value) {
+  if (!array || !array->is_array) return;
+  if (index < 0 || static_cast<size_t>(index) >= kMaxArraySlots) {
+    static bool reported = false;
+    if (!reported) {
+      std::fprintf(stderr,
+                   "[TREE] ignored array store outside [0, %zu): %d\n",
+                   kMaxArraySlots, index);
+      reported = true;
+    }
+    return;
+  }
+  const auto slot = static_cast<size_t>(index);
+  if (array->slots.size() <= slot) {
+    array->slots.resize(slot + 1, Value::make_obj(nullptr));
+    array->fields["length"] =
+        Value::make_int(static_cast<int32_t>(array->slots.size()));
+  }
+  array->slots[slot] = value;
+}
+
 float bits_to_float(uint32_t bits) {
   float f;
   std::memcpy(&f, &bits, sizeof(f));
@@ -121,6 +146,10 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
   const auto& tree = cls.trees[method.tree];
   if (tree.empty()) {
     out.error = "empty TREE (host native expected)";
+    return out;
+  }
+  if (method.locals > kTufaMaxLocals || args.size() >= kTufaMaxLocals) {
+    out.error = "method local count out of range";
     return out;
   }
   std::vector<Value> locals;
@@ -768,15 +797,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
     put_recv_from_path = false;
     if (pending_arr) {
       Value val = stack.empty() ? Value::make_obj(nullptr) : pop();
-      if (pending_arr->is_array && pending_arr_idx >= 0) {
-        const size_t need = static_cast<size_t>(pending_arr_idx) + 1;
-        if (pending_arr->slots.size() < need) {
-          pending_arr->slots.resize(need, Value::make_obj(nullptr));
-          pending_arr->fields["length"] =
-              Value::make_int(static_cast<int32_t>(pending_arr->slots.size()));
-        }
-        pending_arr->slots[static_cast<size_t>(pending_arr_idx)] = val;
-      }
+      store_array_slot(pending_arr, pending_arr_idx, val);
       pending_arr = nullptr;
       pending_arr_idx = -1;
       if (keep) push(val);
@@ -888,13 +909,16 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         break;
       }
       case 0x02:  // only declarations with an initializer own a trailing store
+        if (n.wide && n.imm >= kTufaMaxLocals) return fail("local slot out of range");
         if (n.wide) {
-          if (local_types.size() <= n.imm) local_types.resize(n.imm + 1);
+          if (local_types.size() <= n.imm)
+            local_types.resize(static_cast<size_t>(n.imm) + 1);
           if (ip + 1 < tree.size() && tree[ip + 1].op == 0x06) local_types[n.imm] = cls.utf8(tree[ip + 1].imm);
           // Invictus permits uninitialized locals. A declaration inside a
           // loop starts a new lifetime; retaining the preceding iteration's
           // InventoryItem attaches the same can to multiple empty panels.
-          if(locals.size()<=n.imm)locals.resize(n.imm+1);
+          if (locals.size() <= n.imm)
+            locals.resize(static_cast<size_t>(n.imm) + 1);
           const auto& type=local_types[n.imm];
           locals[n.imm]=!type.empty()&&(type[0]=='L'||type[0]=='[')
             ?Value::make_obj(nullptr):type=="F"?Value::make_float(0.f):Value::make_int(0);
@@ -940,7 +964,8 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
               len = static_cast<int32_t>(top.v.f);
           }
           if (len < 0) len = 0;
-          if (len > (1 << 20)) len = 1 << 20;
+          if (len > static_cast<int>(kMaxArraySlots))
+            len = static_cast<int>(kMaxArraySlots);
           Object* arr = host->tree_new(raw);
           arr->is_array = true;
           const bool refs = raw.size() >= 2 && (raw[1] == 'L' || raw[1] == '[');
@@ -1185,10 +1210,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
                        (prev.op == 0x20 || prev.op == 0x07)) {
               // `a[i] -= x` may sit an expr-tag between the load and the
               // statement. Write the result back into the slot just read.
-              const size_t need = static_cast<size_t>(last_arr_idx) + 1;
-              if (last_arr->slots.size() < need)
-                last_arr->slots.resize(need, Value::make_obj(nullptr));
-              last_arr->slots[static_cast<size_t>(last_arr_idx)] = result;
+              store_array_slot(last_arr, last_arr_idx, result);
               last_arr = nullptr;
               last_arr_idx = -1;
             }

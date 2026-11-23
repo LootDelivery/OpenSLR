@@ -139,10 +139,13 @@ single exposure control, dynamic cubemap capture with generation-based
 publication, box projection for interiors, and interface drawn display-referred
 outside the scene.
 
-**Not implemented**: the GGX prefilter. It is designed as stage 4 of the linear
-migration and does not exist yet. The cubemap has auto-generated mips, which is
-plain downsampling, not a GGX chain. Any plan that says "use the existing
-prefilter" is counting work that has not been done.
+**Implemented since this audit**: the GGX prefilter. `build_ggx_cube()` produces
+a 512-square, six-level chain (`0.02*2^m` roughness a level, level 0 a blit of
+the capture) that the material selects from physical roughness, plus a 16-square
+diffuse irradiance probe integrated from the same capture. The capture cube still
+has auto-generated mips; those are what the probe and the mirror read, not what
+paint reads. What is *not* done is the HDR half: the cube is still RGBA8 and a
+highlight is clipped before the chain filters it (`PBR_PLAN.md`, order of work).
 
 ## 2. Consequences for the design
 

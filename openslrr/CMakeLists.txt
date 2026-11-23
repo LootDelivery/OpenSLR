@@ -36,6 +36,7 @@ add_executable(slrr_host
   src/jvm/script_compiler.cpp
   src/platform/game_root.cpp
   src/platform/frame_profiler.cpp
+  src/platform/stack_sampler.cpp
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
@@ -64,6 +65,8 @@ add_executable(slrr_host
   src/resources/scene_sun.cpp
   src/resources/part_config.cpp
   src/resources/part_runtime.cpp
+  src/resources/paint_texture.cpp
+  src/resources/light_resource.cpp
   src/resources/pedestrian_lines.cpp
   src/formats/walk.cpp
   src/formats/rest.cpp
@@ -71,6 +74,10 @@ add_executable(slrr_host
   src/formats/skeleton_text.cpp
   src/formats/matrixdata.cpp
   src/resources/gameref.cpp
+  src/resources/road_routes.cpp
+  src/resources/race_runtime.cpp
+  src/resources/traffic_runtime.cpp
+  src/resources/traffic_streaming.cpp
   src/resources/scene_instances.cpp
   src/resources/scene_ambience.cpp
   src/resources/scene_triggers.cpp
@@ -157,6 +164,7 @@ set(_bgfx_shader_inc "${BGFX_DIR}/src")
 set(SLRR_IMGUI_DIR "${BGFX_DIR}/3rdparty/dear-imgui")
 target_sources(slrr_host PRIVATE
   src/render/debug_overlay.cpp
+  src/render/drive_hud.cpp
   "${BGFX_DIR}/examples/common/imgui/imgui.cpp"
   "${SLRR_IMGUI_DIR}/imgui.cpp"
   "${SLRR_IMGUI_DIR}/imgui_draw.cpp"
@@ -180,7 +188,7 @@ bgfx_compile_shaders(
 )
 bgfx_compile_shaders(
   TYPE FRAGMENT
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_present.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_cubeview.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_hiz.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_blur.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_present.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_cubeview.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_hiz.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_blur.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_prefilter.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_irradiance.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
