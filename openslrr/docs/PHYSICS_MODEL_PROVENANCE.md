@@ -111,11 +111,10 @@ actually does with each one (`src/resources/part_runtime.cpp`, `configure` path)
 | `drive_type`, per-wheel `setDrive` | set by `Transmission` | read ✓ (per-wheel drive share) |
 | `brake_balance` | 0.5 | not read; the split comes from each brake part's power instead |
 | `max_steer` | 0.7 | not read; this tree has its own steering geometry and help curve |
-| `fully_stripped_drag` / `C_drag` | 0.333 | **not read.** `Chassis.updatevariables` computes `C_drag = fully_stripped_drag - sum(body part drag_reduction)`, floored at 0, and the original applies it as quadratic drag. The model here has `aero.drag` for exactly this and the host never sets it, so cars currently run with **no aerodynamic drag at all** |
+| `fully_stripped_drag` / `C_drag` | 0.333 | **now read** (below). `Chassis.updatevariables` computes `C_drag = fully_stripped_drag - sum(body part drag_reduction)`, floored at 0, and the original applies it as quadratic drag |
 
-So the fidelity work is finite and enumerable: five parameters are simply not
-being passed, one of them (`ClutchF`) is the mechanism behind the launch report
-and another (`C_drag`) is missing outright. Nothing in the list requires
+So the fidelity work is finite and enumerable: the parameters below are simply
+not being passed, and `ClutchF` is the mechanism behind the launch report. Nothing in the list requires
 recovering anything new from the executable -- the fields are in the decompiled
 `Chassis.java`, and the natives that consume them are the ones already
 documented in `slrr-reverse`.
@@ -140,3 +139,29 @@ Now 40..65 km/h at 2.5 m/s^2 by default, both adjustable without a rebuild:
 `SLRR_TRAFFIC_CRUISE` scales the range, `SLRR_TRAFFIC_ACCEL` sets m/s^2. The lamps
 keep working at the higher speed -- 40 red approaches, 28 rest, 12 through, the
 twelve entering too fast to stop -- and there are no chassis faults in the run.
+
+## 9. `C_drag`, measured, and a correction
+
+The first draft of this document said the cars run with no aerodynamic drag and
+called that a defect. Feeding it properly showed the opposite.
+
+`C_drag` is not on the chassis object in this host -- `Chassis.updatevariables` is
+what creates it, and it is not running here: on the same car the field reads
+`0.0000` while `fully_stripped_drag` reads `0.5500`. So the script's own formula is
+applied here instead, over the installed part tree. Measured on the MC GT:
+
+```
+fully_stripped_drag            0.5500
+body parts with drag_reduction 21, summing to 0.6385
+C_drag = max(0, 0.55 - 0.6385) 0.0000
+```
+
+A fully panelled car genuinely has zero drag by the original's own arithmetic: the
+panels give back more than the stripped baseline. Drag only appears on a car with
+panels removed, which is exactly why the field exists. So the earlier "no drag"
+was the right value reached for the wrong reason (nothing was read at all), and
+the feed is now faithful to the script -- with `SLRR_AERO_DRAG=0` to run the same
+build without it, and `[drive-trace] aero ...` reporting both numbers.
+
+What this changes in practice: nothing for a complete car, and correct behaviour
+for a stripped one.

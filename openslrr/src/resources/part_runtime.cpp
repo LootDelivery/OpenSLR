@@ -2406,6 +2406,60 @@ void update_steering(Record &rec, bool controls) {
 }
 
 void configure_drive(Object *chassis, Record &rec, bool controlled) {
+  // Chassis.updatevariables: C_drag = fully_stripped_drag minus the
+  // drag_reduction of every installed body part, floored at zero. The EXE
+  // applies it at 0x456A83 as -C |v| v above 1 m/s about drag_center, on
+  // every scripted car, driven or not -- so this runs before the
+  // controlled-car gate below. Without it a car had no aerodynamic drag.
+  {
+    auto &aero = rec.dynamics.aero;
+    aero.drag = 0;
+    aero.drag_center = {};
+    // The script's own formula, because C_drag is not on the object in this
+    // host: Chassis.updatevariables is what creates it, and it is not running
+    // here (the field reads 0 while fully_stripped_drag reads 0.55 on the same
+    // car). So: fully_stripped_drag minus each installed part's drag_reduction.
+    float drag = comp(chassis, "C_drag");
+    const float stripped = comp(chassis, "fully_stripped_drag");
+    if (!(drag > 0.f) && stripped > 0.f) {
+      drag = stripped;
+      float reduced = 0.f;
+      int parts = 0;
+      for (const auto &installed : part_installed_tree(chassis)) {
+        if (!installed.object || installed.object == chassis)
+          continue;
+        const float reduction = comp(installed.object, "drag_reduction");
+        if (std::isfinite(reduction) && reduction != 0.f) {
+          reduced += reduction;
+          ++parts;
+        }
+      }
+      if (std::getenv("SLRR_DRIVE_TRACE"))
+        std::fprintf(stderr,
+                     "[drive-trace] aero drag_reduction parts=%d sum=%.4f\n",
+                     parts, static_cast<double>(reduced));
+      drag = std::max(0.f, drag - reduced);
+    }
+    if (std::getenv("SLRR_DRIVE_TRACE"))
+      std::fprintf(stderr,
+                   "[drive-trace] aero C_drag=%.4f stripped=%.4f\n",
+                   static_cast<double>(drag),
+                   static_cast<double>(stripped));
+    if (std::isfinite(drag) && drag > 0.f) {
+      // SLRR_AERO_DRAG=0 runs the same build without drag, for an A/B.
+      static const bool enabled = [] {
+        const char *e = std::getenv("SLRR_AERO_DRAG");
+        return !(e && std::atof(e) == 0.0);
+      }();
+      aero.drag = enabled ? drag : 0.f;
+      if (auto *center = part_field(chassis, "drag_center")) {
+        const physics::Vec3 point{comp(center, "x"), comp(center, "y"),
+                                  comp(center, "z")};
+        if (point.finite())
+          aero.drag_center = point;
+      }
+    }
+  }
   auto &drive = rec.dynamics.drive;
   drive.torque = {};
   if (!controlled) {
