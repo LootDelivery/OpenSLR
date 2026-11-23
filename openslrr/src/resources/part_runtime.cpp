@@ -3788,6 +3788,31 @@ void advance_chassis_tick() {
       // index, `torque` the net curve value the drive uses at that rpm.
       static const bool trace = std::getenv("SLRR_DRIVE_TRACE") != nullptr;
       static double next_report = 0;
+      // A slide is over in a few hundred milliseconds and 0.5 s sampling misses it
+      // entirely, which is why "the wheels stop and the revs fall in a spin" could not be
+      // read out of a log. While the car is moving sideways -- body velocity against the
+      // heading -- report every frame instead, with the numbers that decide it.
+      const auto &ds = rec.dynamics;
+      const double forward_speed_now = -ds.body.orientation.inverse_rotate(ds.body.velocity).z;
+      const double sideways = std::abs(ds.body.orientation.inverse_rotate(ds.body.velocity).x);
+      const bool sliding = forward_speed_now > 4.0 && sideways > 1.5;
+      if (trace && sliding) {
+        const double ratio = ds.drive.ratios[std::max(1, ds.gear)];
+        std::fprintf(stderr,
+                     "[slide-trace] t=%.2f rpm=%.0f gear=%d thr=%.2f fwd=%.1f side=%.1f "
+                     "spin=%.1f spinL=%.1f F=%.0f load=%.0f ratio=%.2f shaft=%.1f "
+                     "gap=%.1f running=%d clutch=%.2f gas=%.2f\n",
+                     engine_trace_clock, ds.engine_omega * 9.54929658551372, ds.gear,
+                     static_cast<double>(ds.drive.throttle), forward_speed_now, sideways,
+                     (ds.state[2].spin + ds.state[3].spin) * .5, ds.state[2].spin,
+                     std::abs(ds.state[2].tire_force.longitudinal +
+                              ds.state[3].tire_force.longitudinal),
+                     ds.state[2].force + ds.state[3].force, ratio,
+                     (ds.state[2].spin + ds.state[3].spin) * .5 * ratio,
+                     ds.engine_omega - (ds.state[2].spin + ds.state[3].spin) * .5 * ratio,
+                     ds.engine_running ? 1 : 0, ds.drive.clutch,
+                     static_cast<double>(ds.drive.throttle));
+      }
       if (trace && (chassis == controlled || rec.dynamics.drive.throttle > .5) &&
           engine_trace_clock >= next_report) {
         next_report = engine_trace_clock + .5;
