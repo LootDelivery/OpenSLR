@@ -647,6 +647,26 @@ Vec3 wheel_forward(const RigidBody &body, double steer, Quaternion hub = {}) {
       (hub * wheel_steering(steer)).rotate({0, 0, -1}));
 }
 
+// Recovered engine friction (3.5), in the units it is written in: the rpm terms
+// are rev/min, the viscous bound is rad/s, and the original takes the two as a
+// MINIMUM -- a bound on how much friction the engine can make, not a sum. Read as
+// a maximum it became 1131 Nm at 6000 rpm and the car could not pull away.
+//
+//   drag = (rpm / (0.05*maxRPM)) * (0.05*maxRPM)^2 * friction_fwd   (rpm > 0)
+//   drag = rpm^2 * friction_rev                                     (rpm <= 0)
+//   visc = 0.5 * |omega_rad| * engine_inertia
+//   friction = min(drag, visc)
+double original_engine_friction(double rpm, double max_rpm, double fwd,
+                               double rev, double inertia) {
+  const double scale = .05 * std::max(1.0, max_rpm);
+  const double drag = rpm > 0
+                          ? (rpm / scale) * scale * scale * std::max(0.0, fwd)
+                          : rpm * rpm * std::max(0.0, rev);
+  const double visc = .5 * std::abs(rpm) * engine_rpm_to_rad *
+                      std::max(0.0, inertia);
+  return std::min(drag, visc);
+}
+
 double limiter_factor(double rpm, double previous, double limit) {
   const double predicted = 2 * rpm - previous;
   if (predicted <= limit)
@@ -865,8 +885,19 @@ void VehicleDynamics::step_drive() {
     // deleted every engine above it -- a supercharged V8 arrived as an inline four.
     const double engine_table = drive.torque(std::max(engine_omega * rpm_per_rad, drive.idle));
     const double torque_at_clutch = 2.0 * std::max(0.0, engine_table) * gas;
+    // Engine losses, applied where the original applies them: against the torque the
+    // clutch carries. With the throttle closed this is the only thing slowing the car
+    // down in gear, and without it a lifted car coasts like it is in neutral.
+    const double engine_brake = original_engine_friction(
+        engine_omega * rpm_per_rad, drive.max_rpm, drive.friction_fwd,
+        drive.friction_rev, drive.inertia);
+    // Weighted by the closed part of the throttle: at full throttle the engine makes
+    // power, and with the throttle shut this term is the only thing slowing the car in
+    // gear. Which of the two the table is net of is still open (recovery 11); this
+    // keeps full throttle honest and gives a lifted car its engine braking.
     const double transmitted =
-        torque_at_clutch * std::clamp(drive.clutch, 0.0, 1.0);
+        (torque_at_clutch - engine_brake * (1.0 - gas)) *
+        std::clamp(drive.clutch, 0.0, 1.0);
     drive_impulse = transmitted * ratio * timestep;
     // The driveline cannot command more wheel speed than the engine turns it to:
     // above that the engine would have to be spinning faster than it is. Without
@@ -877,6 +908,17 @@ void VehicleDynamics::step_drive() {
     // four", measured.
     const double wheel_ceiling =
         std::abs(ratio) > 1e-6 ? engine_omega / std::abs(ratio) : 0.0;
+    {
+      static const bool trace = std::getenv("SLRR_COUPLING_TRACE") != nullptr;
+      static int counter = 0;
+      if (trace && (counter++ % 40) == 0)
+        std::fprintf(stderr,
+                     "[coupling] rpm=%.0f table=%.1f at_clutch=%.1f brake=%.1f "
+                     "transmitted=%.1f ceiling=%.1f spin=%.1f gear=%d gas=%.2f\n",
+                     engine_omega * rpm_per_rad, engine_table, torque_at_clutch,
+                     engine_brake, transmitted, wheel_ceiling,
+                     state[2].spin, gear, gas);
+    }
     for (size_t i = 0; i < wheels.size(); ++i)
       if (wheels[i].enabled) {
         state[i].spin += drive_impulse * drive.wheels[i].weight /

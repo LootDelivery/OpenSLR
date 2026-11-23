@@ -194,6 +194,10 @@ struct DriveInput {
   // model; the game turns it on.
   bool faithful = false;
   double inertia = 0, idle = 0, limit = 0, starter = 0;
+  // The original's engine losses (recovered model 3.5). `engine_brake` scales a
+  // torque that grows with engine speed and is what slows the car when the throttle
+  // closes with a gear engaged -- our crank-inertia loss was ~26x weaker than it.
+  double friction_fwd = 1e-4, friction_rev = 5e-3, max_rpm = 0;
   double clutch = 1;
   // Net open-throttle crank torque (Nm) at the requested rpm, including
   // the shared mechanical friction loss; the solver applies no extra gain.

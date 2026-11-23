@@ -59,6 +59,7 @@ VehicleDynamics make_car(bool faithful) {
   std::copy(std::begin(ratios), std::end(ratios), drive.ratios.begin());
   drive.idle = 800;
   drive.limit = 7000;
+  drive.max_rpm = 7000;   // scales the recovered engine friction (3.5)
   drive.inertia = .38;
   drive.brake_scale = drive.handbrake_scale = 1;
   drive.engaged = drive.automatic_shift = drive.auto_clutch = true;
@@ -255,7 +256,7 @@ SLRR_TEST(the_mazda_launch_is_below_its_tyre_limit) {
   }
   std::fprintf(stderr,
                "[drive_faithful] mazda launch slip=%.2f m/s force=%.0f N "
-               "rear load=%.0f N demand=%.2f g' + BS + 'n",
+               "rear load=%.0f N demand=%.2f g\n",
                max_slip_ratio, max_force, load,
                load > 0 ? max_force / load : 0.0);
   // Asked for less than the tyres hold, by this much: 1.95 x the rear axle load.
@@ -264,7 +265,7 @@ SLRR_TEST(the_mazda_launch_is_below_its_tyre_limit) {
   // tyres hold, even with ClutchF at its cap: 500 Nm x 8.61 / .318 m = 13.5 kN
   // against 1.95 x the axle load. That is why there is no wheelspin to find.
   SLRR_REQUIRE(max_force < 1.95 * load);
-  std::fprintf(stderr, "[drive_faithful] mazda uses %.0f%% of its tyre limit' + BS + 'n",
+  std::fprintf(stderr, "[drive_faithful] mazda uses %.0f%% of its tyre limit\n",
                100.0 * max_force / (1.95 * load));
 }
 
@@ -308,8 +309,8 @@ SLRR_TEST(more_torque_reaches_the_road) {
   const Trace weak = run_with_torque(200);
   const Trace strong = run_with_torque(600);
   std::fprintf(stderr,
-               "[drive_faithful] 200 Nm: 0-100 %5.2fs, top %6.1f km/h, slip %.2f m/s' + BS + 'n"
-               "[drive_faithful] 600 Nm: 0-100 %5.2fs, top %6.1f km/h, slip %.2f m/s' + BS + 'n",
+               "[drive_faithful] 200 Nm: 0-100 %5.2fs, top %6.1f km/h, slip %.2f m/s\n"
+               "[drive_faithful] 600 Nm: 0-100 %5.2fs, top %6.1f km/h, slip %.2f m/s\n",
                weak.hundred_kmh, weak.top_kmh, weak.max_slip_per_s,
                strong.hundred_kmh, strong.top_kmh, strong.max_slip_per_s);
   SLRR_REQUIRE(weak.finite && strong.finite);
@@ -320,6 +321,38 @@ SLRR_TEST(more_torque_reaches_the_road) {
   SLRR_REQUIRE(strong.top_kmh > weak.top_kmh + 10);
   // And the strong car is the one that breaks traction.
   SLRR_REQUIRE(strong.max_slip_per_s > weak.max_slip_per_s + 1.0);
+}
+
+// Lifting off in gear must slow the car. The original's engine losses are
+// `(rpm/(0.05*maxRPM)) * (0.05*maxRPM)^2 * friction_fwd` -- about 211 Nm at 6500 rpm
+// for a 1e-4 coefficient -- and the crank-inertia loss we had instead was 8 Nm, so a
+// lifted car coasted as if it were in neutral.
+double coast_deceleration(bool with_gear) {
+  auto car = make_car(true);
+  car.drive.max_rpm = 7000;
+  car.drive.friction_fwd = 1e-4;
+  car.drive.friction_rev = 5e-3;
+  car.drive.throttle = 1;
+  const double dt = 1. / 120;
+  for (double t = 0; t < 3; t += dt) car.advance(dt, flat);
+  car.drive.throttle = 0;
+  if (!with_gear) car.gear = 0;
+  const double from = car.body.velocity.length();
+  for (double t = 0; t < 2; t += dt) car.advance(dt, flat);
+  return (from - car.body.velocity.length()) / 2.0;
+}
+
+SLRR_TEST(lifting_off_in_gear_slows_the_car) {
+  const double in_gear = coast_deceleration(true);
+  const double neutral = coast_deceleration(false);
+  std::fprintf(stderr,
+               "[drive_faithful] coast: %.2f m/s2 in gear, %.2f m/s2 in neutral\n",
+               in_gear, neutral);
+  SLRR_REQUIRE(std::isfinite(in_gear) && std::isfinite(neutral));
+  // Engine braking has to exist and has to dominate: 1.5 m/s2 in gear against
+  // nothing in neutral, at a 1e-4 friction coefficient and 7000 max rpm.
+  SLRR_REQUIRE(in_gear > neutral + 1.0);
+  SLRR_REQUIRE(in_gear > 1.0);
 }
 
 // Gears are used: a launch that stays in first past 100 km/h is the old slip bug.
@@ -361,6 +394,7 @@ int main() {
       full_throttle_uses_the_whole_range,
       the_mazda_launch_is_below_its_tyre_limit,
       more_torque_reaches_the_road,
+      lifting_off_in_gear_slows_the_car,
       full_throttle_reaches_a_hundred_kilometres_an_hour,
       the_engine_revs_without_an_invented_ceiling,
       the_gearbox_moves_through_the_gears,

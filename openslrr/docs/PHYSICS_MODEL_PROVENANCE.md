@@ -510,3 +510,34 @@ in this file. The parts that change decisions here:
   per frame.
 - **Gear selection is not native** -- `car.gear` is written from scripts/input. Any
   shift schedule we implement is ours, not the original's.
+
+### 12.3 Engine losses, and two units that had to be read as written
+
+The recovered model 3.5 gives the friction terms in rev/min and a viscous bound in
+rad/s, taken as a **minimum**:
+
+```
+drag = (rpm / (0.05*maxRPM)) * (0.05*maxRPM)^2 * friction_fwd     (rpm > 0)
+drag = rpm^2 * friction_rev                                       (rpm <= 0)
+visc = 0.5 * |omega_rad| * engine_inertia
+friction = min(drag, visc)
+```
+
+Two ways to get it wrong, and I found both: reading the bound as a maximum made it
+1131 Nm at 6000 rpm and the car could not pull away at all (top speed 4 km/h), and
+feeding it rev/min where the bound wants rad/s scales it by 9.55. As written it is
+211 Nm at 6500 rpm for `friction_fwd = 1e-4` -- real engine braking.
+
+It is applied against the closed part of the throttle: at full throttle the engine
+makes power, with the throttle shut this is the only thing slowing a car in gear.
+Which of the two the torque table is net of is still open (recovery 11), so the
+weighting keeps full throttle honest and gives a lifted car its braking.
+
+Measured (`lifting_off_in_gear_slows_the_car`): **1.55 m/s2 in gear against 0.08 m/s2
+in neutral**, where before the car coasted as if it were in neutral.
+
+Also checked and left alone:
+- **the rate-based limiter already matches** 3.5 exactly (`rate = 2*rpm - rpm_prev`,
+  proportional cut), so nothing to port;
+- **the table already reads zero outside its ends** (`sample_curve` returns 0 before
+  the first node and after the last), as 3.4 requires.

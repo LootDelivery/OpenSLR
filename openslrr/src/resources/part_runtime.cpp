@@ -2505,6 +2505,10 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
   drive.inertia = .28 + .01 * std::max(0.f, comp(chassis, "engine_inertia"));
+  // Recovered engine losses (3.5) and the rpm that scales them.
+  drive.friction_fwd = comp(chassis, "engine_friction_fwd");
+  drive.friction_rev = comp(chassis, "engine_friction_rev");
+  drive.max_rpm = comp(chassis, "maxRPM");
   drive.torque = [dyno](double rpm) { return dyno_sample(dyno, float(rpm), 0, false); };
   drive.engaged = rec.physics_released;
   drive.reverse = controls && in.drive_reverse;
