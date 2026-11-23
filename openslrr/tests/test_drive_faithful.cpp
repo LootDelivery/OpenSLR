@@ -443,6 +443,26 @@ SLRR_TEST(a_slide_at_speed_does_not_stall_the_driveline) {
                "[drive_faithful] slide at %.0f km/h: lowest %.0f rpm, slowest driven "
                "wheel %.1f rad/s\n",
                speed * 3.6, lowest, slowest_wheel);
+
+  // The same slide on the host path, which applies the clutch's impulse to the wheels
+  // instead of exchanging speeds. If the wheel survives there and not here, the missing
+  // piece is a torque path and nothing else.
+  auto host = make_car(false);
+  host.drive.throttle = 1;
+  for (double t = 0; t < 3; t += dt) host.advance(dt, flat);
+  host.body.velocity = yaw.rotate(host.body.velocity);
+  host.body.momentum = yaw.rotate(host.body.momentum);
+  double host_lowest = 1e9, host_slowest = 1e9;
+  for (double t = 0; t < 2; t += dt) {
+    host.advance(dt, flat);
+    host_lowest = std::min(host_lowest, host.engine_omega * 9.5493);
+    for (int i = 2; i < 4; ++i)
+      host_slowest = std::min(host_slowest, std::abs(host.state[i].spin));
+  }
+  std::fprintf(stderr,
+               "[drive_faithful] the same slide, host path (impulse): lowest %.0f rpm, "
+               "slowest driven wheel %.1f rad/s\n",
+               host_lowest, host_slowest);
   // The engine holds now. The driven wheel still reaches a standstill in this slide, and
   // that is the part that is NOT fixed: the tyre's longitudinal force reverses once the
   // wheel's forward axis turns against the car's motion and it takes the wheel from
