@@ -324,15 +324,27 @@ bool step(Bank& s) {
     const double swept = s.get(kVmax) - s.get(kVmin);
     s.set(kMeanPressure, swept <= 1e-8 ? 0.0 : s.get(kPreviousWork) / swept);
     const double pressure_work = s.get(kMeanPressure) * swept;
-    // One four-stroke cycle turns the crank through 4*pi radians.
+    // The original's own conversion, from 0x004b7020 when the cycle closes:
+    //
+    //   torque = (Vmax - Vmin) * MEP * cylinders * 0.125        // 0x62, the table
+    //   power  = rpm/60 * (Vmax - Vmin) * MEP * cylinders       // 0x100
+    //   friction = rpm^3 * 2e-8                                 // taken off POWER only
+    //   net    = power - friction                               // 0x65
+    //
+    // Two things we had wrong, and they are the whole of "the engines are weak":
+    // the torque carried `/(4*pi)` where the original carries `*0.125`, which is
+    // 1.5708x, and friction was subtracted from the torque whereas the original's
+    // table is GROSS torque -- friction only ever leaves the power figure.
     const double omega = s.get(kRpm) * engine_rpm_to_rad;
-    const double indicated_torque = s.get(kCylinders) * pressure_work / (4 * std::numbers::pi);
-    const double friction = engine_friction_torque(s.get(kRpm));
-    s.set(kTorque, indicated_torque - friction);
-    s.set(kGrossPower, indicated_torque * omega);
-    s.set(kFrictionPower, friction * omega);
-    s.set(kNetPower, s.get(kTorque) * omega);
+    const double indicated_torque = s.get(kCylinders) * pressure_work * 0.125;
+    const double friction_power = s.get(kRpm) * s.get(kRpm) * s.get(kRpm) * 2e-8;
+    const double gross_power = (s.get(kRpm) / 60.0) * pressure_work * s.get(kCylinders);
+    s.set(kTorque, indicated_torque);
+    s.set(kGrossPower, gross_power);
+    s.set(kFrictionPower, friction_power);
+    s.set(kNetPower, gross_power - friction_power);
     s.set(kHorsepower, s.get(kNetPower) * 0.001341);
+    (void)omega;
   }
   s.set(kAngle, s.get(kAngle) + s.get(kAngularSpeed) * s.get(kDt));
   if (s.get(kAngle) > 12.566370964050293) s.set(kAngle, s.get(kAngle) - 12.566370964050293);
@@ -648,7 +660,7 @@ bool calculate_into(Session* session, const std::unordered_map<std::string, floa
                  s.get(kIntakePressure), s.get(kEffectivePressure), s.get(kAirConsumption),
                  s.get(kAirLimit), s.get(kFuelConsumption), s.get(kFuelLimit),
                  s.get(kCylinders), s.get(kSweptVolume), s.get(kRpm),
-                 s.get(kTorque) + engine_friction_torque(s.get(kRpm)), s.get(kTorque),
+                 s.get(kTorque), s.get(kTorque),
                  s.get(kMixtureHeat), s.get(kHeatCapacity));
   }
   stats.compression = static_cast<float>(s.get(kCompression));
@@ -769,12 +781,13 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
     return fail("dyno table shape");
   // Preserve the recovered cycle-work witness, not its legacy non-SI scales.
   constexpr double witness_work = 82.08709716796875 * 8;
-  const double witness_torque = witness_work / (4 * std::numbers::pi) -
-                                engine_friction_torque(437);
+  const double witness_torque = witness_work * 0.125;
+  const double witness_power = (437.0 / 60.0) * witness_work -
+                               437.0 * 437.0 * 437.0 * 2e-8;
   if (!near(fresh.stats.displacement, 0.0019011663971468806, 1e-9) ||
       !near(fresh.stats.compression, 10.50583267211914, 2e-6) ||
       !near(curve.torque[1], witness_torque, 0.002) ||
-      !near(curve.watts[1], witness_torque * 437 * engine_rpm_to_rad, 0.05)) {
+      !near(curve.watts[1], witness_power, 0.05)) {
     if (msg && msg_cap)
       std::snprintf(msg, msg_cap,
                     "dyno witness fail torque=%.6f watts=%.4f disp=%.12g comp=%.8g",
