@@ -411,6 +411,17 @@ lamp turned red": **25 rest, 7 through** over the same city drive, the seven
 being cars that entered the zone at a speed from which stopping was no longer
 possible, which is what amber is for.
 
+**The cars are also slower than they were, and that one is not a bug to undo.**
+The old engine wrote `kTorque = cylinders * pressure_work * 0.125` and the old
+solver multiplied it by 2, giving 0.25 of the cycle work per cylinder; the new
+one writes the indicated torque as `work / (4 pi)` and applies it once, which is
+the SI value and is consistent with its own `P = T * omega`. The two models differ
+by roughly 3x, so the old cars were over-torqued and their power number did not
+agree with their own torque. Measured on the Mazda after the swap:
+**225 Nm at 4000 rpm, 186 hp at 7500** -- a plausible engine, and the number the
+physics now actually uses. If it reads as too slow, the lever is a documented
+host tuning value, not a silent multiplier.
+
 Still open from the same drive: the lamp heads themselves do not glow, so a
 driver cannot see which way the light is. That is emissive/flare work on
 `trlight` placements, it is visual, and it starts with a plan and a before/after

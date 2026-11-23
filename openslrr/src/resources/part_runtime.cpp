@@ -5248,6 +5248,19 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
         write_dyno(self, "RPM_maxTorque", stats.torque_rpm);
         write_dyno(self, "maxHP", stats.max_hp);
         write_dyno(self, "RPM_maxHP", stats.hp_rpm);
+        if (std::getenv("SLRR_DYNO_TRACE")) {
+          // One line per recalculation: the number the physics will use, next to
+          // the engine's own displacement and the rpm it peaks at.
+          std::fprintf(stderr,
+                       "[dyno-trace] disp=%.2fL cr=%.2f torque=%.1f Nm @%.0f "
+                       "power=%.1f hp @%.0f\n",
+                       static_cast<double>(stats.displacement),
+                       static_cast<double>(stats.compression),
+                       static_cast<double>(stats.max_torque),
+                       static_cast<double>(stats.torque_rpm),
+                       static_cast<double>(stats.max_hp),
+                       static_cast<double>(stats.hp_rpm));
+        }
         const auto rpm = fields.find("maxRPM");
         if (rpm == fields.end() || !(rpm->second > 0.f))
           write_dyno(self, "maxRPM", stats.maximum_rpm);
