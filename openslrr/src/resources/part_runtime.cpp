@@ -2537,6 +2537,35 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
       }
     }
   }
+  {
+    // One line, once per car: the gearing and mass a launch's traction
+    // arithmetic needs. Without them "it does not spin" is an opinion.
+    static Object* dumped = nullptr;
+    if (std::getenv("SLRR_DRIVE_TRACE") && chassis != dumped &&
+        drive.ratios[1] != 0) {
+      dumped = chassis;
+      std::fprintf(stderr,
+                   "[drive-trace] car limit=%.0f idle=%.0f cf=%.0f mass=%.0f "
+                   "ratio1=%.2f driven=%zu\n",
+                   drive.limit, drive.idle, drive.clutch_force,
+                   double(comp(chassis, "mass")), drive.ratios[1],
+                   drive.wheels.size());
+      // The traction arithmetic needs what the tyres and the driven wheels
+      // actually are: a launch with no spin is either below the tyre or the
+      // drive never reaches it.
+      for (size_t i = 0; i < rec.wheels.size() && i < 4; ++i) {
+        const auto& wheel = rec.wheels[i];
+        std::fprintf(stderr,
+                     "[drive-trace] wheel %zu drive=%.2f radius=%.3f \n"
+                     "                    friction=%.2f long_grip=%.2f "
+                     "lat_grip=%.2f maxload=%.0f\n",
+                     i, double(wheel.drive), double(wheel.radius),
+                     double(wheel.friction), double(wheel.frictn_x),
+                     double(wheel.sliction), double(wheel.max_load));
+      }
+    }
+  }
+
   rec.horn_down = horn;
   for (size_t i = 0; i < drive.wheels.size(); ++i) {
     auto &out = drive.wheels[i];
@@ -3729,14 +3758,15 @@ void advance_chassis_tick() {
       // index, `torque` the net curve value the drive uses at that rpm.
       static const bool trace = std::getenv("SLRR_DRIVE_TRACE") != nullptr;
       static double next_report = 0;
-      if (trace && chassis == controlled && rec.dynamics.engine_running &&
+      if (trace && (chassis == controlled || rec.dynamics.drive.throttle > .5) &&
           engine_trace_clock >= next_report) {
         next_report = engine_trace_clock + .5;
         const auto &d = rec.dynamics;
         std::fprintf(stderr,
                      "[drive-trace] t=%.1f rpm=%.0f limit=%.0f idle=%.0f gear=%d "
                      "throttle=%.2f kph=%.1f torque=%.1f running=%d "
-                     "mode=%d(auto=%d,clutch=%d) faith=%d cf=%.0f ratio=%.2f spin=%.1f\n",
+                     "mode=%d(auto=%d,clutch=%d) faith=%d cf=%.0f ratio=%.2f "
+                     "spin=%.1f slip=%.1f force=%.0f\n",
                      engine_trace_clock, d.engine_omega * 9.54929658551372,
                      d.drive.limit, d.drive.idle, d.gear,
                      static_cast<double>(d.drive.throttle),
@@ -3746,7 +3776,11 @@ void advance_chassis_tick() {
                      d.drive.automatic_shift ? 1 : 0, d.drive.auto_clutch ? 1 : 0,
                      d.drive.faithful ? 1 : 0, d.drive.clutch_force,
                      d.drive.ratios[d.gear],
-                     (d.state[2].spin + d.state[3].spin) * .5);
+                     (d.state[2].spin + d.state[3].spin) * .5,
+                     std::abs((d.state[2].spin + d.state[3].spin) * .5) -
+                         std::hypot(d.body.velocity.x, d.body.velocity.z),
+                     std::abs(d.state[2].tire_force.longitudinal +
+                              d.state[3].tire_force.longitudinal));
       }
     }
     if (!finite_frame(rec.dynamics.body.frame()))

@@ -289,3 +289,64 @@ clears the text store, so a cached key would go silent) and hidden outright in a
 section whose name contains `Menu`, `Splash` or `Loading`. No extra pass, no second
 interface, and it cannot take anything from a menu. Position: right of centre,
 vertically centred -- `x = .66`, `y = -.02` in OSD space.
+
+### 11.3 The shift schedule read the wrong shaft
+
+Two driver reports, one cause: the automatic gearbox's shift decisions were built on
+**engine** speed, which is now a throttle-set number while the converter slips.
+
+  "On a 6500 limit it only reaches 6000-something; on 9000 it reaches 7842."
+  "At a standstill it stops in second and never goes back to first."
+
+Both are `limit * .88` and `limit * .42` in the old schedule. Upshifts happened at 88%
+of the limit, so the top of the range was never used; downshifts needed the engine
+below 42% of the limit, which a converter at stall (80%) never does.
+
+```
+coupled_rpm = |road_shaft * ratios[gear]| * 9.549   // the driveline, not the engine
+up_rpm      = limit * (.58 + .40 * throttle)        // full throttle -> 0.98 * limit
+down_rpm    = limit * (.34 + .16 * throttle)
+upshift     if shaft > 2 and throttle > .05 and coupled_rpm > up_rpm
+downshift   if gear > 1 and coupled_rpm < down_rpm and the lower gear stays under
+            .95 * limit
+```
+
+Three smaller defects fell out of the same block and are fixed with it:
+
+- `if (shaft <= 2) return;` skipped the whole schedule at a standstill. That is the
+  literal reason a stopped car stayed in second. Only the upshift needs motion now.
+- The schedule upshifted on a **closed throttle** -- accelerating in the same gear
+  while braking, a car came to rest in fifth in the test harness.
+- Downshifts now check that the lower gear would not exceed the limit before taking
+  it.
+
+Pinned by `test_drive_faithful`: `full_throttle_uses_the_whole_range` (max rpm above
+95% of the limit) and `a_stopped_car_is_in_first_gear` (stops in gear 1). Measured on
+the Mazda's numbers: full throttle now pulls to the limiter in every gear instead of
+shifting at 5720 and 7920.
+
+### 11.4 "There is still no wheelspin on the Mazda": correct, and here is the number
+
+The car's own data, printed by `SLRR_DRIVE_TRACE`:
+
+```
+limit 6500   idle 900   ClutchF 500   first ratio 8.61   wheel radius 0.318
+rear wheels: drive 1.00  friction 1.95  long grip 1.00  max load 10 860 N
+```
+
+Thrust at the clutch cap = 500 Nm x 8.61 / .318 m = **13.5 kN**. Rear axle load in
+the fixture = 10 038 N, and 1.95 x that = **19.6 kN** of tyre. The launch asks for
+**73% of what the tyres hold**, so nothing can spin: the engine cannot make more
+torque than it makes, and the gearing multiplies what it does make into less force
+than the tyre is rated for.
+
+The generic fixture (1 300 kg, coefficient 1.6, shorter gearing) does spin -- 71 m/s
+of slip, the wheels dragging the engine into the limiter -- so the mechanism is not
+missing. It is a property of this car: with friction 1.95 on its rears, the Mazda is
+nowhere near the limit. `the_mazda_launch_is_below_its_tyre_limit` pins it, so a
+future change that inflates the launch force has to walk past a failing test rather
+than a driver's suspicion.
+
+What would change it, each a decision and not a default: `ClutchF` (500 is the
+original's own number), the converter's 2:1 stall multiplication (physical, but the
+exact ratio is a design choice), or the tyre coefficient (game data, 1.95 as shipped).

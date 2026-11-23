@@ -690,17 +690,37 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
     gear = 1;
   if (!drive.automatic_shift)
     return;
-  if (gear <= 0 || gear == 7 || shaft <= 2)
+  // A standstill must still be evaluated: the old `shaft <= 2` early return skipped
+  // the whole schedule once the shaft stopped turning, which is why a car that came
+  // to rest in second stayed in second. Only the upshift needs the shaft to move.
+  if (gear <= 0 || gear == 7)
     return;
+  // Both decisions read the driveline, not the engine. With a torque converter the
+  // engine speed is a throttle-set number while the car is slow, so a schedule built
+  // on it shifted up at 88% of the limit under full throttle (a 6500 block never saw
+  // past 6000) and never shifted down at a standstill, because the engine was still
+  // sitting on its stall speed: a stopped car stayed in second.
   const double ratio = drive.ratios[gear];
   const double coupled_rpm = std::abs(road_shaft * ratio) * rpm_per_rad;
-  if (gear < drive.gears && rpm > drive.limit * .88 &&
-      coupled_rpm > drive.limit * .7 && drive.ratios[gear + 1] > 0) {
+  // Throttle-dependent, like an automatic's own schedule: full throttle pulls to the
+  // limiter, a light foot shifts early.
+  static const bool gear_trace = std::getenv("SLRR_GEAR_TRACE") != nullptr;
+  if (gear_trace)
+    std::fprintf(stderr,
+                 "[gear] g=%d shaft=%.2f road=%.2f thr=%.2f coupled=%.0f "
+                 "rpm=%.0f st=%.2f\n",
+                 gear, shaft, road_shaft, drive.throttle, coupled_rpm, rpm,
+                 shift_time_);
+  const double up_rpm = drive.limit * (.58 + .40 * std::clamp(drive.throttle, 0.0, 1.0));
+  const double down_rpm = drive.limit * (.34 + .16 * std::clamp(drive.throttle, 0.0, 1.0));
+  // Never upshift on a closed throttle: that is engine braking, and shifting up
+  // during a stop was how a car parked in fifth.
+  if (shaft > 2 && drive.throttle > .05 && gear < drive.gears &&
+      drive.ratios[gear + 1] > 0 && coupled_rpm > up_rpm) {
     ++gear;
     shift_time_ = .12;
-  } else if (gear > 1 &&
-             rpm < std::max(drive.idle * 1.45, drive.limit * .42) &&
-             shaft * ratio * rpm_per_rad < drive.limit * .65) {
+  } else if (gear > 1 && coupled_rpm < down_rpm &&
+             coupled_rpm * drive.ratios[gear - 1] / ratio < drive.limit * .95) {
     --gear;
     shift_time_ = .22;
   }

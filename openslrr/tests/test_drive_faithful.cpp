@@ -121,6 +121,29 @@ Trace run_car(bool faithful, double seconds = 25) {
   return trace;
 }
 
+// Lift off, brake, and come to rest: the gearbox has to walk back down to first.
+// It could not before, because the downshift read the engine, which a converter
+// holds at its stall speed -- a stopped car sat in second.
+double gear_at_rest(bool faithful, int* top_gear) {
+  auto car = make_car(faithful);
+  const double dt = 1. / 120;
+  *top_gear = 0;
+  for (double t = 0; t < 6; t += dt) {
+    car.drive.throttle = 1;
+    car.drive.brake = 0;
+    car.advance(dt, flat);
+    *top_gear = std::max(*top_gear, car.gear);
+  }
+  for (double t = 0; t < 30; t += dt) {
+    car.drive.throttle = 0;
+    car.drive.brake = 1;
+    car.advance(dt, flat);
+    if (car.body.velocity.length() < .2 && t > 1)
+      break;
+  }
+  return car.gear;
+}
+
 // Full throttle from rest reaches 100 km/h, and the engine is allowed to run: the
 // faithful path must not be slower than the host's model that pins it.
 SLRR_TEST(faithful_coupling_is_not_slower_than_the_host_model) {
@@ -172,6 +195,79 @@ SLRR_TEST(the_engine_revs_without_an_invented_ceiling) {
   SLRR_REQUIRE(trace.max_rpm > 7000 * .55);
 }
 
+// A stopped car is in first. Not "a low gear": first.
+SLRR_TEST(a_stopped_car_is_in_first_gear) {
+  int top_gear = 0;
+  const int gear = gear_at_rest(true, &top_gear);
+  std::fprintf(stderr, "[drive_faithful] stopped in gear %d (reached %d)\n",
+               gear, top_gear);
+  SLRR_REQUIRE(top_gear >= 3);
+  SLRR_REQUIRE(gear == 1);
+}
+
+// Full throttle pulls to the top of the range. The schedule used to shift at 88%
+// of the limit, so a 6500 block never saw past 6000 and a 9000 block stopped at
+// 7842 -- the driver's two numbers.
+SLRR_TEST(full_throttle_uses_the_whole_range) {
+  const Trace trace = run_car(true);
+  SLRR_REQUIRE(trace.finite);
+  SLRR_REQUIRE(trace.max_rpm > 7000 * .95);
+  SLRR_REQUIRE(trace.max_rpm <= 7000 * 1.05);
+}
+
+// The game's own Mazda, as the drive trace reports it: 6500 limit, ClutchF 500,
+// ratios 8.61 / 5.61 / 3.88 / 2.95 / 2.57, 1566 kg, 225 Nm. A driver reported no
+// wheelspin at all on it; this is the arithmetic behind that, and it is not a
+// defect -- the tyres are asked for less than they can take.
+SLRR_TEST(the_mazda_launch_is_below_its_tyre_limit) {
+  auto car = make_car(true);
+  car.body.configure(1566, {-.85, .15, -2.2}, {.85, 1.4, 2.2}, {0, .45, .1},
+                     {550, 2300, 2200});
+  const double ratios[] = {0, 8.61, 5.61, 3.88, 2.95, 2.57, 0, -8.61};
+  std::copy(std::begin(ratios), std::end(ratios), car.drive.ratios.begin());
+  car.drive.limit = 6500;
+  car.drive.idle = 900;
+  car.drive.torque = [](double rpm) {
+    return std::clamp(120.0 + rpm * .026, 0., 225.);
+  };
+  // The game reports friction 1.95 on this car's rear tyres, not the 1.6 the
+  // generic fixture uses. That coefficient is the whole answer to "why no spin".
+  for (auto& wheel : car.drive.wheels)
+    wheel.tyre.friction = 1.95;
+  car.drive.throttle = 1;
+  double max_slip_ratio = 0, max_force = 0, load = 0;
+  const double dt = 1. / 120;
+  for (double t = 0; t < 6; t += dt) {
+    car.advance(dt, flat);
+    const double kph = car.body.velocity.length() * 3.6;
+    double force = 0, support = 0;
+    for (size_t i = 2; i < 4; ++i) {
+      force += std::abs(car.state[i].tire_force.longitudinal);
+      support += car.state[i].force;
+      const double wheel_speed = std::abs(car.state[i].spin) * 0.31;
+      max_slip_ratio =
+          std::max(max_slip_ratio, std::abs(wheel_speed - kph / 3.6));
+    }
+    // A tyre is at its limit when the force it makes stops rising with slip. The
+    // rough test a driver would recognise: slip speed, and the force asked of it.
+    max_force = std::max(max_force, force);
+    if (t > 1) load = std::max(load, support);
+  }
+  std::fprintf(stderr,
+               "[drive_faithful] mazda launch slip=%.2f m/s force=%.0f N "
+               "rear load=%.0f N demand=%.2f g' + BS + 'n",
+               max_slip_ratio, max_force, load,
+               load > 0 ? max_force / load : 0.0);
+  // Asked for less than the tyres hold, by this much: 1.95 x the rear axle load.
+  SLRR_REQUIRE(load > 0);
+  // Full torque through first gear asks this car for less force than its rear
+  // tyres hold, even with ClutchF at its cap: 500 Nm x 8.61 / .318 m = 13.5 kN
+  // against 1.95 x the axle load. That is why there is no wheelspin to find.
+  SLRR_REQUIRE(max_force < 1.95 * load);
+  std::fprintf(stderr, "[drive_faithful] mazda uses %.0f%% of its tyre limit' + BS + 'n",
+               100.0 * max_force / (1.95 * load));
+}
+
 // Gears are used: a launch that stays in first past 100 km/h is the old slip bug.
 SLRR_TEST(the_gearbox_moves_through_the_gears) {
   const Trace trace = run_car(true);
@@ -207,6 +303,9 @@ int main() {
   const slrr::standalone::Test tests[] = {
       faithful_coupling_is_not_slower_than_the_host_model,
       the_revs_flare_when_the_throttle_goes_down,
+      a_stopped_car_is_in_first_gear,
+      full_throttle_uses_the_whole_range,
+      the_mazda_launch_is_below_its_tyre_limit,
       full_throttle_reaches_a_hundred_kilometres_an_hour,
       the_engine_revs_without_an_invented_ceiling,
       the_gearbox_moves_through_the_gears,
