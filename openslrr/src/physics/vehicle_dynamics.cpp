@@ -1233,6 +1233,34 @@ void VehicleDynamics::step_drive() {
 }
 
 void VehicleDynamics::step(const Terrain &terrain) {
+  // Nothing here may hand a non-finite number to the renderer: one bad frame in a part's
+  // pose draws a triangle stretched to the edges of the screen, and a NaN in the body
+  // makes the car rotate about a point that is not its centre. If a value is already bad
+  // on entry, say which one, once, and reset it to something harmless rather than let it
+  // spread. SLRR_NAN_TRACE prints; the reset always happens.
+  if (const char *trace = std::getenv("SLRR_NAN_TRACE"); trace || !std::isfinite(body.position.x)) {
+    const auto bad = [](const char *what, double value) {
+      static int reported = 0;
+      if (reported++ < 8)
+        std::fprintf(stderr, "[nan] %s = %g\n", what, value);
+    };
+    if (!body.position.finite()) bad("body.position", body.position.x);
+    if (!body.velocity.finite()) bad("body.velocity", body.velocity.x);
+    if (!std::isfinite(engine_omega)) bad("engine_omega", engine_omega);
+    for (size_t i = 0; i < state.size(); ++i) {
+      if (!std::isfinite(state[i].spin)) bad("wheel.spin", state[i].spin);
+      if (!std::isfinite(state[i].length)) bad("wheel.length", state[i].length);
+      if (!std::isfinite(state[i].force)) bad("wheel.force", state[i].force);
+    }
+    if (!body.position.finite()) body.position = {};
+    if (!body.velocity.finite()) body.velocity = {};
+    if (!std::isfinite(engine_omega)) engine_omega = 0;
+    for (auto &wheel : state) {
+      if (!std::isfinite(wheel.spin)) wheel.spin = 0;
+      if (!std::isfinite(wheel.length)) wheel.length = 0;
+      if (!std::isfinite(wheel.force)) wheel.force = 0;
+    }
+  }
   apply_aero();
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())

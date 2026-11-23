@@ -157,6 +157,11 @@ double load_curve(double load, const TireParameters &tire) {
 
 TireForces forces_from_inputs(double load, double tangent, double slip,
                               double angle, const TireParameters &tire) {
+  // A non-finite input would leave this function as a non-finite force, and from there it
+  // reaches the body, the scripts and the renderer. Refuse it instead of propagating.
+  if (!std::isfinite(load) || !std::isfinite(tangent) || !std::isfinite(slip) ||
+      !std::isfinite(angle))
+    return {0.0, 0.0};
   const double sin_angle = std::sin(angle);
   const double cos_angle = std::cos(angle);
   const double longitudinal_weight = tire.longitudinal_grip;  // wheel+0x218
