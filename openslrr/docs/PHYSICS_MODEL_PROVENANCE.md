@@ -709,6 +709,47 @@ faithful path is 5.4 s to 100 against the host model's 4.7 (a heavier crank revs
 the same power; the old assertion forced the smaller crank), and engine braking is
 0.98 m/s2 against 0.08 coasting where it was 1.55 with the small crank.
 
+### 12.8 What actually stops the driven wheel in a slide
+
+Measured, not reasoned. `SLRR_SLIDE_TRACE` on `a_slide_at_speed_does_not_stall_the_driveline`
+(61 km/h, 105 degrees of yaw, full throttle, first gear):
+
+```
+spin=48.52  road=-5.85  slip=20.89  lat=-16.29  Flong= 2943  Flat=3284  load=3522
+spin=41.60  road=-5.81  slip=18.70  lat=-16.20  Flong= 3053  Flat=3400  load=3675
+spin=33.68  road=-5.77  slip=16.21  lat=-16.11  Flong= 3155  Flat=3514  load=3824
+spin=24.86  road=-5.73  slip=13.44  lat=-16.02  Flong= 3245  Flat=3625  load=3966
+spin=15.27  road=-5.69  slip=10.42  lat=-15.92  Flong= 3315  Flat=3736  load=4100
+spin= 4.96  road=-5.65  slip= 7.18  lat=-15.83  Flong= 3381  Flat=3837  load=4224
+spin=-5.83  road=-5.69  slip= 3.88  lat=-15.73  Flong= 3613  Flat=3813  load=4339
+```
+
+Three things are in that table:
+
+1. **The tyre force does not reverse.** `magic_formula` with `C = 1.55` cannot cross
+   zero -- `C*atan(.)` reaches 2.435 against pi at 3.1416 -- so past the peak the curve
+   flattens at 0.649 of its maximum and keeps its sign. The earlier suspect was wrong.
+2. **`road` is negative.** At 105 degrees the wheel's forward axis points against the
+   car's motion, so a rolling wheel would turn at `-5.85/0.31 = -18.9 rad/s`. The tyre is
+   right to drag the wheel that way; the wheel goes from +48.5 through zero to -6.8 over
+   seven steps (58 ms) and only then does the driveline pull it back.
+3. **The driveline cannot win that fight, and it should.** Engine torque at the contact
+   patch is `M*ratio/r = 315*12.9/0.31 = 13 kN`; the tyre makes 2.9 kN. The reason the
+   tyre wins anyway is that the coupling is a **speed** exchange, not a torque source: in
+   first gear `k = 0.036`, so it recovers about 2 rad/s of the gap per step while the
+   tyre removes 4.8. Over a dozen steps the wheel is dragged through zero.
+
+That is the remaining defect, and it is now pinned by number rather than by feel. The
+engine side is fixed: the same slide ends at **4769 rpm** where it used to collapse to
+idle, because the link no longer drags the crank down with the wheel.
+
+The fix this points to, not yet written: a clutch delivers `M*ratio` at the wheel, so the
+wheel's own equation should be `spin += (M_clutch*ratio - Flong*r)*dt/I`, with the engine
+taking its reaction. That is the standard two-inertia drive, and it is *not* the experiment
+tried earlier and reverted twice -- that one deleted the tyre's reaction on the wheel, which
+is what killed torque sensitivity (200 against 600 Nm: 3.26 against 3.11 s). Keeping the
+reaction and giving the wheel a torque source instead of a speed source preserves both.
+
 ### 12.2 The engine's own numbers, from the game's engine screen
 
 Same engine, with and without a supercharger, as the game itself reports them:

@@ -241,6 +241,10 @@ double suspension_force(double length, double speed, double rest, double max,
 }
 
 namespace {
+bool slide_trace() {
+  static const bool on = std::getenv("SLRR_SLIDE_TRACE") != nullptr;
+  return on;
+}
 // Typical real-world values, not recovered from the original game.
 constexpr double air_density = 1.225;      // kg/m³, ISA sea level at 15 °C
 constexpr double frontal_fill = .85;       // frontal area / (width × height)
@@ -1178,6 +1182,12 @@ void VehicleDynamics::step_drive() {
       s.spin -=
           (force.longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
           timestep / wheel_inertia;
+      if (slide_trace() && std::abs(cfg.weight) > 1e-3)
+        std::fprintf(stderr,
+                     "[slide] w%zu spin=%7.2f road=%7.2f slip=%7.2f lat=%7.2f "
+                     "Flong=%8.1f Flat=%8.1f load=%7.0f\n",
+                     i, s.spin, (s.spin * wheel.radius - s.slip_speed), s.slip_speed,
+                     s.lateral_speed, force.longitudinal, force.lateral, s.force);
       // Tried twice and reverted twice: letting the driveline own a driven wheel's speed
       // outright, with the tyre acting through force alone. It does not fix the wheel
       // stopping in a slide, and it removes torque sensitivity -- 200 against 600 Nm
