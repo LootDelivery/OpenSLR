@@ -417,6 +417,43 @@ SLRR_TEST(a_spin_does_not_drop_the_engine_to_idle) {
   SLRR_REQUIRE(lowest > car.drive.idle * 2.0);
 }
 
+// The stall a live slide produced: throttle held at 1.00, first gear, the car rotated past
+// 90 degrees so its velocity points backwards along its own heading, and the driven wheels
+// brought to a standstill. The link dragged the crank 2489 -> 2170 -> 0 rpm, the engine
+// stopped, the gearbox dropped to neutral, and the throttle did nothing for the rest of the
+// corner -- "the wheels stop and the revs fall, as if the gas were released". The anti-stall
+// guard only ran at closed throttle, so nothing opened the link.
+SLRR_TEST(a_spin_that_stops_the_driven_wheels_does_not_stall_the_engine) {
+  auto car = make_car(true);
+  const double dt = 1. / 120;
+  car.drive.throttle = 1;
+  for (double t = 0; t < 3; t += dt) car.advance(dt, flat);
+  car.body.velocity = car.body.velocity * -1.0;
+  car.body.momentum = car.body.momentum * -1.0;
+  double lowest = 1e9;
+  bool stopped = false;
+  const double entry_speed = car.body.velocity.length();
+  double most_brake = 0;
+  for (double t = 0; t < 2; t += dt) {
+    car.advance(dt, flat);
+    most_brake = std::max(most_brake, car.brake_service());
+    lowest = std::min(lowest, car.engine_omega * 9.5493);
+    if (!car.engine_running) stopped = true;
+  }
+  const double exit_speed = car.body.velocity.length();
+  std::fprintf(stderr,
+               "[drive_faithful] spun past 90 at full throttle: lowest %.0f rpm, "
+               "engine %s, speed %.1f -> %.1f m/s, brake %.2f\n",
+               lowest, stopped ? "STOPPED" : "running", entry_speed, exit_speed,
+               most_brake);
+  SLRR_REQUIRE(!stopped);
+  SLRR_REQUIRE(lowest > car.drive.idle * 2.0);
+  // And on the mechanism itself, not on a speed threshold: a spun car with the throttle
+  // open must not be braked at all. Before the fix this read 1.0 -- full service brake.
+  SLRR_REQUIRE(most_brake < .05);
+  SLRR_REQUIRE(exit_speed > 3.0);
+}
+
 // The one a driver actually reproduces: at speed, a slide of 100-110 degrees, throttle
 // held. There the wheel's forward axis turns against the car's motion, the tyre force
 // reverses and can stop a driven wheel inside one step; a link made of speed then dragged
@@ -549,6 +586,7 @@ int main() {
       a_car_in_first_at_idle_neither_bogs_nor_creeps,
       reverse_and_handbrake_at_speed_do_not_strangle_the_engine,
       a_spin_does_not_drop_the_engine_to_idle,
+      a_spin_that_stops_the_driven_wheels_does_not_stall_the_engine,
       a_slide_at_speed_does_not_stall_the_driveline,
       full_throttle_reaches_a_hundred_kilometres_an_hour,
       the_engine_revs_without_an_invented_ceiling,

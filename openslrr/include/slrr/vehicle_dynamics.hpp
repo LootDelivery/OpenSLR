@@ -266,6 +266,8 @@ public:
   void reset_drive();
   // Fraction of the upcoming engine step allowed by the existing rev limiter.
   double engine_limit_fraction() const;
+  // The service brake the assist is applying, 0..1. A spun car must read 0 here.
+  double brake_service() const { return service_brake_; }
   uint64_t backlog() const;
   void sync_wheels();
 

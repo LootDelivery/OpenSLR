@@ -819,8 +819,17 @@ void VehicleDynamics::step_drive() {
   update_gear(rpm, shaft, road_shaft);
   const double ratio = drive.ratios[gear];
   const double forward_speed = body.velocity.dot(wheel_forward(body, 0));
+  // An assist for rolling the wrong way with no power requested -- NOT for a spun car.
+  // The condition is satisfied by any vehicle that has rotated past ~90 degrees, because
+  // the body's velocity then points backwards along its own heading. Firing there set the
+  // service brake to 1.0, forced the throttle to zero and skipped the whole driveline
+  // block, which is precisely the reported "the wheels stop and the revs fall as if the gas
+  // were released": measured in a live slide, throttle 1.00 in first gear, the car stopped
+  // from 16.9 to 1.5 m/s and the engine fell 2489 -> 0 and stalled. A driver holding the
+  // throttle is asking for drive, so the assist has no business acting.
   const bool direction_brake =
-      (ratio < 0 && forward_speed > 1) || (ratio > 0 && forward_speed < -1);
+      drive.throttle < .1 &&
+      ((ratio < 0 && forward_speed > 1) || (ratio > 0 && forward_speed < -1));
   const bool automatic_shift = drive.automatic_shift && shift_time_ > 0;
   const bool accelerator = drive.throttle > .1 && !direction_brake;
   if (!engine_running && accelerator && !accelerator_down_)
@@ -939,6 +948,16 @@ void VehicleDynamics::step_drive() {
     //   - braking at low speed, where the driveline would otherwise keep the wheels
     //     turning at idle speed and the car would creep and never stop.
     double engage = 1.0;
+    // Anti-stall, from the regulator's own branch (0x0044DD70: engine at or below idle ->
+    // `wanted = 1.0`, fully disengaged) and NOT gated on the throttle, which is where this
+    // port had it. Measured in a live slide: throttle 1.00, first gear, the driven wheels
+    // brought to a standstill, crank 2489 -> 2170 -> 0 rpm, then gear 0 and no drive for
+    // the rest of the corner -- the reported "the wheels stop and the revs fall, as if the
+    // gas were released". The link was dragging a dead crank because the only guard was
+    // `gas <= .05`. Opening here lets the engine rev on its own and re-engage the moment it
+    // climbs past idle.
+    if (drive.faithful && engine_omega * rpm_per_rad <= drive.idle * 1.02)
+      engage = 0.0;
     {
       const double engine_rpm = engine_omega * rpm_per_rad;
       const double shaft_rpm = std::abs(shaft_omega) * rpm_per_rad;

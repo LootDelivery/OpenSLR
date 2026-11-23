@@ -859,6 +859,46 @@ remaining difference from the original lives, and it is a tyre/gearing question,
 driveline one. Re-checking `max_load` (per wheel or per axle) and the friction scaling
 against the script values is the next measurement.
 
+### 12.11 The spin stall: the throttle was being cut by the game, not by the driveline
+
+Captured with the per-frame slide trace in the live game, exactly as reported ("the wheels
+stop and the revs fall, as if the gas were released"):
+
+```
+t=17.50  rpm=2489  gear=1  thr=1.00  fwd=-1.7  spin=-0.0  spinL=-0.0  F=6658  load=9523
+t=17.50  rpm=   0  gear=0  thr=0.00  fwd=-0.0  spin= 0.0  ...        <- stopped, neutral
+t=17.53  rpm=2441  gear=1  thr=1.00  fwd=-1.6  spin=-0.0  ...
+```
+
+Two separate mechanisms, both in our code and neither in the driveline:
+
+1. **`direction_brake`.** `(ratio > 0 && forward_speed < -1)` is satisfied by any car that
+   has rotated past ~90 degrees, because the body's velocity then points backwards along its
+   own heading. Firing it sets the service brake to **1.0**, forces `gas = 0` and skips the
+   entire driveline block. That is literally "as if the gas were released" -- it was. It is
+   now gated on `drive.throttle < .1`: a driver holding the throttle is asking for drive,
+   and a spin is not a parking situation.
+2. **Anti-stall gated on the throttle.** The driver-only guard `gas <= .05` meant nothing
+   opened the link while the wheels were held at a standstill with the throttle open, so the
+   link dragged the crank 2489 -> 2170 -> 0 and `engine_running` went false, which drops the
+   gearbox to neutral. The recovered regulator's own branch (`engine at or below idle ->
+   fully disengaged`) is not gated on the throttle, and now neither is this.
+
+Measured after both, in the stand (`a_spin_that_stops_the_driven_wheels_does_not_stall_the_engine`,
+60 km/h spun past 90 degrees at full throttle):
+
+| | before | after |
+| --- | --- | --- |
+| lowest engine speed | 978 rpm (idle) | **6937 rpm** |
+| service brake applied | **1.00** | **0.00** |
+| speed after 2 s | 1.5 m/s | 4.1 m/s |
+
+The test asserts the mechanism (`brake_service() < .05`), not a speed threshold, and is
+registered as test 17. Note which fix each source supports: the anti-stall gate is proven by
+that test (it fails with the gate disabled), while the direction-brake gate is proven by the
+live row -- the fixture's instantaneous velocity reversal does not satisfy
+`forward_speed < -1` the way a real, rotating car does, so the fixture cannot carry it.
+
 ### 12.2 The engine's own numbers, from the game's engine screen
 
 Same engine, with and without a supercharger, as the game itself reports them:
