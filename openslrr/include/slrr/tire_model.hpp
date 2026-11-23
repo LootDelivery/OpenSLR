@@ -68,17 +68,20 @@ TireTuning& tire_tuning();
 TireForces tire_friction_limits(double load, double alignment,
                                 const TireParameters& tire);
 
-// Reference Magic Formula curves, scaled by the script inputs and host
-// tuning, with progressive load efficiency and a combined friction ellipse.
-// Positive longitudinal pushes along the wheel heading; lateral opposes
-// lateral_speed. alignment scales the load before the curve is evaluated.
-TireForces tire_forces(double load, double alignment, double wheel_speed,
+// The recovered force law (0x0043BA80 clamped, 0x0043BB30 signed) on the 17 script
+// slots, with the load curve of 0x00454500 and the composite slip of the same
+// listing. `tangent` is the magnitude of the contact normal's components in the
+// wheel frame other than its bearing axis -- the quantity 0x00454500 takes from
+// sqrt(s[1]^2 + s[2]^2) and turns into the force scale through (tangent + 1) * 0.5.
+// It replaces what used to be a load multiplier. Positive longitudinal pushes along
+// the wheel heading; lateral opposes lateral_speed.
+TireForces tire_forces(double load, double tangent, double wheel_speed,
                        double road_speed, double lateral_speed,
                        const TireParameters& tire);
 
 // The same curves evaluated at the recovered low-speed slip inputs. state and
 // dt carry the per-wheel filter that replaces the invented velocity cap.
-TireForces tire_forces(double load, double alignment, double wheel_speed,
+TireForces tire_forces(double load, double tangent, double wheel_speed,
                        double road_speed, double lateral_speed,
                        const TireParameters& tire, TireSlipState& state,
                        double dt);

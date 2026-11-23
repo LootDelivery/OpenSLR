@@ -113,86 +113,94 @@ TireForces tire_friction_limits(double load, double alignment,
 }
 
 namespace {
-// The curves, evaluated at whatever slip inputs the caller supplies. There is
-// deliberately no velocity-proportional clamp here: in the recovered model the
-// low-speed problem is solved upstream, in the inputs.
-TireForces force_from_slip(double aligned_load, double kappa, double alpha,
-                           const TireParameters &tire) {
-  constexpr TireParameters stock;
-  const double stiffness =
-      std::clamp(tire.stiffness / stock.stiffness, 0.4, 2.5);
-  const double slide_ratio =
-      std::clamp(tire.sliction / stock.sliction, 0.3, 1.5);
+// 0x0043BA80 (clamped at zero) and 0x0043BB30 (signed): the recovered force law, one
+// function with a switch, because the two differ only in that clamp. `argument` is the
+// shape input (composite slip for longitudinal, slip angle for lateral), `s` is the
+// scale that comes from the load.
+double principle_force(double argument, double s, const TireParameters &tire,
+                       bool clamp_nonnegative) {
+  // C0, C2 and C4 are the named fields too -- setSliction, setFriction and
+  // setStiffness write both -- so they are read from the names, which keeps one
+  // source of truth per slot. The rest come from the slot array.
+  const auto &c = tire.pacejka;
+  const double c0 = tire.sliction, c1 = c[1], c2 = tire.friction, c3 = c[3],
+               c4 = tire.stiffness, c5 = c[5], c6 = c[6], c7 = c[7], c8 = c[8],
+               c9 = c[9], c10 = c[10];
+  const double m = s * c1 + c2;
+  const double denominator = m * c0;
+  if (denominator == 0.0)
+    return 0.0;
+  const double decay = std::exp(-s * c5);
+  const double numeric = (s * c3 + c4) * decay;
+  const double argument_scaled =
+      (s * c9 + c10 + argument) * (numeric / denominator);
+  const double first = std::atan(argument_scaled);
+  const double second = std::atan(
+      (s * c7 + s * s * c6 + c8) * (first - argument_scaled) + first);
+  const double force = m * s * std::sin(c0 * second);
+  return clamp_nonnegative ? std::max(0.0, force) : force;
+}
 
-  const double slide = std::min(1.0, std::hypot(kappa * 1.5, alpha * 2.5));
-  const double effective_grip =
-      reference_grip(aligned_load, tire) * std::lerp(1.0, slide_ratio, slide);
+// The load curve of 0x00454500: max_load clamps it and load_smooth blends the linear
+// branch with a progressive one that saturates at max_load.
+double load_curve(double load, const TireParameters &tire) {
+  const double maximum = tire.maximum_load;
+  if (!(maximum > 0.0))
+    return load;
+  const double smooth = std::clamp(tire.load_smoothing, 0.0, 1.0);
+  const double linear = std::min(maximum, load);
+  const double progressive =
+      std::atan(load * (std::numbers::pi / 2) / maximum) * maximum *
+      (2 / std::numbers::pi);
+  return (1 - smooth) * linear + smooth * progressive;
+}
 
-  const auto &tuning = tire_tuning();
-  const auto peaks = force_peaks(aligned_load, effective_grip, tire);
-
-  // Pic latéral : rigidité de dérive assouplie (B = 11.5) pour placer le pic
-  // vers 7-9° et garder une dérive contrôlable après décrochage.
-  const double lateral_peak = peaks.lateral;
-
-  // Slip combiné : le patinage longitudinal (kappa) réduit la rigidité
-  // de dérive avant même d'atteindre la limite de l'ellipse de friction.
-  const double longitudinal_saturation =
-      std::clamp(std::abs(kappa) / 0.35, 0.0, 0.75);
-  const double effective_lateral_b =
-      11.5 * stiffness * tuning.lateral_response *
-      (1.0 - 0.55 * longitudinal_saturation);
-
-  double lateral =
-      -magic_formula(alpha, effective_lateral_b, 1.32, lateral_peak, 0.35);
-
-  // Pic longitudinal : C = 1.55 crée une vraie chute de traction quand la roue
-  // bloque ou patine excessivement par rapport au slip optimal (~10-12%).
-  const double longitudinal_peak = peaks.longitudinal;
-
-  double longitudinal =
-      magic_formula(kappa, 14.0 * stiffness, 1.55, longitudinal_peak, 0.45);
-
-  // Ellipse de friction combinée
-  if (lateral_peak > 0.0 && longitudinal_peak > 0.0) {
-    const double demand = std::hypot(longitudinal / longitudinal_peak,
-                                     lateral / lateral_peak);
-    if (demand > 1.0) {
-      longitudinal /= demand;
-      lateral /= demand;
-    }
-  }
-
+TireForces forces_from_inputs(double load, double tangent, double slip,
+                              double angle, const TireParameters &tire) {
+  const double sin_angle = std::sin(angle);
+  const double cos_angle = std::cos(angle);
+  const double longitudinal_weight = tire.longitudinal_grip;  // wheel+0x218
+  const double composite =
+      std::hypot(sin_angle, cos_angle * slip * longitudinal_weight);
+  if (composite <= 1e-4)
+    return {0.0, 0.0};
+  // The scale: half of one plus the contact normal's tangential magnitude, times the
+  // load curve. On a square-standing wheel the tangent is near zero and this is half
+  // the load -- which is where the recovered grip lands.
+  const double s = (tangent + 1.0) * 0.5 * load_curve(load, tire);
+  const double longitudinal =
+      (slip * longitudinal_weight * cos_angle / composite) *
+      principle_force(composite, s, tire, true);
+  const double lateral = (sin_angle / composite) *
+                         principle_force(angle, s, tire, false);
   return {longitudinal, lateral};
 }
 } // namespace
 
-TireForces tire_forces(double load, double alignment, double wheel_speed,
+TireForces tire_forces(double load, double tangent, double wheel_speed,
                        double road_speed, double lateral_speed,
                        const TireParameters &tire) {
-  const double aligned_load = std::max(0.0, load * alignment);
-  if (aligned_load <= 0.0)
+  if (!(load > 0.0))
     return {0.0, 0.0};
-  // Stateless view: the geometric inputs, with the old 1.5 m/s reference floor
-  // only to keep the ratio finite. Production uses the stateful overload.
+  // Stateless view: the geometric inputs, with the 1.5 m/s reference floor only to keep
+  // the ratio finite. Production uses the stateful overload.
   const double reference =
       std::max({1.5, std::abs(road_speed), std::abs(wheel_speed)});
-  const double kappa = (wheel_speed - road_speed) / reference;
-  const double alpha =
+  const double slip = (wheel_speed - road_speed) / reference;
+  const double angle =
       std::atan2(lateral_speed, std::max(1.5, std::abs(road_speed)));
-  return force_from_slip(aligned_load, kappa, alpha, tire);
+  return forces_from_inputs(load, tangent, slip, angle, tire);
 }
 
-TireForces tire_forces(double load, double alignment, double wheel_speed,
+TireForces tire_forces(double load, double tangent, double wheel_speed,
                        double road_speed, double lateral_speed,
                        const TireParameters &tire, TireSlipState &state,
                        double dt) {
-  const double aligned_load = std::max(0.0, load * alignment);
-  if (aligned_load <= 0.0)
+  if (!(load > 0.0))
     return {0.0, 0.0};
-  const auto inputs = tire_slip_inputs(wheel_speed, road_speed, lateral_speed,
-                                       dt, state);
-  return force_from_slip(aligned_load, inputs.slip, inputs.angle, tire);
+  const auto inputs =
+      tire_slip_inputs(wheel_speed, road_speed, lateral_speed, dt, state);
+  return forces_from_inputs(load, tangent, inputs.slip, inputs.angle, tire);
 }
 
 } // namespace slrr::physics

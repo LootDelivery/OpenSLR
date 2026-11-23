@@ -478,7 +478,10 @@ SLRR_TEST(a_spin_that_stops_the_driven_wheels_does_not_stall_the_engine) {
   // And on the mechanism itself, not on a speed threshold: a spun car with the throttle
   // open must not be braked at all. Before the fix this read 1.0 -- full service brake.
   SLRR_REQUIRE(most_brake < .05);
-  SLRR_REQUIRE(exit_speed > 3.0);
+  // No speed threshold here: that one was 3.0 m/s and it was mine, not the model's. With
+  // the recovered tyre the same spin scrubs speed faster, which is a property of the
+  // force law, not a regression -- the assertions above are the ones that describe the
+  // defect (no brake, no stall).
 }
 
 // The one a driver actually reproduces: at speed, a slide of 100-110 degrees, throttle
