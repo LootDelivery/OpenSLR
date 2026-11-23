@@ -90,3 +90,32 @@ Nothing here says the original's internals are recovered. `Clutch.maxF`,
 `Transmission`'s ratios and the `1 - clutch` thrust are; the crank inertia, the
 tyre model, the aerodynamics, the launch hold and the ambient traffic speeds are
 not.
+
+## 7. The parameter contract, field by field
+
+The original hands its physics a fixed set of `Chassis` fields; the natives read
+them off the Java object. Decompiled defaults are from
+`parts/scripts/bodypart/Chassis.java`. The right column is what this tree's host
+actually does with each one (`src/resources/part_runtime.cpp`, `configure` path).
+
+| Original field | Default | This host |
+|---|---|---|
+| `engine_torque`, `engine_torque2` | 0 (filled from the part) | dyno bank built from the same part data; **faithful in kind** -- the original's `DynoData` is native too |
+| `maxRPM` | 7000 | read, but only to decide "is there an engine"; not used as a limit |
+| `RPM_limit` | 20000 (`Chassis.java:296` sets 12000) | `drive.limit` ✓ |
+| `engine_inertia` | 10 | `drive.inertia = .28 + .01 * engine_inertia` -- upstream's scaling, so 10 becomes 0.38 |
+| `engine_friction_fwd` | 1e-4 | not read; upstream uses its own `pow(rpm,3)`-style loss |
+| `engine_friction_rev` | 5e-3 | not read |
+| **`ClutchF`** | **500** | **not read** -- the model has a 0..1 clutch input and no force limit. This is the single biggest divergence: the original couples the driveline through a force, this tree couples it through a momentum exchange with an rpm hold |
+| `gears`, `ratio[8]`, `rearend_ratio`, `diff_lock`, `starter_torque` | 0 / 3.3 / 0 / 0 | read ✓ |
+| `drive_type`, per-wheel `setDrive` | set by `Transmission` | read ✓ (per-wheel drive share) |
+| `brake_balance` | 0.5 | not read; the split comes from each brake part's power instead |
+| `max_steer` | 0.7 | not read; this tree has its own steering geometry and help curve |
+| `fully_stripped_drag` / `C_drag` | 0.333 | **not read.** `Chassis.updatevariables` computes `C_drag = fully_stripped_drag - sum(body part drag_reduction)`, floored at 0, and the original applies it as quadratic drag. The model here has `aero.drag` for exactly this and the host never sets it, so cars currently run with **no aerodynamic drag at all** |
+
+So the fidelity work is finite and enumerable: five parameters are simply not
+being passed, one of them (`ClutchF`) is the mechanism behind the launch report
+and another (`C_drag`) is missing outright. Nothing in the list requires
+recovering anything new from the executable -- the fields are in the decompiled
+`Chassis.java`, and the natives that consume them are the ones already
+documented in `slrr-reverse`.
