@@ -328,6 +328,51 @@ SLRR_TEST(more_torque_reaches_the_road) {
   SLRR_REQUIRE(strong.max_slip_per_s > weak.max_slip_per_s + 1.0);
 }
 
+// A car left in first at idle must idle, and must stand still. The link used to be
+// closed there, so it dragged the engine down to 334 rpm and then fed that speed to the
+// wheels: the tachometer read a stall while the car crept forward on it.
+SLRR_TEST(a_car_in_first_at_idle_neither_bogs_nor_creeps) {
+  auto car = make_car(true);
+  car.gear = 1;
+  const double dt = 1. / 120;
+  double lowest = 1e9, fast = 0;
+  for (double t = 0; t < 5; t += dt) {
+    car.drive.throttle = 0;
+    car.drive.brake = 0;
+    car.advance(dt, flat);
+    lowest = std::min(lowest, car.engine_omega * 9.5493);
+    fast = std::max(fast, car.body.velocity.length());
+  }
+  std::fprintf(stderr, "[drive_faithful] idle in first: lowest %.0f rpm, crept %.2f km/h\n",
+               lowest, fast * 3.6);
+  SLRR_REQUIRE(lowest > car.drive.idle * .9);
+  SLRR_REQUIRE(fast * 3.6 < 2.0);
+}
+
+// Reverse gear held while the car still rolls forwards, then the handbrake: the shaft
+// arrives negative while the engine turns positive. A closed link dragged the engine
+// down to 334 rpm and crept the car forward on that false idle.
+SLRR_TEST(reverse_and_handbrake_at_speed_do_not_strangle_the_engine) {
+  auto car = make_car(true);
+  const double dt = 1. / 120;
+  car.drive.throttle = 1;
+  for (double t = 0; t < 3; t += dt) car.advance(dt, flat);
+  const double moving = car.body.velocity.length();
+  car.drive.throttle = 0;
+  car.drive.handbrake = 1;
+  car.gear = 7;                       // reverse, while still rolling forward
+  double lowest = 1e9;
+  for (double t = 0; t < 4; t += dt) {
+    car.advance(dt, flat);
+    lowest = std::min(lowest, car.engine_omega * 9.5493);
+  }
+  std::fprintf(stderr, "[drive_faithful] reverse at %.0f km/h: lowest idle %.0f rpm, "
+               "ended at %.2f km/h\n",
+               moving * 3.6, lowest, car.body.velocity.length() * 3.6);
+  SLRR_REQUIRE(lowest > car.drive.idle * .9);
+  SLRR_REQUIRE(car.body.velocity.length() * 3.6 < 2.0);
+}
+
 // Lifting off in gear must slow the car. The original's engine losses are
 // `(rpm/(0.05*maxRPM)) * (0.05*maxRPM)^2 * friction_fwd` -- about 211 Nm at 6500 rpm
 // for a 1e-4 coefficient -- and the crank-inertia loss we had instead was 8 Nm, so a
@@ -400,6 +445,8 @@ int main() {
       the_mazda_launch_is_below_its_tyre_limit,
       more_torque_reaches_the_road,
       lifting_off_in_gear_slows_the_car,
+      a_car_in_first_at_idle_neither_bogs_nor_creeps,
+      reverse_and_handbrake_at_speed_do_not_strangle_the_engine,
       full_throttle_reaches_a_hundred_kilometres_an_hour,
       the_engine_revs_without_an_invented_ceiling,
       the_gearbox_moves_through_the_gears,

@@ -638,6 +638,27 @@ Next step is a line-by-line comparison of the sweep with `0x004B6BF0`, `0x004B70
 `0x004B77F0` (offered and not yet done). The numbers to check against are above; the
 target is 7.7 to 9.9 bar of indicated mean pressure on this block.
 
+### 12.6 The driveline must not drag the engine
+
+Reported from driving: at a stop the idle sometimes fell to **334 rpm** and the car crept
+forward slowly on it; reproduced with the handbrake held plus reverse engaged while still
+rolling. Two causes, both in the link and both fixed by the same rule:
+
+- **The idle governor ran before the link**, so the link could pull the engine below idle
+  and the wheels were then fed that number. A closed throttle now never lets the driveline
+  decide the engine's speed.
+- **The link could turn the engine backwards.** Reverse held while the car rolls forward
+  puts the engine-side shaft at a negative speed against a positive crank; a closed link
+  drags the engine towards zero. This is the recovered boundary branch of `0x0044DD70`
+  (`rpm < shaft -> open`) applied to the case it actually describes: opposite senses, not
+  merely a slower engine. A clutch slips or opens there; it never drives the crank the
+  wrong way.
+
+Pinned by two tests: `a_car_in_first_at_idle_neither_bogs_nor_creeps` (5 s in first at
+idle: lowest 784 rpm on an 800 rpm idle, crept 1.11 km/h) and
+`reverse_and_handbrake_at_speed_do_not_strangle_the_engine` (reverse at 67 km/h then
+handbrake: lowest 784 rpm, ended at 0.46 km/h).
+
 ### 12.2 The engine's own numbers, from the game's engine screen
 
 Same engine, with and without a supercharger, as the game itself reports them:

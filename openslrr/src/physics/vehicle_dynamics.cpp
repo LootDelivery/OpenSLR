@@ -940,7 +940,21 @@ void VehicleDynamics::step_drive() {
           engine_rpm <= drive.idle * 1.02 && shaft_rpm < drive.idle * .5;
       const bool braking_at_rest = drive.brake > .2 && engine_rpm < drive.idle * 1.3 &&
                                    shaft_rpm < drive.idle * 1.3;
-      if (idle_and_stopped || braking_at_rest) engage = 0.0;
+      // Closed throttle with the driveline slower than idle: a clutch here would either
+      // slip or stall the engine, and a closed link does both wrong at once -- it drags
+      // the engine to 334 rpm and feeds that speed to the wheels, so the car creeps
+      // forward at an idle that is really a stall.
+      const bool idling_against_a_stop = gas <= .05 && shaft_rpm < drive.idle * 1.3;
+      // The driveline trying to turn the engine BACKWARDS. Reverse gear held while the
+      // car still rolls forwards, or the handbrake pulled at speed: the shaft arrives
+      // negative while the engine turns positive, and a closed link then drags the
+      // engine down towards zero -- the 334 rpm idle that crept forward. A clutch slips
+      // or opens here; it never drives the crank the wrong way. This is the recovered
+      // boundary branch of 0x0044DD70 (`rpm < shaft -> open`), applied to the case it
+      // describes: opposite senses, not merely a slower engine.
+      const bool dragged_backwards = shaft_omega < 0 && engine_omega > 0;
+      if (idle_and_stopped || braking_at_rest || idling_against_a_stop || dragged_backwards)
+        engage = 0.0;
     }
     const double shaft_new = shaft_omega + engage * exchange * (1.0 - coupling_k) * gap;
     const double rpm_new = engine_omega - engage * exchange * coupling_k * gap;
@@ -952,6 +966,11 @@ void VehicleDynamics::step_drive() {
         state[i].spin += wheel_step * (std::abs(d) / wh_abs);
       }
     engine_omega = std::clamp(rpm_new, 0.0, drive.limit * 1.05 / rpm_per_rad);
+    // The idle governor above runs before the link, so the link could pull the engine
+    // below idle -- which is how a standing car came to idle at 334 rpm. A closed
+    // throttle never lets the driveline decide the engine's speed.
+    if (gas <= .05 && drive.idle > 0)
+      engine_omega = std::max(engine_omega, drive.idle * .98 / rpm_per_rad);
     drive_impulse = coupling_k * gap * j_engine * ratio;
     {
       static const bool trace = std::getenv("SLRR_COUPLING_TRACE") != nullptr;
