@@ -459,3 +459,24 @@ car is a number rather than an argument.
 
 Open, and not to be invented again: the 667 m/s wheel spin of 12.1, and the launch
 rpm, which the original's own rpm behaviour has to answer.
+
+## 13. The reference model: `docs/CAR_MODEL_RECOVERY.md`
+
+The original executable's vehicle model has been recovered and lives in
+`docs/CAR_MODEL_RECOVERY.md` (from the reverse-engineering pass, with addresses,
+constants and the step order). It supersedes every "recovered contract" note earlier
+in this file. The parts that change decisions here:
+
+- **`ClutchF` is dead** (already removed, §12): the clutch is `engage = 1 - clutch`,
+  there is no force ceiling.
+- **The driveline is a two-inertia coupling**, `k = inv_d / (4.0*J_engine + inv_d)`,
+  exactly the shape the host branch already has -- so my "faithful" rigid/converter
+  branch was the least faithful of the three.
+- **`torque_at_clutch = 2 * M * throttle`**: the original's own factor of two at the
+  clutch. My slip-dependent "converter multiplication" is an invention that happened
+  to look similar.
+- **The engine's torque is a table**, linearly interpolated, and **zero outside its
+  first and last point**; thermodynamics is computed once at part-install time, never
+  per frame.
+- **Gear selection is not native** -- `car.gear` is written from scripts/input. Any
+  shift schedule we implement is ours, not the original's.
