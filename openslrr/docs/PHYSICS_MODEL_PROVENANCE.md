@@ -422,3 +422,40 @@ The original does not have a torque balance there either: its drive is a **force
 of what has not been recovered yet. Inventing that here would be the third time this
 session that a plausible-looking number turned out to be the bug, so the runaway stays
 in place, visible and pinned, until the original's wheel/drive relationship is known.
+
+### 12.2 The engine's own numbers, from the game's engine screen
+
+Same engine, with and without a supercharger, as the game itself reports them:
+
+| | idle | redline | peak torque | peak power |
+|---|---|---|---|---|
+| without charger | 900 | 6500 | 396 Nm @ 4250 | 270 hp / 198 kW @ 6250 |
+| with charger | 900 | 6500 | 506 Nm @ 3250 | 276 hp / 203 kW @ 6500 |
+| destruction | | 9000 | | |
+
+Three things follow, and they matter more than the ceiling did.
+
+1. **The ceiling was clipping exactly this engine.** 506 Nm against a 500 Nm cap is
+   6 Nm of everything the supercharger added, thrown away. It was the right line to
+   delete.
+
+2. **The supercharger is worth +28% torque and +2% power.** Peak power barely moves:
+   270 to 276 hp. A terminal speed at the end of a fixed distance follows power, so
+   120 km/h against 124 km/h is what this data predicts -- the two cars were not the
+   same because the physics flattened them, they were *nearly* the same engine at the
+   top end. The +28% is all in the mid-range, where a launch and a corner exit live.
+
+3. **Our launch holds the engine in the wrong place.** The converter stall point is
+   0.8 of the limit, which for this block is 5 380 rpm. Peak torque is at 3 250. So the
+   launch spins the engine where the curve has already come down, which is the exact
+   shape of "high revs, no go". 0.8 is my invented number, and it fights the engine's
+   own data.
+
+With the cap gone, the thrust this engine can put on the road is
+`506 Nm x 8.61 / .318 m = 13.7 kN`. The rear tyres hold `1.95 x axle load`, so the
+launch is at the tyre limit when the driven axle carries about 7 kN. `SLRR_DRIVE_TRACE`
+now prints that load next to the force, per half second, so the utilisation on a real
+car is a number rather than an argument.
+
+Open, and not to be invented again: the 667 m/s wheel spin of 12.1, and the launch
+rpm, which the original's own rpm behaviour has to answer.

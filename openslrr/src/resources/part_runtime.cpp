@@ -3783,7 +3783,7 @@ void advance_chassis_tick() {
                      "[drive-trace] t=%.1f rpm=%.0f limit=%.0f idle=%.0f gear=%d "
                      "throttle=%.2f kph=%.1f torque=%.1f running=%d "
                      "mode=%d(auto=%d,clutch=%d) faith=%d cf=%.0f ratio=%.2f "
-                     "spin=%.1f slip=%.1f force=%.0f\n",
+                     "spin=%.1f slip=%.1f force=%.0f load=%.0f\n",
                      engine_trace_clock, d.engine_omega * 9.54929658551372,
                      d.drive.limit, d.drive.idle, d.gear,
                      static_cast<double>(d.drive.throttle),
@@ -3797,7 +3797,10 @@ void advance_chassis_tick() {
                      std::abs((d.state[2].spin + d.state[3].spin) * .5) -
                          std::hypot(d.body.velocity.x, d.body.velocity.z),
                      std::abs(d.state[2].tire_force.longitudinal +
-                              d.state[3].tire_force.longitudinal));
+                              d.state[3].tire_force.longitudinal),
+                     // Driven axle load: the other half of "why no wheelspin".
+                     // Thrust against tyre = friction * this.
+                     d.state[2].force + d.state[3].force);
       }
     }
     if (!finite_frame(rec.dynamics.body.frame()))
