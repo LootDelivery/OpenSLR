@@ -17,9 +17,17 @@ passes, shadows, AO, HDR, the `patch/` tree) is out of scope and never ported.
 Columns follow the integration protocol: upstream PR, upstream files, our
 files, problem, adaptation, tests, result, status.
 
-This file is one direction only (upstream -> here). The other direction -- what
-this tree changed relative to upstream's `d1c719d`, file by file, with the
-fifty-three files both sides touched since -- is `UPSTREAM_DIFF.md`.
+This file is one direction only (upstream -> here), and only for changes that
+were considered: nine blocks ported, seven deferred or rejected, written against
+upstream `5b002e42`. It does not enumerate what upstream has done since, nor what
+was never examined.
+
+- `UPSTREAM_DIFF.md` -- what this tree changed relative to upstream's `d1c719d`,
+  file by file, with the fifty-three files both sides touched since.
+- `UPSTREAM_MAIN_AUDIT.md` -- every first-parent merge upstream has made since the
+  revision this tree was taken from (`17115433`, 2026-11-14) up to `d661d250`,
+  with a verdict for each: integrated, needs a look, superseded, deferred, a taste
+  call, or rejected.
 
 ## U1-A. Player constructor (#228)
 
