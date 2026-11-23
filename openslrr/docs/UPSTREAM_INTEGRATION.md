@@ -403,7 +403,7 @@ this tree put in that file (render identity for the capture, external motion for
 traffic, fade, fault containment). So the host stays ours and is written here in
 three stages:
 
-- **P2a** -- paint. *Part done* (`1e4f4b8c`): the part-level accessors
+- **P2a** -- paint. *Part done* (commit "paint: part-level paint accessors, and setTexture accepts a Painter texture"): the part-level accessors
   (`part_paint_textures`, `part_set_paint_texture`, `part_paint_texture_shared`,
   `part_showing_texture`, `texture_in_use`) and `Part.setTexture` now accepts a
   Painter texture id, which it had to: the old code resolved every id through
