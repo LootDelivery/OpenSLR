@@ -743,12 +743,35 @@ That is the remaining defect, and it is now pinned by number rather than by feel
 engine side is fixed: the same slide ends at **4769 rpm** where it used to collapse to
 idle, because the link no longer drags the crank down with the wheel.
 
-The fix this points to, not yet written: a clutch delivers `M*ratio` at the wheel, so the
-wheel's own equation should be `spin += (M_clutch*ratio - Flong*r)*dt/I`, with the engine
-taking its reaction. That is the standard two-inertia drive, and it is *not* the experiment
-tried earlier and reverted twice -- that one deleted the tyre's reaction on the wheel, which
-is what killed torque sensitivity (200 against 600 Nm: 3.26 against 3.11 s). Keeping the
-reaction and giving the wheel a torque source instead of a speed source preserves both.
+**Correction, same day.** The conclusion above -- "the driveline needs a torque path" -- is
+wrong, and `CAR_MODEL_RECOVERY.md` 4 says so in the recovered listing: the original is a
+two-inertia *speed* exchange, exactly what this port implements, and
+`clutch_torque = (engage*delta/k^2)*10` there is a slip measure read only by the gearbox
+wear formula, not a transmitted torque. The missing piece is not a torque path but `clutch`:
+
+```
+engage = 1 - clutch        // continuous 0..1, from the auto-clutch regulator 0x0044DD70
+```
+
+This port has `engage` as 0 or 1 -- the open/close rules only -- so the link is either fully
+inelastic or absent, with nothing in between. The regulator is unported (11), and the stub
+"model it closed, it is closed to within 1%" was taken from a window in which it happened to
+be closed. The launch row shows it moving: `car+0x1DBC` 0 -> 0.357 -> 0 over 235 ms.
+
+Two things were done in the attempt that did not stand, recorded so they are not repeated:
+
+- **`ClutchF` as a clutch capacity.** Wrong: 3.8 -- the field is read into `physics+0xC8` and
+  the physics step never touches it. Any moment limit keyed to it is not original behaviour.
+- **Rewriting the driveline into a torque path.** Seven measured variants, each failing at a
+  named interaction (the guards held the drive off until the limiter cut the torque; a lock
+  without the free integration lugs at idle torque; momentum bookkeeping freezes the crank;
+  the free integration parks it on the limiter where the fuel cut removes the drive). The
+  recovery says the shape was never the problem.
+
+The same comparison also produced one measurement worth keeping: the driveline's capacity
+through a 500 Nm clutch at 8.61:1 is 13.5 kN at the contact patch against 21.2 kN of tyre
+grip, and at the recovered 628 Nm peak 17.0 kN -- i.e. under the tyre either way. Whatever
+`clutch` does, first gear is traction limited in this car, and that is arithmetic, not feel.
 
 ### 12.2 The engine's own numbers, from the game's engine screen
 
