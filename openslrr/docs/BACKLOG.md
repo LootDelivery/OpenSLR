@@ -3,6 +3,38 @@
 Working bug tracker. Each entry: symptom, evidence, suspect, status.
 Move fixed items to the bottom with the fixing commit.
 
+## Known defects
+
+- [x] **The handbrake did nothing at all.** Two dead ends, both found by measurement
+      after the invented direction brake was deleted (it had been doing the stopping,
+      which is why no test ever caught this): no shipped wheel script writes `hbrake`,
+      so every car's per-wheel handbrake torque was 0, and the input was capped at
+      `0.3` by the first import with no provenance. Stand measurement with the control
+      held: **60 -> 58.6 km/h in 4 s**. Fixed by falling back to the part's own rear
+      brake torque when the script provides none (a script value still wins); the
+      stand now goes 60 -> 0.6 km/h. Reported by the driver long before it was measured.
+
+## Awaiting driver verification
+
+Code-level evidence is not acceptance. Items here are implemented, tested or
+measured, and have not been checked by driving the game. Each one names what to
+look at, so the check takes a minute rather than a session.
+
+- [ ] **Traffic stops at a red light** (U2-C). The first in-game measurement
+      after the physics swap said the opposite of what a driver saw: 30 red
+      approaches, 1 car rested, 29 drove through -- the cap was computed with a
+      5 m/s² braking curve while the speed could only fall at 4 m/s², so every car
+      overshot the line and was then released as committed. With the response rate
+      fixed: 25 rest, 7 through, the seven having entered at a speed from which
+      stopping was no longer possible. Still needs a driver: the lamp heads do not
+      glow, so which way the light is cannot be seen. That glow is the open item;
+      the behaviour behind it is now measured.
+- [ ] **Reflections after the irradiance probe became default-on** (`90ff7dcf`).
+      Verified on paint, chrome and glass shots; the driver has seen it once and
+      approved, and this entry exists so the state is not forgotten.
+- [ ] **Reflection roughness default 1.5** (`ded44b59`). Approved once ("1.5
+      fine"); revisit if the body ever reads as film rather than paint.
+
 ## Performance
 
 ### PERF-1 Streaming hitch: object/texture upload stalls (fixed)

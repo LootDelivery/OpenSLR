@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -310,11 +312,27 @@ bool step(Bank& s) {
     const double swept = s.get(kVmax) - s.get(kVmin);
     s.set(kMeanPressure, swept <= 1e-8 ? 0.0 : s.get(kPreviousWork) / swept);
     const double pressure_work = s.get(kMeanPressure) * swept;
-    s.set(kTorque, s.get(kCylinders) * pressure_work * 0.125);
-    s.set(kGrossPower, s.get(kRpm) * pressure_work * 0.01666666753590107 * s.get(kCylinders));
-    s.set(kFrictionPower, s.get(kRpm) * s.get(kRpm) * s.get(kRpm) * 2e-8);
-    s.set(kNetPower, s.get(kGrossPower) - s.get(kFrictionPower));
+    // The original's own conversion, from 0x004b7020 when the cycle closes:
+    //
+    //   torque = (Vmax - Vmin) * MEP * cylinders * 0.125        // 0x62, the table
+    //   power  = rpm/60 * (Vmax - Vmin) * MEP * cylinders       // 0x100
+    //   friction = rpm^3 * 2e-8                                 // taken off POWER only
+    //   net    = power - friction                               // 0x65
+    //
+    // Two things we had wrong, and they are the whole of "the engines are weak":
+    // the torque carried `/(4*pi)` where the original carries `*0.125`, which is
+    // 1.5708x, and friction was subtracted from the torque whereas the original's
+    // table is GROSS torque -- friction only ever leaves the power figure.
+    const double omega = s.get(kRpm) * engine_rpm_to_rad;
+    const double indicated_torque = s.get(kCylinders) * pressure_work * 0.125;
+    const double friction_power = s.get(kRpm) * s.get(kRpm) * s.get(kRpm) * 2e-8;
+    const double gross_power = (s.get(kRpm) / 60.0) * pressure_work * s.get(kCylinders);
+    s.set(kTorque, indicated_torque);
+    s.set(kGrossPower, gross_power);
+    s.set(kFrictionPower, friction_power);
+    s.set(kNetPower, gross_power - friction_power);
     s.set(kHorsepower, s.get(kNetPower) * 0.001341);
+    (void)omega;
   }
   s.set(kAngle, s.get(kAngle) + s.get(kAngularSpeed) * s.get(kDt));
   if (s.get(kAngle) > 12.566370964050293) s.set(kAngle, s.get(kAngle) - 12.566370964050293);
@@ -483,6 +501,8 @@ bool table(Bank& s, int step_rpm, std::vector<float>* torque, std::vector<float>
     if (s.get(kPeakPressure) < s.get(kMeanPressure)) {
       s.set(kPeakPressure, s.get(kMeanPressure));
       s.set(kPeakPressureRpm, s.get(kRpm));
+    }
+    if (s.get(kPeakTorque) < s.get(kTorque)) {
       s.set(kPeakTorqueRpm, s.get(kRpm));
       s.set(kPeakTorque, s.get(kTorque));
     }
@@ -503,7 +523,8 @@ float field_of(const std::unordered_map<std::string, float>& fields, const char*
 
 struct Session {
   Bank state;
-  Curve curve;
+  // Immutable once published: a sampler may keep it after a recalculation.
+  std::shared_ptr<const Curve> curve = std::make_shared<Curve>();
   DynoStats stats;
 };
 
@@ -617,6 +638,19 @@ bool calculate_into(Session* session, const std::unordered_map<std::string, floa
   stats.rpm_step = next.rpm_step;
   stats.maximum_rpm = static_cast<float>(s.get(kMaximumRpm));
   stats.displacement = static_cast<float>(s.get(kDisplacement));
+  if (std::getenv("SLRR_DYNO_TRACE")) {
+    // What the sweep is actually working with: the charge pressure and the two limits
+    // that cut it. An engine that reads as weak is usually being starved here.
+    std::fprintf(stderr,
+                 "[dyno-fields] intake_p=%.0f eff_p=%.0f air=%.2f air_limit=%.2f "
+                 "fuel=%.4f fuel_limit=%.4f cyl=%.0f swept=%.6f rpm=%.0f "
+                 "indicated=%.1f net=%.1f heat=%.0f cv=%.0f\n",
+                 s.get(kIntakePressure), s.get(kEffectivePressure), s.get(kAirConsumption),
+                 s.get(kAirLimit), s.get(kFuelConsumption), s.get(kFuelLimit),
+                 s.get(kCylinders), s.get(kSweptVolume), s.get(kRpm),
+                 s.get(kTorque), s.get(kTorque),
+                 s.get(kMixtureHeat), s.get(kHeatCapacity));
+  }
   stats.compression = static_cast<float>(s.get(kCompression));
   stats.max_torque = static_cast<float>(s.get(kPeakTorque));
   stats.max_hp = static_cast<float>(s.get(kPeakHorsepower));
@@ -639,7 +673,7 @@ bool calculate_into(Session* session, const std::unordered_map<std::string, floa
     }
   }
   session->state = s;
-  session->curve = std::move(next);
+  session->curve = std::make_shared<const Curve>(std::move(next));
   session->stats = stats;
   return true;
 }
@@ -660,10 +694,13 @@ float sample_curve(const Curve& curve, float rpm, float nitro, bool watts) {
     const float fraction = static_cast<float>(position - std::floor(position));
     return table[index] * (1.f - fraction) + table[index + 1] * fraction;
   };
-  const float primary = sample(watts ? curve.watts : curve.torque);
-  const std::vector<float>& secondary = watts ? curve.nitro_watts : curve.nitro_torque;
-  if (secondary.empty()) return primary;
-  return primary * (1.f - nitro) + sample(secondary) * nitro;
+  const float primary = sample(curve.torque);
+  const float torque = curve.nitro_torque.empty()
+      ? primary
+      : primary * (1.f - nitro) + sample(curve.nitro_torque) * nitro;
+  // Interpolate torque first: interpolating watts independently violates
+  // P=T*omega between table nodes, including blended nitrous curves.
+  return watts ? static_cast<float>(torque * (rpm * engine_rpm_to_rad)) : torque;
 }
 
 bool near(double got, double want, double tolerance) {
@@ -692,7 +729,15 @@ bool dyno_calculate(void* key, const std::unordered_map<std::string, float>& fie
 float dyno_sample(void* key, float rpm, float nitro, bool watts) {
   const auto it = g_sessions.find(key);
   if (it == g_sessions.end()) return 0.f;
-  return sample_curve(it->second.curve, rpm, nitro, watts);
+  return sample_curve(*it->second.curve, rpm, nitro, watts);
+}
+
+std::function<double(double)> dyno_torque_function(void* key, float nitro) {
+  const auto it = g_sessions.find(key);
+  if (it == g_sessions.end()) return [](double) { return 0.0; };
+  return [curve = it->second.curve, nitro](double rpm) {
+    return static_cast<double>(sample_curve(*curve, static_cast<float>(rpm), nitro, false));
+  };
 }
 
 float dyno_boost_fraction(void* key, float rpm) {
@@ -719,13 +764,18 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
   std::string error;
   if (!calculate_into(&fresh, {{"maxRPM", 7000.f}}, 16.f, &error))
     return fail(error.c_str());
-  const Curve& curve = fresh.curve;
+  const Curve& curve = *fresh.curve;
   if (curve.rpm_step != 437.f || curve.torque.size() != 16 || curve.watts.size() != 16)
     return fail("dyno table shape");
+  // Preserve the recovered cycle-work witness, not its legacy non-SI scales.
+  constexpr double witness_work = 82.08709716796875 * 8;
+  const double witness_torque = witness_work * 0.125;
+  const double witness_power = (437.0 / 60.0) * witness_work -
+                               437.0 * 437.0 * 437.0 * 2e-8;
   if (!near(fresh.stats.displacement, 0.0019011663971468806, 1e-9) ||
       !near(fresh.stats.compression, 10.50583267211914, 2e-6) ||
-      !near(curve.torque[1], 82.08709716796875, 0.002) ||
-      !near(curve.watts[1], 4781.27294921875, 0.05)) {
+      !near(curve.torque[1], witness_torque, 0.002) ||
+      !near(curve.watts[1], witness_power, 0.05)) {
     if (msg && msg_cap)
       std::snprintf(msg, msg_cap,
                     "dyno witness fail torque=%.6f watts=%.4f disp=%.12g comp=%.8g",
@@ -735,7 +785,7 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
   }
   Session tuned;
   if (!calculate_into(&tuned, {{"maxRPM", 7000.f}}, 28.f, &error)) return fail(error.c_str());
-  const float base = tuned.curve.torque[14];
+  const float base = tuned.curve->torque[14];
   if (!calculate_into(&tuned,
                       {{"maxRPM", 7000.f},
                        {"rpm_turbo_mul", 1.f},
@@ -744,15 +794,15 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
                        {"P_turbo_max", 0.8f}},
                       28.f, &error))
     return fail(error.c_str());
-  if (!(tuned.curve.torque[14] > base)) return fail("dyno turbo did not raise torque");
+  if (!(tuned.curve->torque[14] > base)) return fail("dyno turbo did not raise torque");
   if (!calculate_into(&tuned, {{"maxRPM", 7000.f}, {"nitro_H", 1.2f}, {"nitro_cooling", 0.9f}},
                       28.f, &error))
     return fail(error.c_str());
-  if (tuned.curve.nitro_torque.size() <= 14 ||
-      !(tuned.curve.nitro_torque[14] > tuned.curve.torque[14]))
+  if (tuned.curve->nitro_torque.size() <= 14 ||
+      !(tuned.curve->nitro_torque[14] > tuned.curve->torque[14]))
     return fail("dyno nitrous bank");
   if (!calculate_into(&tuned, {{"maxRPM", 7000.f}}, 28.f, &error)) return fail(error.c_str());
-  if (!tuned.curve.nitro_torque.empty() || !tuned.curve.nitro_watts.empty())
+  if (!tuned.curve->nitro_torque.empty() || !tuned.curve->nitro_watts.empty())
     return fail("dyno stale nitrous bank was retained");
   Session bad;
   if (calculate_into(&bad, {{"stroke", 1.f}}, 28.f, &error)) return fail("dyno geometry accepted");

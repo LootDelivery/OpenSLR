@@ -370,6 +370,110 @@ Deviations from #180 and from the recovered engine:
 | Runtime | `--bench-map ValoCity --bench-time 40 --bench-drive 20` with `SLRR_TRAFFIC_LOG=1`: 20 cars resident at `cap=20` from nine stock templates, moving along their lane at 4.9…6.3 m/s with `along` and the world pose advancing together (edge 1050, `along` 353→458 m, pos −229,955 → −208,1057), `total=26 dropped=6` at t=20, i.e. cars that fall behind the player are retired and replaced instead of accumulating. `drive done`, exit 0. Window captures at the same moment show a taxi and two sedans on the carriageway next to the player. With the spawn band forced out of range (no traffic at all) the player frame at t=10 is identical to the traffic run, so ambient traffic does not perturb the player body. |
 | Status | **Ported**, physics driving, race brain and native vehicle assembly still open (signals closed in U2-C) |
 
+### U2-D-prep. The physics engine is in, the host is ours
+
+Porting the car physics stopped being a question of volume and became a question
+of intersection. Of the 100 files the four physics/paint commits touch, **64 never
+existed here** and **19 exist and were never modified here** -- including
+`vehicle_dynamics`, `tire_model`, `dyno_model`, `scene_collision`, `part_config`
+and `skeleton`. Taking those is not a merge; it is a copy.
+
+#### What the driver found, and what it was
+
+Three defects appeared the moment the engine was swapped in, and none of them
+was in the engine. They are recorded here because they are the failure modes of
+taking files wholesale: a struct's field order is part of its contract, and a
+solver's implicit constants are part of its contract too.
+
+**The car lost most of its grip and its power, from one aggregate initializer.**
+`TireParameters` was reordered upstream (`load_smoothing` and
+`longitudinal_grip` changed places) while this tree filled it positionally, so
+the longitudinal grip (1.0) landed in the load smoothing and the smoothing (0.4)
+landed in the longitudinal grip. 60% of the driving force gone, and the rear
+axle let go under load, from a line that still compiled and still had the right
+number of fields. Fixed by naming the fields, as upstream does. Any positional
+initializer of a struct we did not write is this bug waiting to happen.
+
+**Pedestrians walked in a frozen stride.** Their `character.cpp` animates on a
+simulation clock published by `character_set_sim_time()`, which their main loop
+calls every frame and ours did not. The clock stayed at zero, so every clip held
+its first frame. Fixed in `mainloop.cpp` next to `advance_sim_time`.
+
+**Ambient cars ignored a red light that the rule was already computing.** The
+cap is `sqrt(2 * 5 * d)` -- a 5 m/s² braking curve -- but the drive loop moved
+the speed toward it no faster than 4 m/s². The car could not follow the curve,
+overshot the stop line, and then the rule's own commitment clause ("already past
+the line: let it go, a red light must not park a car in the junction") released
+it. The cap fired, and the car drove through: 30 red approaches, **1 rest, 29
+drive-throughs**. With the response rate raised to the curve plus margin and the
+measurement moved from "last ten metres" to "still had fifteen metres when the
+lamp turned red": **25 rest, 7 through** over the same city drive, the seven
+being cars that entered the zone at a speed from which stopping was no longer
+possible, which is what amber is for.
+
+**The cars are also slower than they were, and that one is not a bug to undo.**
+The old engine wrote `kTorque = cylinders * pressure_work * 0.125` and the old
+solver multiplied it by 2, giving 0.25 of the cycle work per cylinder; the new
+one writes the indicated torque as `work / (4 pi)` and applies it once, which is
+the SI value and is consistent with its own `P = T * omega`. The two models differ
+by roughly 3x, so the old cars were over-torqued and their power number did not
+agree with their own torque. Measured on the Mazda after the swap:
+**225 Nm at 4000 rpm, 186 hp at 7500** -- a plausible engine, and the number the
+physics now actually uses. If it reads as too slow, the lever is a documented
+host tuning value, not a silent multiplier.
+
+Still open from the same drive: the lamp heads themselves do not glow, so a
+driver cannot see which way the light is. That is emissive/flare work on
+`trlight` placements, it is visual, and it starts with a plan and a before/after
+shot rather than with code.
+
+#### Taken (`b1058de5`)
+
+| Group | Files |
+|---|---|
+| Engine | `vehicle_dynamics`, `tire_model`, `dyno_model`, `scene_collision`, `part_config`, `skeleton`, `character`, `suspension_geometry` |
+| #48 additions | `mass_properties`, `wheel_mount`, `flap_hinge`, `vehicle_contacts` |
+| Paint host (#206, now accepted) | `paint_texture`, `light_resource` |
+| Decoder the paint path needs | `ptx_image::decode_image_rgba` |
+
+Evidence: `slrr_host` links; `test_vehicle_dynamics` **35/35**; a driven bench run at
+300--350 fps with `physics=0.24--0.30 ms` and `support=14--19 kN` on a 1566 kg car
+(the weight is 15.4 kN, so the new contacts carry the body instead of hovering it).
+
+#### Not taken
+
+`part_runtime.cpp`. Their version is the host for everything above -- and it drags
+in their `gameref` (`streamed_hidden`, `follow_hold`, render masks), `frame_profiler`
+zones, `host_sfx` loop panning, `host_input.drive_nitro`, the worker-thread job
+system, the driver visibility mask and the race brain. Measured by compiling it and
+reading the error list: **~20 distinct missing symbols across 8 subsystems.** It
+would mean importing half of upstream's infrastructure *and* re-adding everything
+this tree put in that file (render identity for the capture, external motion for
+traffic, fade, fault containment). So the host stays ours and is written here in
+three stages:
+
+- **P2a** -- paint. *Part done* (commit "paint: part-level paint accessors, and setTexture accepts a Painter texture"): the part-level accessors
+  (`part_paint_textures`, `part_set_paint_texture`, `part_paint_texture_shared`,
+  `part_showing_texture`, `texture_in_use`) and `Part.setTexture` now accepts a
+  Painter texture id, which it had to: the old code resolved every id through
+  `RpkIndex` and a Painter texture lives outside every pack, so the Painter could
+  not have assigned one. *Remainder, measured by compiling their
+  `natives_painter.cpp` against this tree*: three renderer-side APIs we do not
+  have -- `scene_instances_pick_surface` (hit point, face normal in mesh and world
+  frame, paint slot, mirrored flag, screen up), `scene_instances_paint_targets`
+  (neighbouring paint-slotted meshes within the stamp radius, so a decal across a
+  seam reaches both panels) and a `paint_stamp_reaches` that takes the surface --
+  plus `gameref_uses_resource`. Nothing else: the rest of the file is the natives
+  themselves. Those three are renderer work and the acceptance is visual (spray a
+  decal across a seam, a mirror, a door edge), so they open the next stage rather
+  than closing this one.
+- **P2b** -- `configure_drive` and the multi-car advance: every live car gets a body
+  and a contact set, not only `part_controlled_chassis()`.
+- **P3** -- `race_drive_input` on the new host, which is what U2-D and U2-F need.
+
+`patch/parts/**` stays out by policy; #235/#237/#279 (their rendering foundation)
+stay out because this tree's renderer is ahead of them, not behind.
+
 ### U2-C. The lamp at the junction
 
 U2-B moved cars along their lanes and honoured script closures, but nothing read
@@ -592,7 +696,7 @@ concrete incompatibility.
 | RPK descriptor/property cache | #146 | **Deferred** | Changes `by_type_id` to lo16 and `find_entry` semantics plus payload/RSD caches and a `generation()`; must be designed against the B4.1.2 strict-resolution contract. Phase 3.1. |
 | GC finalizer/heap lookup | #200 | **Deferred** | 172 lines of `gc.cpp`; needs its own reachability/finalizer evidence against `VM_GC.md`. Phase 3.2. |
 | Point/spot light system, street and car lighting, shadows, AO, HDR, reflections | #235, #237, #279 | **Rejected** | Out of scope by instruction: this tree keeps `LIGHTING_AUDIT.md` semantics and the L2 investigation; no external render architecture is imported. |
-| `Painter` replacement | #206 | **Rejected** | Would replace the legacy Painter and pre-empt the B4/A-series painter architecture. |
+| Legacy `Painter` | #206 | **Accepted** (policy changed) | The legacy painter's functionality is needed and a second painter is planned for PBR, so re-deriving this one would be wasted work. Taken as `paint_texture.{hpp,cpp}` + the hooks in `part_runtime.cpp`; the A-series contract stays the reference for what the legacy path must do. |
 | JSON save format | #213 | **Rejected** | The save format is a closed contract; U1-B2 only made the writer atomic. |
 | Cinepak / FMOD | #219 / #229 | **Rejected** | Separate multimedia projects with external dependencies. |
 | Binary `Garage.class` | #162 | **Rejected** | Requires the exact SHA-256 of the installed `Garage.class`; upstream itself states the shipped `Garage.java` order was correct and the defect was in the MWM class. Nothing to verify without the hash, so nothing was copied. |

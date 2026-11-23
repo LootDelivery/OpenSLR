@@ -91,6 +91,20 @@ struct VideoOptions {
 struct DrivingOptions {
   int transmission = 1;
   float steering_help = .666f, abs = 0.f, asr = 0.f;
+  // Launch aid, off by default: 0 disables it, otherwise the fraction of the rev
+  // limit a slipping automatic clutch holds the engine at. It belongs next to
+  // ABS and ASR as a player aid, so the default is off -- upstream applied 0.4 to
+  // every car with an automatic box, which is the "the engine stops at a quarter
+  // of the tachometer" report.
+  float launch_rpm = .4f;
+  // Drive the car the way the original does: thrust from the engine torque with
+  // ClutchF capping the clutch, no engine-speed hold. Off switches to the host's
+  // crank-inertia slip model, which is what the solver's own tests pin.
+  bool original_drive = true;
+  // A driving readout in the corner: speed, rpm and gear. Off hides it.
+  bool drive_hud = true;
+  // Torque converter stall point, as a fraction of the rev limit.
+  float converter_stall = .8f;
   bool operator==(const DrivingOptions&) const = default;
 };
 struct GameOptions {
@@ -111,5 +125,14 @@ void host_set_video_mode(Jvm& jvm, VideoMode mode);
 bool host_commit_video_dialog(Jvm& jvm, Object* handler, int command);
 void host_game_options_apply(Jvm& jvm);
 void host_game_options_set_steering_help(Jvm& jvm, float strength);
+// 0 turns the launch aid off; anything else is the fraction of the rev limit the
+// slipping clutch holds. Written to Game Options, then applied like the rest.
+void host_game_options_set_launch_rpm(Jvm& jvm, float fraction);
+// True: the original's drive coupling. False: the host's crank-inertia model.
+void host_game_options_set_original_drive(Jvm& jvm, bool original);
+// Show the corner speed/rpm/gear readout.
+void host_game_options_set_drive_hud(Jvm& jvm, bool show);
+// Torque converter stall point, as a fraction of the rev limit.
+void host_game_options_set_converter_stall(Jvm& jvm, float fraction);
 void host_game_options_update(Jvm& jvm, bool force = false);
 }

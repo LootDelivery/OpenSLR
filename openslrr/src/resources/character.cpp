@@ -7,11 +7,13 @@
 #include "slrr/scx_mesh.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -54,6 +56,9 @@ struct BoneLink {
   int bone = 0;
 };
 
+// Advanced by the main loop using the same clock as physics. Render queries
+// must not advance animation while the simulation is paused.
+float g_character_sim_time = 0.f;
 std::unordered_map<void*, Character> g_characters;
 std::unordered_map<void*, BoneLink> g_links;
 std::unordered_map<void*, void*> g_animations;
@@ -133,6 +138,48 @@ std::string sibling_bon(std::string path) {
   else
     path += ".bon";
   return path;
+}
+
+bool has_extension(const std::string& path, const char* extension) {
+  const size_t length = std::strlen(extension);
+  if (path.size() < length) return false;
+  for (size_t i = 0; i < length; ++i)
+    if (std::tolower(static_cast<unsigned char>(path[path.size() - length + i])) !=
+        std::tolower(static_cast<unsigned char>(extension[i])))
+      return false;
+  return true;
+}
+
+// A render descriptor names its SKL with `skeleton`. The stock spring and
+// shock absorber renders (and mods derived from them, such as MW_Mod's
+// Pneumatic_SA) declare none: their skinned SCX sits next to a BON of the
+// same name, the two-bone rig the original `add_linked` binds as bone00 and
+// bone01. Human meshes also sit next to BONs (their clips' bone lengths), so
+// a sibling BON is only taken as the skin bind when it is such a link rig:
+// it names both bone00 and bone01. Any other render without `skeleton` gets
+// none, as before.
+std::string render_skeleton(const RpkIndex& packs, int32_t type_id) {
+  const auto full = static_cast<uint32_t>(type_id);
+  std::string declared = packs.payload_prop(full, "skeleton");
+  if (!declared.empty()) return declared;
+  const auto model = packs.model_for_resource(RpkIndex::pack_from_full(full), full & 0xffffu);
+  if (!model.ok || !has_extension(model.source, ".scx")) return {};
+  std::string bon = sibling_bon(model.source);
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(disk_path(packs, bon), error)) return {};
+  const auto rig = load_skeleton(packs, bon);
+  if (!rig) return {};
+  const auto named = [&](const char* wanted) {
+    for (const auto& bone : rig->bones) {
+      if (bone.name.size() != std::strlen(wanted)) continue;
+      bool same = true;
+      for (size_t i = 0; same && i < bone.name.size(); ++i)
+        same = std::tolower(static_cast<unsigned char>(bone.name[i])) == wanted[i];
+      if (same) return true;
+    }
+    return false;
+  };
+  return named("bone00") && named("bone01") ? bon : std::string{};
 }
 
 void identity(float* m) {
@@ -281,7 +328,7 @@ Character* ensure_character(void* key, int32_t type_id, const RpkIndex* packs) {
   }
   if (!character.tried && type_id != 0 && packs) {
     character.tried = true;
-    character.bind = load_skeleton(*packs, packs->payload_prop(static_cast<uint32_t>(type_id), "skeleton"));
+    character.bind = load_skeleton(*packs, render_skeleton(*packs, type_id));
     character.fresh = false;
     if (character.bind && character.overrides.size() < character.bind->bones.size())
       character.overrides.resize(character.bind->bones.size());
@@ -495,7 +542,14 @@ void character_forget(void* key) {
   }
 }
 
+void character_set_sim_time(double seconds) {
+  if (std::isfinite(seconds) && seconds >= 0.0)
+    g_character_sim_time = static_cast<float>(seconds);
+}
+
 void character_forget_all() {
+  g_skeletons.clear();
+  g_clips.clear();
   g_characters.clear();
   g_links.clear();
   g_animations.clear();
@@ -504,9 +558,12 @@ void character_forget_all() {
 std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
                                                    const ScxGeometry* bind,
                                                    const RpkIndex& packs) {
+  // A mesh without skin weights never poses (#268): check it before the
+  // character lookup, which inserted an entry for every render node.
+  if (!bind || bind->skin_weights.empty()) return nullptr;
   Character* character = ensure_character(key, type_id, &packs);
-  if (!character || !bind || bind->skin_weights.empty()) return nullptr;
-  rebuild(*character, gameref_now());
+  if (!character) return nullptr;
+  rebuild(*character, g_character_sim_time);
   if (!character->want_skin || !character->bind ||
       character->worlds.size() < character->bind->bones.size() * 16)
     return nullptr;
@@ -523,14 +580,24 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
   return character->posed;
 }
 
+void* character_skin_prepare(void* key, int32_t type_id, const RpkIndex& packs) {
+  Character* character = ensure_character(key, type_id, &packs);
+  return character && character->bind ? character : nullptr;
+}
+
+int character_skin_palette_prepared(void* prepared, float* out, int capacity) {
+  if (!prepared || !out || capacity <= 0) return 0;
+  Character& character = *static_cast<Character*>(prepared);
+  rebuild(character, g_character_sim_time);
+  if (character.worlds.size() < character.bind->bones.size() * 16) return 0;
+  return skeleton_skin_palette(*character.bind, character.worlds.data(), out, capacity);
+}
+
 int character_skin_palette(void* key, int32_t type_id, const RpkIndex& packs,
                            float* out, int capacity) {
   if (!out || capacity <= 0) return 0;
-  Character* character = ensure_character(key, type_id, &packs);
-  if (!character || !character->bind) return 0;
-  rebuild(*character, gameref_now());
-  if (character->worlds.size() < character->bind->bones.size() * 16) return 0;
-  return skeleton_skin_palette(*character->bind, character->worlds.data(), out, capacity);
+  return character_skin_palette_prepared(character_skin_prepare(key, type_id, packs), out,
+                                         capacity);
 }
 
 int character_find_bone(void* key, int32_t type_id, const RpkIndex& packs,
@@ -561,13 +628,34 @@ void character_set_bone_local(void* key, int32_t type_id, const RpkIndex& packs,
   store_local(*character, bone, local);
 }
 
+bool character_scale_bone(void* key, int32_t type_id, const RpkIndex& packs, int bone,
+                          float scale) {
+  Character* character = ensure_character(key, type_id, &packs);
+  if (!character || !character->bind || bone < 0 ||
+      static_cast<size_t>(bone) >= character->bind->bones.size()) return false;
+  float local[16];
+  const size_t slot = static_cast<size_t>(bone);
+  if (slot < character->overrides.size() && character->overrides[slot].set) {
+    std::memcpy(local, character->overrides[slot].local, sizeof local);
+  } else {
+    std::vector<float> locals(character->bind->bones.size() * 16);
+    skeleton_local_bind(*character->bind, locals.data());
+    std::memcpy(local, locals.data() + slot * 16, sizeof local);
+  }
+  // The three axis columns; the joint position (12..14) stays.
+  for (int i = 0; i < 12; ++i)
+    if (i % 4 != 3) local[i] *= scale;
+  store_local(*character, bone, local);
+  return true;
+}
+
 bool character_aim_bone(void* key, int32_t type_id, const RpkIndex& packs,
                         int bone, int end, const float target_cm[3], float max_radians) {
   Character* character = ensure_character(key, type_id, &packs);
   if (!character || !character->bind || !target_cm) return false;
   const int count = static_cast<int>(character->bind->bones.size());
   if (bone < 0 || end < 0 || bone >= count || end >= count || bone == end) return false;
-  rebuild(*character, gameref_now());
+  rebuild(*character, g_character_sim_time);
   if (character->worlds.size() < static_cast<size_t>(count) * 16) return false;
   const float* worlds = character->worlds.data();
   const float* origin = worlds + bone * 16;
@@ -610,7 +698,7 @@ bool character_align_axis(void* key, int32_t type_id, const RpkIndex& packs,
   if (!character || !character->bind || !direction || axis < 0 || axis > 2) return false;
   const int count = static_cast<int>(character->bind->bones.size());
   if (bone < 0 || bone >= count) return false;
-  rebuild(*character, gameref_now());
+  rebuild(*character, g_character_sim_time);
   if (character->worlds.size() < static_cast<size_t>(count) * 16) return false;
   const float* origin = character->worlds.data() + bone * 16;
   float from[3] = {origin[axis * 4], origin[axis * 4 + 1], origin[axis * 4 + 2]};
@@ -652,7 +740,7 @@ bool character_solve_limb(void* key, int32_t type_id, const RpkIndex& packs,
   const int count = static_cast<int>(character->bind->bones.size());
   if (upper < 0 || lower < 0 || end < 0 || upper >= count || lower >= count || end >= count)
     return false;
-  rebuild(*character, gameref_now());
+  rebuild(*character, g_character_sim_time);
   if (character->worlds.size() < static_cast<size_t>(count) * 16) return false;
   const auto at = [&](int bone, float* out) {
     const float* m = character->worlds.data() + bone * 16;
@@ -700,6 +788,43 @@ bool character_solve_limb(void* key, int32_t type_id, const RpkIndex& packs,
   return true;
 }
 
+bool character_place_bone(void* key, int32_t type_id, const RpkIndex& packs, int bone,
+                          const float position_m[3]) {
+  Character* character = ensure_character(key, type_id, &packs);
+  if (!character || !character->bind || !position_m) return false;
+  const int count = static_cast<int>(character->bind->bones.size());
+  if (bone < 0 || bone >= count) return false;
+  for (int i = 0; i < 3; ++i)
+    if (!std::isfinite(position_m[i])) return false;
+  // Bind orientation in render space, with the requested origin. This runs
+  // for every rigged link at each physics tick. A root bone (bone00 and
+  // bone01 of every stock link rig) allocates nothing; a child bone rebuilds
+  // the pose below to read its parent.
+  float world[16];
+  if (!skeleton_bind_world(*character->bind, bone, world)) return false;
+  for (int i = 0; i < 3; ++i) world[12 + i] = position_m[i] * 100.f;
+  const int parent = character->bind->bones[static_cast<size_t>(bone)].parent;
+  float local[16];
+  if (parent < 0 || parent >= count) {
+    std::memcpy(local, world, sizeof(local));
+  } else {
+    // Relative to the parent as it is posed now, so a parent placed first
+    // keeps its child where it was asked to go.
+    rebuild(*character, g_character_sim_time);
+    if (character->worlds.size() < static_cast<size_t>(count) * 16) return false;
+    float inverse[16];
+    rigid_inverse(character->worlds.data() + parent * 16, inverse);
+    multiply(local, inverse, world);
+  }
+  // A per-tick refresh with an unchanged pose leaves the skinned mesh alone.
+  if (static_cast<size_t>(bone) < character->overrides.size()) {
+    const BoneOverride& current = character->overrides[static_cast<size_t>(bone)];
+    if (current.set && std::memcmp(current.local, local, sizeof(local)) == 0) return true;
+  }
+  store_local(*character, bone, local);
+  return true;
+}
+
 void character_reset_pose(void* key) {
   if (!key) return;
   const auto found = g_characters.find(key);
@@ -731,7 +856,7 @@ bool character_bone_metres(void* owner, int bone, float out[16]) {
   const auto found = g_characters.find(owner);
   if (found == g_characters.end() || !found->second.bind) return false;
   Character& character = found->second;
-  rebuild(character, gameref_now());
+  rebuild(character, g_character_sim_time);
   const size_t count = character.bind->bones.size();
   if (static_cast<size_t>(bone) >= count || character.worlds.size() < count * 16)
     return false;
