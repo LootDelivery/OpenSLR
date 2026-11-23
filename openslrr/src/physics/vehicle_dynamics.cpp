@@ -847,32 +847,44 @@ void VehicleDynamics::step_drive() {
     engine_omega = std::clamp(engine_omega + (target - engine_omega) * flare,
                               std::max(0.0, drive.idle * .5 / rpm_per_rad),
                               drive.limit * 1.02 / rpm_per_rad);
-    // A converter multiplies torque while it slips: about twice the engine's at a
-    // standstill, one to one once the two halves turn together. Without this the
-    // wheels only ever saw the engine's own torque, and a 225 Nm car asked its
-    // tyres for 0.4 g -- so no launch could break traction, whatever the revs said.
-    const double slip_share =
-        std::clamp((stall_rpm / rpm_per_rad - driveline_omega) /
-                       std::max(.1, stall_rpm / rpm_per_rad), 0.0, 1.0);
-    const double multiplication = 1.0 + slip_share;  // 2 at stall, 1 when locked
-    // Full engine torque at the speed it is actually turning, times the converter's
-    // multiplication, scaled by clutch engagement. `drive.clutch` is engagement
-    // here (1 = engaged), the complement of the pedal the original multiplies by.
+    // The original's own arithmetic, from the recovered model
+    // (docs/CAR_MODEL_RECOVERY.md 3.5, 4):
     //
-    // No ClutchF ceiling. The original reads Chassis.ClutchF into physics+0xC8 and
-    // never touches that offset in the physics step: the clutch there is the pedal
-    // input, full stop, and there is no "force the clutch can carry" limit to
-    // enforce. We had one, at 500 Nm, and it silently deleted every engine that
-    // made more -- a supercharged V8 arrived at the wheels as an inline four.
-    const double requested =
-        drive.torque(std::max(engine_omega * rpm_per_rad, drive.idle)) * gas * multiplication;
+    //   M                   = torque_table(rpm)          // linearly interpolated,
+    //                                                    //   zero outside its ends
+    //   torque_at_clutch    = 2 * M * throttle
+    //   transmitted         = torque_at_clutch * engage    // engage = 1 - clutch
+    //
+    // The factor of two is the original's, not a slip effect: it is there in the
+    // recovered step and it also explains the "solver multiplies by 2" of the old
+    // engine we replaced. We were shipping the torque without it, at the wheels and
+    // in the wrong place -- half the engine's output, thrown away before the clutch.
+    //
+    // No ClutchF ceiling: the original reads Chassis.ClutchF into physics+0xC8 and
+    // never touches that offset in the physics step. We had a 500 Nm cap there and it
+    // deleted every engine above it -- a supercharged V8 arrived as an inline four.
+    const double engine_table = drive.torque(std::max(engine_omega * rpm_per_rad, drive.idle));
+    const double torque_at_clutch = 2.0 * std::max(0.0, engine_table) * gas;
     const double transmitted =
-        std::max(0.0, requested) * std::clamp(drive.clutch, 0.0, 1.0);
+        torque_at_clutch * std::clamp(drive.clutch, 0.0, 1.0);
     drive_impulse = transmitted * ratio * timestep;
+    // The driveline cannot command more wheel speed than the engine turns it to:
+    // above that the engine would have to be spinning faster than it is. Without
+    // this ceiling the wheel took the whole torque*ratio impulse with nothing
+    // reacting, so a strong engine drove the wheel out to thousands of m/s of slip
+    // and the car was dragged by a saturated tyre -- acceleration set by grip, and
+    // engine power invisible. That is the shape of "the V8 feels like an inline
+    // four", measured.
+    const double wheel_ceiling =
+        std::abs(ratio) > 1e-6 ? engine_omega / std::abs(ratio) : 0.0;
     for (size_t i = 0; i < wheels.size(); ++i)
-      if (wheels[i].enabled)
+      if (wheels[i].enabled) {
         state[i].spin += drive_impulse * drive.wheels[i].weight /
                          (weights * wheel_inertia);
+        const double spin = std::abs(state[i].spin);
+        if (spin > wheel_ceiling)
+          state[i].spin = std::copysign(wheel_ceiling, state[i].spin);
+      }
   } else if (weights > 0 && ratio != 0 && shift_time_ == 0 && !direction_brake &&
       (engine_running || !drive.auto_clutch)) {
     const double transmission =

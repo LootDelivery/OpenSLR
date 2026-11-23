@@ -407,7 +407,37 @@ at the top, and the one that breaks traction. Measured now:
 | 200 Nm | 6.36 s | 140.4 km/h | 13.1 m/s |
 | 600 Nm | 4.43 s | 246.7 km/h | **667 m/s** |
 
-### 12.1 The 667 m/s is the next defect, and it is mine
+### 12.1 The 667 m/s was the next defect, and it is fixed
+
+The original multiplies by two at the clutch: `torque_at_clutch = 2 * M * throttle`
+(recovered model 3.5). We shipped the torque without it -- half of every engine's
+output, lost before the clutch. With the two in place the wheel took
+`2 * torque * ratio` of impulse per tick with nothing reacting on the engine side, so
+a strong engine drove the wheel out to **2 220 m/s** of slip and the car was dragged by
+a saturated tyre: acceleration set by grip, engine power invisible. That is the same
+complaint in a different shape.
+
+The fix is structural, and comes from the same recovery: the wheel's speed is *set by*
+the driveline (`shaft' = ...`), not integrated freely -- so the wheel cannot turn faster
+than the gearbox commands. `spin` is capped at `engine_omega / ratio` for the driven
+wheels. Measured on the same fixture after that:
+
+| | 0-100 | top speed | wheel slip |
+|---|---|---|---|
+| 200 Nm | 6.16 s | 171.0 km/h | 10.7 m/s |
+| 600 Nm | 4.38 s | 227.9 km/h | 12.3 m/s |
+
+Three times the torque now buys 29% off the 0-100 time and 57 km/h at the top, and the
+slip is wheelspin rather than a runaway. `more_torque_reaches_the_road` holds it there.
+
+Still to come from the recovery, and not to be guessed: the exact wheel update
+(`force = (dShaft / sum|drive|) * drive / radius` -- what it is added to, and with what
+inertia), `J_drive`, `mult_normal`, and whether the engine's reaction back through the
+coupling changes the launch. The two-inertia coupling of 4 is specified; our branch
+still holds the engine at a converter stall point of my invention, which is the last
+invented number left in this path.
+
+### 12.1a The old 667 m/s note
 
 That slip is not a physical number; it is an artefact of how the faithful branch
 couples the engine. It prescribes the engine's speed from a converter target and then
