@@ -486,6 +486,44 @@ also short. Any claim that the original spins these cars at a launch has to come
 the tyre model (5.3) or from the table generator (the 225 vs 396 Nm discrepancy), not
 from the driveline.
 
+### 12.1c The driveline constants, recovered, and why they are not in the code yet
+
+Everything the two-inertia coupling needs is now known:
+
+```
+J_engine  physics+0xE0  = 13.5162      J_drive physics+0xE4 = 964.706   (per car: 625/700/1100 seen)
+K         .data 0x0060E028: 4.0 in the file, 6.0 in memory -- the mod patches .data at start-up
+k = inv_d / (K*J_engine + inv_d),  inv_d = J_drive/ratio^2
+  gear 1 .. 6:  k = 0.138 / 0.274 / 0.441 / 0.577 / 0.643 / 0.742
+exchange 0.999, wheel+0xC4 = 1.0 on every wheel, radius lives at wheel+0x60
+rpm is rad/s up to car+0x1E18*9.549296; RPM_limit and the table axis are rev/min
+```
+
+Implemented against that, and **not shipped** -- the numbers below are what it did:
+
+| attempt | 0-100 | top | note |
+|---|---|---|---|
+| shared delta on both sides | -- | 1.1 km/h | shaft fell *below* the wheels; engine stuck at idle |
+| inelastic split `(1-k)`/`k` | -- | 1.1 km/h | engine flared to 7047, wheels never turned: engagement 0 |
+| engagement from the middle branch | -- | 60.5 km/h | moves, then plateaus in first with the engine on the limiter |
+
+Two defects I hit and understood:
+
+1. **The wheel update needs the split, not a shared delta.** It is an inelastic
+   exchange: the shaft closes `(1-k)` of the gap and the engine closes `k`. One delta
+   applied to both sides pushes the shaft the wrong way at a standstill.
+2. **The auto-clutch's own branches contradict each other.** As written, the middle
+   branch gives the pedal as `1 - (rpm-idle)/(target-idle)`, while the two boundary
+   branches set it to 1 both below shaft speed and at or above the target -- read with
+   1 = pressed, that opens the clutch exactly when the engine passes its target, which
+   is where a real one closes. Read with 1 = engaged it drags a standing car to a stall.
+
+Until that polarity is settled by watching `car+0x1DBC` (and wheel rpm) through the
+first second of a full-throttle launch from rest, the coupling cannot be ported without
+inventing the very thing this whole recovery exists to remove. The converter path the
+game runs today is left in place; it has one invented number (the 0.8 stall point) and
+it is the last one in the drive path.
+
 ### 12.2 The engine's own numbers, from the game's engine screen
 
 Same engine, with and without a supercharger, as the game itself reports them:
