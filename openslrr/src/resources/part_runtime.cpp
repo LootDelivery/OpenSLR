@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/pedestrian_lines.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/gameref.hpp"
@@ -1693,6 +1694,43 @@ Object *part_render_car(void *key) {
     if (!ref) return nullptr;
     key = ref->parent;
   }
+  return nullptr;
+}
+// A Painter texture belongs to the parts that show it. One that no live part
+// uses any more can be freed; a copied texture may be shared by two parts, which
+// is why the caller asks before releasing.
+bool texture_in_use(uint32_t texture, const Object *except) {
+  for (const auto &entry : records)
+    if (entry.first != except && entry.second.state.texture == texture)
+      return true;
+  return false;
+}
+bool part_paint_textures(Object *part, uint32_t *current, uint32_t *source) {
+  auto *rec = record(part);
+  if (!rec)
+    return false;
+  if (current)
+    *current = rec->state.texture;
+  if (source)
+    *source = rec->config->texture;
+  return true;
+}
+bool part_set_paint_texture(Object *part, uint32_t texture) {
+  auto *rec = record(part);
+  if (!rec || !rec->config->texture)
+    return false;
+  paint_one(canonical(part), texture);
+  return true;
+}
+bool part_paint_texture_shared(uint32_t texture, Object *part) {
+  return texture_in_use(texture, canonical(part));
+}
+Object *part_showing_texture(uint32_t texture) {
+  if (!texture)
+    return nullptr;
+  for (const auto &entry : records)
+    if (entry.second.state.texture == texture)
+      return entry.first;
   return nullptr;
 }
 bool part_destroy(Object *part) {
@@ -5287,8 +5325,11 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     // 0, and anything that is not a texture record, leaves the part as it
     // is. A loaded car writes 0 for an unpainted piece and a factory color
     // for the rest; clearing the render there made the panels vanish.
-    const RpkEntry *entry = id && index ? index->resolve(id) : nullptr;
-    if (!entry || entry->typeof_ != 7)
+    // A Painter texture has an id outside every pack, so the pack lookup below
+    // can never resolve it. It is assigned by id, like the Painter does.
+    const bool painted = paint_texture_exists(id);
+    const RpkEntry *entry = !painted && id && index ? index->resolve(id) : nullptr;
+    if (!painted && (!entry || entry->typeof_ != 7))
       return Value::make_int(old);
     p->state.texture = static_cast<int>(id);
     for (auto *render : p->renders)

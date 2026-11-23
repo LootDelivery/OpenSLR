@@ -403,8 +403,21 @@ this tree put in that file (render identity for the capture, external motion for
 traffic, fade, fault containment). So the host stays ours and is written here in
 three stages:
 
-- **P2a** -- paint hooks: `node.paint_texture`, `part_paint_textures`,
-  `part_set_paint_texture`, and the Painter natives that write them.
+- **P2a** -- paint. *Part done* (`1e4f4b8c`): the part-level accessors
+  (`part_paint_textures`, `part_set_paint_texture`, `part_paint_texture_shared`,
+  `part_showing_texture`, `texture_in_use`) and `Part.setTexture` now accepts a
+  Painter texture id, which it had to: the old code resolved every id through
+  `RpkIndex` and a Painter texture lives outside every pack, so the Painter could
+  not have assigned one. *Remainder, measured by compiling their
+  `natives_painter.cpp` against this tree*: three renderer-side APIs we do not
+  have -- `scene_instances_pick_surface` (hit point, face normal in mesh and world
+  frame, paint slot, mirrored flag, screen up), `scene_instances_paint_targets`
+  (neighbouring paint-slotted meshes within the stamp radius, so a decal across a
+  seam reaches both panels) and a `paint_stamp_reaches` that takes the surface --
+  plus `gameref_uses_resource`. Nothing else: the rest of the file is the natives
+  themselves. Those three are renderer work and the acceptance is visual (spray a
+  decal across a seam, a mirror, a door edge), so they open the next stage rather
+  than closing this one.
 - **P2b** -- `configure_drive` and the multi-car advance: every live car gets a body
   and a contact set, not only `part_controlled_chassis()`.
 - **P3** -- `race_drive_input` on the new host, which is what U2-D and U2-F need.
