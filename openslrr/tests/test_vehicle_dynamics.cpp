@@ -163,23 +163,11 @@ SLRR_TEST(tyre_grip_follows_the_tyre_script) {
   // A wider tyre of the same compound grips more; a softer compound too.
   SLRR_REQUIRE(peak_lateral(tyre(245), 3500) > peak_lateral(tyre(195), 3500) * 1.08);
   SLRR_REQUIRE(peak_lateral(tyre(205, 1.687), 3500) > peak_lateral(tyre(205, 1.495), 3500) * 1.08);
-  // Pin a reference sample of the recovered law (0x0043BA80 on the 17 slots, with
-  // the load curve of 0x00454500), not of the previous hand-written curve: this
-  // number is the model's own, measured, and it changes only if the model does.
+  // Pin a reference-curve sample of the intended 8ac2ba9 model, rather
+  // than asserting the old script-friction / 1.68 peak interpretation.
   const auto reference = tire_forces(3500, 1, 20, 20, 2, TireParameters{});
-  std::fprintf(stderr, "[tyre] reference sample lon %.6f lat %.6f\n",
-               reference.longitudinal, reference.lateral);
   SLRR_REQUIRE(reference.longitudinal == 0);
-  SLRR_REQUIRE(std::abs(reference.lateral - 4086.891029) < 1e-4);
-  // The peak scales with the compound's friction, which is what a sticky tyre means.
-  auto sticky = TireParameters{};
-  sticky.friction *= 1.25;
-  const auto plain_peak =
-      std::abs(tire_forces(3500, 1, 0, 0, 40, TireParameters{}).lateral);
-  const auto sticky_peak = std::abs(tire_forces(3500, 1, 0, 0, 40, sticky).lateral);
-  std::fprintf(stderr, "[tyre] locked-wheel lateral %.0f N vs %.0f N at 1.25x friction\n",
-               plain_peak, sticky_peak);
-  SLRR_REQUIRE(sticky_peak > plain_peak * 1.15);
+  SLRR_REQUIRE(std::abs(reference.lateral + 4347.597081) < 1e-5);
 }
 
 SLRR_TEST(tyre_stiffness_and_sliction_shape_the_curve) {
@@ -193,34 +181,16 @@ SLRR_TEST(tyre_stiffness_and_sliction_shape_the_curve) {
   auto capped = stiff, above_cap = stiff;
   capped.stiffness = TireParameters{}.stiffness * 2.5;
   above_cap.stiffness = capped.stiffness * 10;
-  // No clamp on the stiffness any more: the previous line asserted an invented
-  // clamp(stiffness/stock, 0.4, 2.5) that the recovered law does not have. What the
-  // law does guarantee is that stiffness moves *where* the curve saturates, not how
-  // high it goes: the peak is m*s*sin(C0*pi/2), which has no stiffness in it.
-  const auto peak = [](const TireParameters& t) {
-    double best = 0;
-    for (double angle = 0; angle < 1.5; angle += .01)
-      best = std::max(best, std::abs(
-                                 tire_forces(3000, 1, 60, 60,
-                                             60 * std::tan(angle), t)
-                                     .lateral));
-    return best;
-  };
-  SLRR_REQUIRE(peak(stiff) > peak(soft) * .98);
-  SLRR_REQUIRE(peak(above_cap) < peak(capped) * 1.02);
-  // sliction is C0, the curve's shape coefficient (setSliction writes slot 0), not a
-  // grip multiplier: at saturated slip the force is m*s*sin(C0*pi/2), so a smaller C0
-  // gives a lower saturated force. The previous assertion pinned 1/3, which was the old
-  // grip-multiplier reading of the field and is no longer what the model does.
+  SLRR_REQUIRE(std::abs(small(capped) - small(above_cap)) < 1e-9);
+  // At saturated slip reference-scaled sliction multiplies grip, not
+  // force divided by the curve's own peak.
   auto low = tyre(205), high = low;
   low.sliction = .4;
   high.sliction = 1.2;
   const auto sliding = [](const TireParameters& t) {
     return std::abs(tire_forces(3000, 1, 20, 20, 50, t).lateral);
   };
-  std::fprintf(stderr, "[tyre] sliding lateral C0=0.4 %.0f N vs C0=1.2 %.0f N\n",
-               sliding(low), sliding(high));
-  SLRR_REQUIRE(sliding(low) < sliding(high) * .75);
+  SLRR_REQUIRE(std::abs(sliding(low) / sliding(high) - 1. / 3) < 1e-9);
 }
 
 SLRR_TEST(tyre_load_capacity_has_progressive_efficiency) {
@@ -296,16 +266,11 @@ SLRR_TEST(more_grip_stops_shorter) {
     const auto to = car.dynamics.body.position;
     distance[i] = std::hypot(to.x - from.x, to.z - from.z);
   }
+  // More grip, less road used to stop.
+  SLRR_REQUIRE(distance[1] < distance[0] * .98);
   std::fprintf(stderr,
                "[grip] stopping distance %.2f m at grip 1.00 vs %.2f m at 1.25\n",
                distance[0], distance[1]);
-  // More grip must not use more road. The effect in this fixture is only about half a
-  // percent because the wheels lock within a few frames and the whole stop is spent on
-  // the saturated branch; the force law's own scaling is pinned in
-  // tyre_grip_follows_the_tyre_script. Why the car-level distance barely follows is an
-  // open measurement, recorded in CAR_MODEL_RECOVERY.md 5.3c -- not something to paper
-  // over by loosening this threshold silently.
-  SLRR_REQUIRE(distance[1] < distance[0]);
 }
 SLRR_TEST(high_grip_braking_remains_finite_with_legacy_centre_fields) {
   // Legacy centre fields remain inert even with extreme values. Hard
