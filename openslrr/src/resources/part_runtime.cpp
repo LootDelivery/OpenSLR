@@ -3795,7 +3795,15 @@ void advance_chassis_tick() {
       const auto &ds = rec.dynamics;
       const double forward_speed_now = -ds.body.orientation.inverse_rotate(ds.body.velocity).z;
       const double sideways = std::abs(ds.body.orientation.inverse_rotate(ds.body.velocity).x);
-      const bool sliding = forward_speed_now > 4.0 && sideways > 1.5;
+      // A hot window, not a gate on the current angle: the reported failure is what happens
+      // AFTER the car is spun, and by then the velocity is nearly all sideways and the
+      // forward component has collapsed. Gating on `forward > 4` ended the log exactly
+      // there -- the first run missed the event for that reason.
+      static double slide_until = -1;
+      const double speed_now = std::hypot(ds.body.velocity.x, ds.body.velocity.z);
+      if (speed_now > 3.0 && sideways > 1.5)
+        slide_until = engine_trace_clock + 4.0;
+      const bool sliding = engine_trace_clock < slide_until;
       if (trace && sliding) {
         const double ratio = ds.drive.ratios[std::max(1, ds.gear)];
         std::fprintf(stderr,
