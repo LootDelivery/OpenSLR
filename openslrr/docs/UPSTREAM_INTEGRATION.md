@@ -378,6 +378,44 @@ existed here** and **19 exist and were never modified here** -- including
 `vehicle_dynamics`, `tire_model`, `dyno_model`, `scene_collision`, `part_config`
 and `skeleton`. Taking those is not a merge; it is a copy.
 
+#### What the driver found, and what it was
+
+Three defects appeared the moment the engine was swapped in, and none of them
+was in the engine. They are recorded here because they are the failure modes of
+taking files wholesale: a struct's field order is part of its contract, and a
+solver's implicit constants are part of its contract too.
+
+**The car lost most of its grip and its power, from one aggregate initializer.**
+`TireParameters` was reordered upstream (`load_smoothing` and
+`longitudinal_grip` changed places) while this tree filled it positionally, so
+the longitudinal grip (1.0) landed in the load smoothing and the smoothing (0.4)
+landed in the longitudinal grip. 60% of the driving force gone, and the rear
+axle let go under load, from a line that still compiled and still had the right
+number of fields. Fixed by naming the fields, as upstream does. Any positional
+initializer of a struct we did not write is this bug waiting to happen.
+
+**Pedestrians walked in a frozen stride.** Their `character.cpp` animates on a
+simulation clock published by `character_set_sim_time()`, which their main loop
+calls every frame and ours did not. The clock stayed at zero, so every clip held
+its first frame. Fixed in `mainloop.cpp` next to `advance_sim_time`.
+
+**Ambient cars ignored a red light that the rule was already computing.** The
+cap is `sqrt(2 * 5 * d)` -- a 5 m/s² braking curve -- but the drive loop moved
+the speed toward it no faster than 4 m/s². The car could not follow the curve,
+overshot the stop line, and then the rule's own commitment clause ("already past
+the line: let it go, a red light must not park a car in the junction") released
+it. The cap fired, and the car drove through: 30 red approaches, **1 rest, 29
+drive-throughs**. With the response rate raised to the curve plus margin and the
+measurement moved from "last ten metres" to "still had fifteen metres when the
+lamp turned red": **25 rest, 7 through** over the same city drive, the seven
+being cars that entered the zone at a speed from which stopping was no longer
+possible, which is what amber is for.
+
+Still open from the same drive: the lamp heads themselves do not glow, so a
+driver cannot see which way the light is. That is emissive/flare work on
+`trlight` placements, it is visual, and it starts with a plan and a before/after
+shot rather than with code.
+
 #### Taken (`b1058de5`)
 
 | Group | Files |

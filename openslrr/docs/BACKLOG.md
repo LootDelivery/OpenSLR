@@ -9,12 +9,15 @@ Code-level evidence is not acceptance. Items here are implemented, tested or
 measured, and have not been checked by driving the game. Each one names what to
 look at, so the check takes a minute rather than a session.
 
-- [ ] **Traffic stops at a red light** (U2-C, `09b209f0`). Measured: 26…126 lane
-      steps per second capped by a lamp over an 18 s drive, and the rule is pinned
-      by `test_traffic_runtime` against `city.trc`. Not seen with a human at the
-      wheel: watch a junction and check that ambient cars rest at the stop line,
-      that they pull away on green, and that none is left standing across the
-      junction it had already entered.
+- [ ] **Traffic stops at a red light** (U2-C). The first in-game measurement
+      after the physics swap said the opposite of what a driver saw: 30 red
+      approaches, 1 car rested, 29 drove through -- the cap was computed with a
+      5 m/s² braking curve while the speed could only fall at 4 m/s², so every car
+      overshot the line and was then released as committed. With the response rate
+      fixed: 25 rest, 7 through, the seven having entered at a speed from which
+      stopping was no longer possible. Still needs a driver: the lamp heads do not
+      glow, so which way the light is cannot be seen. That glow is the open item;
+      the behaviour behind it is now measured.
 - [ ] **Reflections after the irradiance probe became default-on** (`90ff7dcf`).
       Verified on paint, chrome and glass shots; the driver has seen it once and
       approved, and this entry exists so the state is not forgotten.

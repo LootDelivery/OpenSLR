@@ -2478,8 +2478,19 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
     out.handbrake = std::max(0.f, wheel.hbrake);
     out.bearing = std::max(0.f, wheel.bearing);
     out.rolling_resistance = std::max(0., wheel.roll_res - .003625);
-    out.tyre = {wheel.friction, wheel.stiffness, wheel.sliction,
-                wheel.max_load, wheel.frictn_x, wheel.load_smooth};
+    // Assign by name: this struct was reordered upstream (load_smoothing and
+    // longitudinal_grip swapped places), and the positional form silently put
+    // the longitudinal grip (1.0) into the load smoothing and the smoothing
+    // (0.4) into the longitudinal grip. That cost 60% of the driving force and
+    // made the rear axle let go, from one aggregate initializer.
+    out.tyre.friction = wheel.friction;
+    out.tyre.stiffness = wheel.stiffness;
+    out.tyre.sliction = wheel.sliction;
+    out.tyre.maximum_load = wheel.max_load;
+    out.tyre.load_smoothing = wheel.load_smooth;
+    out.tyre.longitudinal_grip = wheel.frictn_x;
+    // setCPatch stores the sine of the scripted patch angle.
+    out.tyre.patch_angle = std::asin(std::clamp(wheel.cpatch_ang, 0.f, 1.f));
   }
 }
 
