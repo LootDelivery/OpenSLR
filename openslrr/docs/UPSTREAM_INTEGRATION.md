@@ -370,6 +370,48 @@ Deviations from #180 and from the recovered engine:
 | Runtime | `--bench-map ValoCity --bench-time 40 --bench-drive 20` with `SLRR_TRAFFIC_LOG=1`: 20 cars resident at `cap=20` from nine stock templates, moving along their lane at 4.9…6.3 m/s with `along` and the world pose advancing together (edge 1050, `along` 353→458 m, pos −229,955 → −208,1057), `total=26 dropped=6` at t=20, i.e. cars that fall behind the player are retired and replaced instead of accumulating. `drive done`, exit 0. Window captures at the same moment show a taxi and two sedans on the carriageway next to the player. With the spawn band forced out of range (no traffic at all) the player frame at t=10 is identical to the traffic run, so ambient traffic does not perturb the player body. |
 | Status | **Ported**, physics driving, race brain and native vehicle assembly still open (signals closed in U2-C) |
 
+### U2-D-prep. The physics engine is in, the host is ours
+
+Porting the car physics stopped being a question of volume and became a question
+of intersection. Of the 100 files the four physics/paint commits touch, **64 never
+existed here** and **19 exist and were never modified here** -- including
+`vehicle_dynamics`, `tire_model`, `dyno_model`, `scene_collision`, `part_config`
+and `skeleton`. Taking those is not a merge; it is a copy.
+
+#### Taken (`b1058de5`)
+
+| Group | Files |
+|---|---|
+| Engine | `vehicle_dynamics`, `tire_model`, `dyno_model`, `scene_collision`, `part_config`, `skeleton`, `character`, `suspension_geometry` |
+| #48 additions | `mass_properties`, `wheel_mount`, `flap_hinge`, `vehicle_contacts` |
+| Paint host (#206, now accepted) | `paint_texture`, `light_resource` |
+| Decoder the paint path needs | `ptx_image::decode_image_rgba` |
+
+Evidence: `slrr_host` links; `test_vehicle_dynamics` **35/35**; a driven bench run at
+300--350 fps with `physics=0.24--0.30 ms` and `support=14--19 kN` on a 1566 kg car
+(the weight is 15.4 kN, so the new contacts carry the body instead of hovering it).
+
+#### Not taken
+
+`part_runtime.cpp`. Their version is the host for everything above -- and it drags
+in their `gameref` (`streamed_hidden`, `follow_hold`, render masks), `frame_profiler`
+zones, `host_sfx` loop panning, `host_input.drive_nitro`, the worker-thread job
+system, the driver visibility mask and the race brain. Measured by compiling it and
+reading the error list: **~20 distinct missing symbols across 8 subsystems.** It
+would mean importing half of upstream's infrastructure *and* re-adding everything
+this tree put in that file (render identity for the capture, external motion for
+traffic, fade, fault containment). So the host stays ours and is written here in
+three stages:
+
+- **P2a** -- paint hooks: `node.paint_texture`, `part_paint_textures`,
+  `part_set_paint_texture`, and the Painter natives that write them.
+- **P2b** -- `configure_drive` and the multi-car advance: every live car gets a body
+  and a contact set, not only `part_controlled_chassis()`.
+- **P3** -- `race_drive_input` on the new host, which is what U2-D and U2-F need.
+
+`patch/parts/**` stays out by policy; #235/#237/#279 (their rendering foundation)
+stay out because this tree's renderer is ahead of them, not behind.
+
 ### U2-C. The lamp at the junction
 
 U2-B moved cars along their lanes and honoured script closures, but nothing read
