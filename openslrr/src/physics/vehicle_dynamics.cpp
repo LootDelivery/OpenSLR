@@ -945,14 +945,18 @@ void VehicleDynamics::step_drive() {
       // the engine to 334 rpm and feeds that speed to the wheels, so the car creeps
       // forward at an idle that is really a stall.
       const bool idling_against_a_stop = gas <= .05 && shaft_rpm < drive.idle * 1.3;
-      // The driveline trying to turn the engine BACKWARDS. Reverse gear held while the
-      // car still rolls forwards, or the handbrake pulled at speed: the shaft arrives
-      // negative while the engine turns positive, and a closed link then drags the
-      // engine down towards zero -- the 334 rpm idle that crept forward. A clutch slips
-      // or opens here; it never drives the crank the wrong way. This is the recovered
-      // boundary branch of 0x0044DD70 (`rpm < shaft -> open`), applied to the case it
-      // describes: opposite senses, not merely a slower engine.
-      const bool dragged_backwards = shaft_omega < 0 && engine_omega > 0;
+      // Reverse gear held while the car still rolls forwards, with the handbrake down:
+      // the engine-side shaft arrives negative against a positive crank and a closed
+      // link drags the engine to zero -- the 334 rpm idle that crept forward. The
+      // recovered boundary branch of 0x0044DD70 (`rpm < shaft -> open`) covers it.
+      //
+      // Gated on the gear being reverse, and that gate is the whole point: in a spin the
+      // driven wheels can briefly rotate backwards about their own axles while the car
+      // pivots, which empties the same condition in a FORWARD gear -- and opening there
+      // dropped the engine to idle mid-slide instead of keeping the drift alive. In a
+      // forward gear the driveline is what the engine drives, whatever the wheels are
+      // doing; in reverse against the car's motion it is the road driving the engine.
+      const bool dragged_backwards = ratio < 0 && shaft_omega < 0 && engine_omega > 0;
       if (idle_and_stopped || braking_at_rest || idling_against_a_stop || dragged_backwards)
         engage = 0.0;
     }

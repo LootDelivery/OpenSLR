@@ -373,6 +373,27 @@ SLRR_TEST(reverse_and_handbrake_at_speed_do_not_strangle_the_engine) {
   SLRR_REQUIRE(car.body.velocity.length() * 3.6 < 2.0);
 }
 
+// A spin must not drop the engine to idle. While the car pivots the driven wheels
+// can briefly rotate backwards about their own axles; opening the link on that
+// killed the throttle mid-slide and the engine fell to idle.
+SLRR_TEST(a_spin_does_not_drop_the_engine_to_idle) {
+  auto car = make_car(true);
+  const double dt = 1. / 120;
+  car.drive.throttle = 1;
+  for (double t = 0; t < 2; t += dt) car.advance(dt, flat);
+  // The wheels dragged backwards about their axles, as in a spin.
+  car.state[2].spin = -25;
+  car.state[3].spin = -25;
+  double lowest = 1e9;
+  for (double t = 0; t < 1; t += dt) {
+    car.advance(dt, flat);
+    lowest = std::min(lowest, car.engine_omega * 9.5493);
+  }
+  std::fprintf(stderr, "[drive_faithful] spin at full throttle: lowest %.0f rpm\n",
+               lowest);
+  SLRR_REQUIRE(lowest > car.drive.idle * 2.0);
+}
+
 // Lifting off in gear must slow the car. The original's engine losses are
 // `(rpm/(0.05*maxRPM)) * (0.05*maxRPM)^2 * friction_fwd` -- about 211 Nm at 6500 rpm
 // for a 1e-4 coefficient -- and the crank-inertia loss we had instead was 8 Nm, so a
@@ -447,6 +468,7 @@ int main() {
       lifting_off_in_gear_slows_the_car,
       a_car_in_first_at_idle_neither_bogs_nor_creeps,
       reverse_and_handbrake_at_speed_do_not_strangle_the_engine,
+      a_spin_does_not_drop_the_engine_to_idle,
       full_throttle_reaches_a_hundred_kilometres_an_hour,
       the_engine_revs_without_an_invented_ceiling,
       the_gearbox_moves_through_the_gears,

@@ -659,6 +659,15 @@ idle: lowest 784 rpm on an 800 rpm idle, crept 1.11 km/h) and
 `reverse_and_handbrake_at_speed_do_not_strangle_the_engine` (reverse at 67 km/h then
 handbrake: lowest 784 rpm, ended at 0.46 km/h).
 
+**The first version of that rule broke cornering**, reported from driving within the
+hour: spinning the car dropped the engine to ~900 rpm. In a pivot the driven wheels can
+briefly rotate backwards about their own axles, which empties the same "shaft is
+negative" condition in a FORWARD gear, and opening the link there cut the throttle
+mid-slide. The gate is now `ratio < 0` as well: in reverse, the road is driving the
+engine and the link must open; in a forward gear the driveline is what the engine drives,
+whatever the wheels are doing. Pinned by `a_spin_does_not_drop_the_engine_to_idle`
+(lowest 3558 rpm through a forced backwards wheel spin at full throttle).
+
 ### 12.2 The engine's own numbers, from the game's engine screen
 
 Same engine, with and without a supercharger, as the game itself reports them:
