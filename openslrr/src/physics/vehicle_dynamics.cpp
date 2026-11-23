@@ -873,8 +873,10 @@ void VehicleDynamics::step_drive() {
   // whole of "the revs are lazy": our engine was 60x too slow, and the converter's stall
   // point was papering over it.
   engine_omega = std::max(0.0,
-                          engine_omega + net * (drive.faithful ? 1.0 : timestep) /
-                                            drive.inertia);
+                          engine_omega +
+                              net * (drive.faithful
+                                         ? 1.0 / drive.inertia
+                                         : timestep / std::max(1e-6, drive.host_inertia)));
   // Per-step integration is violent in the other direction too: with the throttle
   // shut, friction alone takes the engine to zero in a single step, and a stopped
   // engine stops the gearbox schedule from running at all (it returned early and the
@@ -1156,6 +1158,11 @@ void VehicleDynamics::step_drive() {
       s.spin -=
           (force.longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
           timestep / wheel_inertia;
+      // Tried, measured, reverted: letting the driveline own the driven wheel's speed
+      // outright (the tyre acting through force alone) removes all torque sensitivity --
+      // 200 and 600 Nm then reach 80-160 km/h in 3.26 and 3.11 s, because the wheel is
+      // always at engine speed and the car is always traction limited. The tyre must be
+      // able to react back on the wheel.
     }
     const double before_hold = s.spin;
     s.spin = brake(s.spin, remaining_brake);

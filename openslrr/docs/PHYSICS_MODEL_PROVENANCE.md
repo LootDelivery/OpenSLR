@@ -668,6 +668,47 @@ engine and the link must open; in a forward gear the driveline is what the engin
 whatever the wheels are doing. Pinned by `a_spin_does_not_drop_the_engine_to_idle`
 (lowest 3558 rpm through a forced backwards wheel spin at full throttle).
 
+### 12.7 J_engine was being shrunk twelvefold
+
+The revs still fell to idle when the car was spun. The cause was not the gate but the
+**inertia**, and the trace said so in one line:
+
+```
+before:  j_engine=0.415  j_drive=500.0  k=0.730
+after:   j_engine=13.516 j_drive=500.0  k=0.077
+```
+
+`part_runtime` computed `inertia = .28 + .01 * engine_inertia`. That formula was
+invented, and the field it eats is the recovered `physics+0xE0` itself: the MC GT
+declares **13.5**, and the live game read **13.5162** on a car of that class. Shrinking it
+twelvefold made the two-inertia coupling four times too stiff (k = 0.73 against the
+recovered 0.14-0.31), so the link yanked the engine towards the wheels hard enough to
+drop it to idle mid-slide. `inertia` now carries the declared value; the host slip model,
+which is ours and was calibrated at 0.38, keeps its own `host_inertia`.
+
+Measured after: **the engine holds 6490 rpm on a 6500 limiter while the driven wheels
+spin at 71 rad/s against 22 of rolling**, first gear, no upshift, and a forced backwards
+wheel spin at full throttle no longer takes it below **6756 rpm**.
+
+**Also tried and reverted** (so it is not tried again): letting the driveline own a driven
+wheel's speed outright, with the tyre acting through force alone. It reads well in the
+recovery -- the wheel receives the shaft's new speed -- but it removes all torque
+sensitivity, because the wheel is then always at engine speed and the car is always
+traction limited:
+
+| 80-160 km/h | 200 Nm | 600 Nm |
+| --- | --- | --- |
+| driveline owns the wheel | 3.26 s | 3.11 s |
+| tyre reacts back on the wheel | **6.43 s** | **4.23 s** |
+
+The tyre has to be able to react on the wheel. The spin-to-idle problem was the inertia,
+not the ownership.
+
+Two test bounds moved with the real crank, both recorded where they are asserted: the
+faithful path is 5.4 s to 100 against the host model's 4.7 (a heavier crank revs slower to
+the same power; the old assertion forced the smaller crank), and engine braking is
+0.98 m/s2 against 0.08 coasting where it was 1.55 with the small crank.
+
 ### 12.2 The engine's own numbers, from the game's engine screen
 
 Same engine, with and without a supercharger, as the game itself reports them:

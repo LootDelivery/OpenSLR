@@ -60,7 +60,11 @@ VehicleDynamics make_car(bool faithful) {
   drive.idle = 800;
   drive.limit = 7000;
   drive.max_rpm = 7000;   // scales the recovered engine friction (3.5)
-  drive.inertia = .38;
+  // The recovered J_engine (physics+0xE0): 13.5 on the measured car. The fixture used
+  // 0.38, which made the two-inertia coupling k = 0.73 against a recovered 0.14..0.31
+  // and let it yank the engine around; the stand has to run the game's numbers.
+  drive.inertia = 13.5;
+  drive.host_inertia = .38;
   drive.brake_scale = drive.handbrake_scale = 1;
   drive.engaged = drive.automatic_shift = drive.auto_clutch = true;
   drive.clutch = 1;
@@ -89,6 +93,9 @@ struct Trace {
   // slowly".
   double rpm_at_half_second = 0;
   double flare_seconds = -1;  // time to reach 60% of the limit, or -1
+  // With the driveline owning a driven wheel's speed, a launch is traction limited and
+  // 0-100 says nothing about power. 80 to 160 km/h happens with the tyres hooked up.
+  double t80 = -1, t160_kmh = -1;
 };
 
 Trace run_car(bool faithful, double seconds = 25) {
@@ -107,6 +114,8 @@ Trace run_car(bool faithful, double seconds = 25) {
     trace.top_kmh = std::max(trace.top_kmh, kph);
     if (trace.hundred_kmh < 0 && kph >= 100)
       trace.hundred_kmh = t;
+    if (trace.t80 < 0 && kph >= 80) trace.t80 = t;
+    if (trace.t80 >= 0 && trace.t160_kmh < 0 && kph >= 160) trace.t160_kmh = t;
     if (t > 1) trace.max_rpm = std::max(trace.max_rpm, rpm);
     if (trace.rpm_at_half_second == 0 && t >= .5)
       trace.rpm_at_half_second = rpm;
@@ -164,8 +173,12 @@ SLRR_TEST(faithful_coupling_is_not_slower_than_the_host_model) {
                  label, trace.rpm_at_half_second, trace.flare_seconds);
   }
   SLRR_REQUIRE(original.finite && host.finite);
-  SLRR_REQUIRE(original.hundred_kmh > 0);
-  SLRR_REQUIRE(original.hundred_kmh <= host.hundred_kmh + 1e-9);
+  SLRR_REQUIRE(original.hundred_kmh > 0 && host.hundred_kmh > 0);
+  // "Not slower than the host" stopped being a fidelity test once `inertia` carried the
+  // recovered J_engine (13.5 against the host model's 0.38): the original revs slower to
+  // the same power, so it is 5.4 s against the host's 4.7 s and the assertion only forced
+  // the faithful path to keep the smaller crank. The guard is a band now.
+  SLRR_REQUIRE(original.hundred_kmh < host.hundred_kmh * 1.3);
 }
 
 // "Clean power": the curve is applied, so a car that grips reaches 100 km/h in a
@@ -296,6 +309,8 @@ Trace run_with_torque(double peak) {
     }
     trace.top_kmh = std::max(trace.top_kmh, kph);
     if (trace.hundred_kmh < 0 && kph >= 100) trace.hundred_kmh = t;
+    if (trace.t80 < 0 && kph >= 80) trace.t80 = t;
+    if (trace.t80 >= 0 && trace.t160_kmh < 0 && kph >= 160) trace.t160_kmh = t;
     if (t > 1) trace.max_rpm = std::max(trace.max_rpm, rpm);
     trace.top_gear = std::max(trace.top_gear, car.gear);
     for (size_t i = 2; i < 4; ++i) {
@@ -322,8 +337,16 @@ SLRR_TEST(more_torque_reaches_the_road) {
   // 19.8 m/s of slip), so the first hundred is traction-limited and the torque shows up
   // as wheel speed rather than as acceleration. Top speed is where power is honest,
   // and the strong car is the one that breaks traction.
-  SLRR_REQUIRE(strong.hundred_kmh < weak.hundred_kmh * .95);
-  SLRR_REQUIRE(strong.top_kmh > weak.top_kmh * 1.15);
+  // 0-100 is traction limited for both, and top speed is the rev limiter in top gear, so
+  // neither measures power any more -- 228 vs 230 km/h for 200 vs 600 Nm. 80 to 160 km/h
+  // does: the tyres are hooked up and what is left is what the engine puts through them.
+  SLRR_REQUIRE(weak.t80 >= 0 && strong.t80 >= 0);
+  SLRR_REQUIRE(weak.t160_kmh >= 0 && strong.t160_kmh >= 0);
+  const double weak_roll = weak.t160_kmh - weak.t80;
+  const double strong_roll = strong.t160_kmh - strong.t80;
+  std::fprintf(stderr, "[drive_faithful] 80-160: 200 Nm %.2fs, 600 Nm %.2fs\n",
+               weak_roll, strong_roll);
+  SLRR_REQUIRE(strong_roll < weak_roll * .85);
   // And the strong car is the one that breaks traction.
   SLRR_REQUIRE(strong.max_slip_per_s > weak.max_slip_per_s + 1.0);
 }
@@ -422,8 +445,11 @@ SLRR_TEST(lifting_off_in_gear_slows_the_car) {
   SLRR_REQUIRE(std::isfinite(in_gear) && std::isfinite(neutral));
   // Engine braking has to exist and has to dominate: 1.5 m/s2 in gear against
   // nothing in neutral, at a 1e-4 friction coefficient and 7000 max rpm.
-  SLRR_REQUIRE(in_gear > neutral + 1.0);
-  SLRR_REQUIRE(in_gear > 1.0);
+  // Measured with the recovered J_engine: 0.98 m/s2 in gear against 0.08 in neutral. With
+  // the smaller crank the same friction gave 1.55; a heavier crank takes longer to spin
+  // down, so the number moved and the invariant is "clearly more than coasting".
+  SLRR_REQUIRE(in_gear > neutral + 0.6);
+  SLRR_REQUIRE(in_gear > 0.6);
 }
 
 // Gears are used: a launch that stays in first past 100 km/h is the old slip bug.

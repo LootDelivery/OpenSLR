@@ -193,6 +193,9 @@ struct DriveInput {
   // J_drive is per car (500 measured on one, 965 on another). K is 6.0 in memory;
   // 4.0 is what sits in the exe, because the mod patches .data at start-up.
   double driveline_inertia = 500.0;
+  // The host slip model's own crank inertia. That model is ours, calibrated at 0.38, while
+  // `inertia` carries the recovered J_engine, twelve times larger.
+  double host_inertia = .38;
   double coupling_ratio = 6.0;
   // Drive output the way the original computes it -- engage = 1 - clutch, thrust
   // from the engine torque -- instead of the crank-inertia slip model. The engine

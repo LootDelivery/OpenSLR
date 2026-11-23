@@ -2504,7 +2504,16 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.clutch = controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 0.f;
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
-  drive.inertia = .28 + .01 * std::max(0.f, comp(chassis, "engine_inertia"));
+  // `engine_inertia` IS the recovered physics+0xE0, not a number to be rescaled: the
+  // MC GT declares 13.5 and the live game reads 13.5162 on a car of that class. The old
+  // `.28 + .01*x` shrank it twelvefold, which made the two-inertia coupling four times
+  // too stiff (k = 0.73 against a recovered 0.14-0.31) and let it yank the engine to the
+  // wheels -- the revs falling to idle mid-spin.
+  {
+    const float declared = comp(chassis, "engine_inertia");
+    drive.inertia = declared > 0 ? double(declared) : .38;
+    drive.host_inertia = .28 + .01 * std::max(0.f, declared);
+  }
   // Recovered engine losses (3.5) and the rpm that scales them.
   drive.friction_fwd = comp(chassis, "engine_friction_fwd");
   drive.friction_rev = comp(chassis, "engine_friction_rev");
@@ -3805,6 +3814,13 @@ void advance_chassis_tick() {
                      // Driven axle load: the other half of "why no wheelspin".
                      // Thrust against tyre = friction * this.
                      d.state[2].force + d.state[3].force);
+        {
+          const double ratio = d.drive.ratios[std::max(1, d.gear)];
+          const double inv_d = ratio != 0 ? d.drive.driveline_inertia / (ratio * ratio) : 0;
+          const double k = inv_d / (d.drive.coupling_ratio * std::max(1e-9, d.drive.inertia) + inv_d);
+          std::fprintf(stderr, "[drive-trace] j_engine=%.3f j_drive=%.1f k=%.3f\n",
+                       d.drive.inertia, d.drive.driveline_inertia, k);
+        }
       }
     }
     if (!finite_frame(rec.dynamics.body.frame()))
