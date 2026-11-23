@@ -823,30 +823,33 @@ void VehicleDynamics::step_drive() {
   // The condition is satisfied by any vehicle that has rotated past ~90 degrees, because
   // the body's velocity then points backwards along its own heading. Firing there set the
   // service brake to 1.0, forced the throttle to zero and skipped the whole driveline
-  // block, which is precisely the reported "the wheels stop and the revs fall as if the gas
-  // were released": measured in a live slide, throttle 1.00 in first gear, the car stopped
-  // from 16.9 to 1.5 m/s and the engine fell 2489 -> 0 and stalled. A driver holding the
-  // throttle is asking for drive, so the assist has no business acting.
-  const bool direction_brake =
-      drive.throttle < .1 &&
-      ((ratio < 0 && forward_speed > 1) || (ratio > 0 && forward_speed < -1));
+  // There was a "direction brake" here: `(ratio > 0 && forward_speed < -1)` set the service
+  // brake to 1.0, forced the throttle to zero and skipped the driveline. It has no
+  // recovered provenance -- it arrived with the first import -- and its condition is met by
+  // every car that has rotated past ~90 degrees, because the body's velocity then points
+  // backwards along its own heading. Its measured effect was a spun car stopping dead
+  // (16.9 -> 1.5 m/s in 2 s) with the body pitching, which the driver reported as "as if
+  // the tyre hit a curb, the body rocks". Gating it on the throttle was not enough: at the
+  // end of a spin the driver lifts, and then it fires anyway. The original brakes on nothing
+  // but the pedal, and direction is the gearbox's business, so it is deleted rather than
+  // tuned.
   const bool automatic_shift = drive.automatic_shift && shift_time_ > 0;
-  const bool accelerator = drive.throttle > .1 && !direction_brake;
+  const bool accelerator = drive.throttle > .1;
   if (!engine_running && accelerator && !accelerator_down_)
     starter_remaining_ = 2;
   accelerator_down_ = accelerator;
   const bool starting = !engine_running && drive.starter > 0 &&
                         (accelerator || starter_remaining_ > 0);
   starter_remaining_ = std::max(0.0, starter_remaining_ - timestep);
-  service_brake_ = std::lerp(service_brake_, direction_brake ? 1.0 : drive.brake,
-                             -std::expm1(-timestep / .08));
+  service_brake_ =
+      std::lerp(service_brake_, drive.brake, -std::expm1(-timestep / .08));
   const double friction = engine_friction_torque(rpm);
   const double pumping = 14 + std::max(0.0, rpm - drive.idle) * .012;
   const double idle_torque =
       rpm < drive.idle ? std::min(80.0, 25.0 + (drive.idle - rpm) * .25) : 0;
   const double combustion = std::clamp((rpm - 200) / 450, 0.0, 1.0);
   const double kph = std::abs(forward_speed) * 3.6;
-  double gas = direction_brake ? 0 : std::clamp(drive.throttle, 0.0, 1.0);
+  double gas = std::clamp(drive.throttle, 0.0, 1.0);
   if (drive.launch_help <= 0 || !engine_running || drive.clutch < .5 ||
       drive.brake > 0 || drive.handbrake > .2 || gas < .2 ||
       (gear != 1 && gear != 7) || kph >= 30) {
@@ -900,7 +903,7 @@ void VehicleDynamics::step_drive() {
 
   double drive_impulse = 0;
   if (drive.faithful && engine_running && weights > 0 && ratio != 0 &&
-      shift_time_ == 0 && !direction_brake && gear != 0 && drive.clutch > .01) {
+      shift_time_ == 0 && gear != 0 && drive.clutch > .01) {
     // The recovered driveline, written to reproduce the measured launch row
     // (docs/PHYSICS_MODEL_PROVENANCE.md 12.4):
     //
@@ -1023,7 +1026,7 @@ void VehicleDynamics::step_drive() {
                      engage, engine_omega * rpm_per_rad, gear, gas,
                      state[0].spin * rpm_per_rad, state[2].spin * rpm_per_rad);
     }
-  } else if (weights > 0 && ratio != 0 && shift_time_ == 0 && !direction_brake &&
+  } else if (weights > 0 && ratio != 0 && shift_time_ == 0 &&
       (engine_running || !drive.auto_clutch)) {
     const double transmission =
         wheel_inertia * weights * weights / square_weights;

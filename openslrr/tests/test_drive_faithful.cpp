@@ -47,6 +47,10 @@ VehicleDynamics make_car(bool faithful) {
     auto& d = dynamics.drive.wheels[i];
     d.weight = i < 2 ? 0 : 1;  // rear drive
     d.brake = 2000;
+    // The stand had no handbrake torque at all, so the handbrake could never hold
+    // anything; the reverse test's "comes to a stop" assertion was passing only because
+    // the invented direction brake was doing the stopping. Rear wheels only.
+    d.handbrake = i < 2 ? 0 : d.brake;
     d.tyre = TireParameters{};
     d.tyre.friction = 1.6;
     d.tyre.maximum_load = 6500;
@@ -396,6 +400,29 @@ SLRR_TEST(reverse_and_handbrake_at_speed_do_not_strangle_the_engine) {
   SLRR_REQUIRE(car.body.velocity.length() * 3.6 < 2.0);
 }
 
+// Rolling backwards in a forward gear is not a reason to brake. The removed assist
+// fired exactly here: with the pedal released it set the service brake to 1.0, which is
+// what the driver felt as "the tyre hit a curb" at the end of a spin.
+SLRR_TEST(a_car_rolling_backwards_in_a_forward_gear_is_not_braked) {
+  auto car = make_car(true);
+  const double dt = 1. / 120;
+  car.drive.throttle = 1;
+  for (double t = 0; t < 3; t += dt) car.advance(dt, flat);
+  car.drive.throttle = 0;             // the driver lifts at the end of a spin
+  car.body.velocity = car.body.velocity * -1.0;
+  car.body.momentum = car.body.momentum * -1.0;
+  double most_brake = 0;
+  for (double t = 0; t < 2; t += dt) {
+    car.advance(dt, flat);
+    most_brake = std::max(most_brake, car.brake_service());
+  }
+  std::fprintf(stderr,
+               "[drive_faithful] rolling backwards in first, pedal up: service brake "
+               "%.2f\n",
+               most_brake);
+  SLRR_REQUIRE(most_brake < .05);
+}
+
 // A spin must not drop the engine to idle. While the car pivots the driven wheels
 // can briefly rotate backwards about their own axles; opening the link on that
 // killed the throttle mid-slide and the engine fell to idle.
@@ -585,6 +612,7 @@ int main() {
       lifting_off_in_gear_slows_the_car,
       a_car_in_first_at_idle_neither_bogs_nor_creeps,
       reverse_and_handbrake_at_speed_do_not_strangle_the_engine,
+      a_car_rolling_backwards_in_a_forward_gear_is_not_braked,
       a_spin_does_not_drop_the_engine_to_idle,
       a_spin_that_stops_the_driven_wheels_does_not_stall_the_engine,
       a_slide_at_speed_does_not_stall_the_driveline,

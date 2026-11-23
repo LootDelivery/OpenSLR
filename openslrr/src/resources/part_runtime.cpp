@@ -2602,7 +2602,16 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
     const auto &wheel = rec.wheels[i];
     out.weight = std::max(0.f, wheel.drive);
     out.brake = std::max(0.f, wheel.brake);
-    out.handbrake = std::max(0.f, wheel.hbrake);
+    // No shipped wheel script writes hbrake, so every car's handbrake torque was zero
+    // and the control did nothing at all -- measured on the stand as 60 -> 58.6 km/h
+    // with it held for 4 s, and reported by the driver long before that. Fall back to
+    // the part's own rear brake torque rather than inventing a value: the handbrake acts
+    // on the same rear brakes. A script that does provide hbrake still wins.
+    if (wheel.hbrake > 0.f) {
+      out.handbrake = wheel.hbrake;
+    } else {
+      out.handbrake = i >= 2 ? std::max(0.f, wheel.brake) : 0.f;
+    }
     out.bearing = std::max(0.f, wheel.bearing);
     out.rolling_resistance = std::max(0., wheel.roll_res - .003625);
     // Assign by name: this struct was reordered upstream (load_smoothing and
