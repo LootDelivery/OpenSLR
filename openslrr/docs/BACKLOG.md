@@ -3,6 +3,24 @@
 Working bug tracker. Each entry: symptom, evidence, suspect, status.
 Move fixed items to the bottom with the fixing commit.
 
+## Awaiting driver verification
+
+Code-level evidence is not acceptance. Items here are implemented, tested or
+measured, and have not been checked by driving the game. Each one names what to
+look at, so the check takes a minute rather than a session.
+
+- [ ] **Traffic stops at a red light** (U2-C, `09b209f0`). Measured: 26…126 lane
+      steps per second capped by a lamp over an 18 s drive, and the rule is pinned
+      by `test_traffic_runtime` against `city.trc`. Not seen with a human at the
+      wheel: watch a junction and check that ambient cars rest at the stop line,
+      that they pull away on green, and that none is left standing across the
+      junction it had already entered.
+- [ ] **Reflections after the irradiance probe became default-on** (`90ff7dcf`).
+      Verified on paint, chrome and glass shots; the driver has seen it once and
+      approved, and this entry exists so the state is not forgotten.
+- [ ] **Reflection roughness default 1.5** (`ded44b59`). Approved once ("1.5
+      fine"); revisit if the body ever reads as film rather than paint.
+
 ## Performance
 
 ### PERF-1 Streaming hitch: object/texture upload stalls (fixed)

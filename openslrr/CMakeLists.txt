@@ -65,6 +65,8 @@ add_executable(slrr_host
   src/resources/scene_sun.cpp
   src/resources/part_config.cpp
   src/resources/part_runtime.cpp
+  src/resources/paint_texture.cpp
+  src/resources/light_resource.cpp
   src/resources/pedestrian_lines.cpp
   src/formats/walk.cpp
   src/formats/rest.cpp

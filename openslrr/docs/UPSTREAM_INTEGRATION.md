@@ -592,7 +592,7 @@ concrete incompatibility.
 | RPK descriptor/property cache | #146 | **Deferred** | Changes `by_type_id` to lo16 and `find_entry` semantics plus payload/RSD caches and a `generation()`; must be designed against the B4.1.2 strict-resolution contract. Phase 3.1. |
 | GC finalizer/heap lookup | #200 | **Deferred** | 172 lines of `gc.cpp`; needs its own reachability/finalizer evidence against `VM_GC.md`. Phase 3.2. |
 | Point/spot light system, street and car lighting, shadows, AO, HDR, reflections | #235, #237, #279 | **Rejected** | Out of scope by instruction: this tree keeps `LIGHTING_AUDIT.md` semantics and the L2 investigation; no external render architecture is imported. |
-| `Painter` replacement | #206 | **Rejected** | Would replace the legacy Painter and pre-empt the B4/A-series painter architecture. |
+| Legacy `Painter` | #206 | **Accepted** (policy changed) | The legacy painter's functionality is needed and a second painter is planned for PBR, so re-deriving this one would be wasted work. Taken as `paint_texture.{hpp,cpp}` + the hooks in `part_runtime.cpp`; the A-series contract stays the reference for what the legacy path must do. |
 | JSON save format | #213 | **Rejected** | The save format is a closed contract; U1-B2 only made the writer atomic. |
 | Cinepak / FMOD | #219 / #229 | **Rejected** | Separate multimedia projects with external dependencies. |
 | Binary `Garage.class` | #162 | **Rejected** | Requires the exact SHA-256 of the installed `Garage.class`; upstream itself states the shipped `Garage.java` order was correct and the defect was in the MWM class. Nothing to verify without the hash, so nothing was copied. |

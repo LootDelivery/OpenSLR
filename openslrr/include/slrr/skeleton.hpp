@@ -14,8 +14,10 @@ struct ScxGeometry;
 class RpkIndex;
 
 // BON and SKL share this text record. Positions stay in file centimetres.
-// The render's declared SKL is the skin bind. A clip's sibling BON only
-// supplies the bone length used to scale a matrixdata direction.
+// The render's declared SKL is the skin bind. A render that declares none
+// binds the BON next to its SCX (stock spring/shock absorber rigs). A clip's
+// sibling BON only supplies the bone length used to scale a matrixdata
+// direction.
 struct SkeletonBone {
   std::string name;
   int parent = -1;
@@ -43,6 +45,9 @@ inline bool clip_parse(const uint8_t* data, size_t size, Clip* out, std::string*
 // Column-major 4x4 locals and worlds, centimetres, one bone per 16 floats.
 void skeleton_local_bind(const Skeleton& skeleton, float* locals);
 void skeleton_world(const Skeleton& skeleton, const float* locals, float* worlds);
+// One bone's bind-pose world matrix, without scratch buffers. False when
+// `bone` is out of range.
+bool skeleton_bind_world(const Skeleton& skeleton, int bone, float* out);
 
 // Replaces the local matrix of each bone that has a track. Other bones are
 // left as the caller wrote them. Translation is direction * bone length,
@@ -62,6 +67,8 @@ int skeleton_skin_palette(const Skeleton& skeleton, const float* worlds,
 
 // Per-render pose. Keys are the script objects, not GameRefState addresses.
 void character_forget(void* key);
+// Main-loop simulation clock, frozen by pause/timeWarp(0).
+void character_set_sim_time(double seconds);
 void character_forget_all();
 
 // Posed mesh while a clip or a bone override is active. Null keeps the
@@ -74,6 +81,13 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
 // Returns 0 when the render has no skeleton. `out` is column-major.
 int character_skin_palette(void* key, int32_t type_id, const RpkIndex& packs,
                            float* out, int capacity);
+// The same in two steps, for the job pool (#268). character_skin_prepare runs
+// on the host thread (it may load the skeleton) and returns null when the
+// render has no skeleton. character_skin_palette_prepared touches only that
+// character and reads its immutable skeleton and clip, so jobs may run it for
+// different characters at once.
+void* character_skin_prepare(void* key, int32_t type_id, const RpkIndex& packs);
+int character_skin_palette_prepared(void* prepared, float* out, int capacity);
 
 // Skeleton index, or 0 when the render has no matching bone. Never negative.
 int character_bone_id(void* key, int32_t type_id, const RpkIndex& packs,
@@ -96,6 +110,16 @@ bool character_align_axis(void* key, int32_t type_id, const RpkIndex& packs,
 bool character_solve_limb(void* key, int32_t type_id, const RpkIndex& packs,
                           int upper, int lower, int end, const float target_cm[3],
                           const float pole[3]);
+// Put `bone`'s origin at `position_m` (render-local metres) with its bind
+// orientation. A child bone is solved against its parent's current pose.
+// False when the render has no such bone. Linked suspension renders use it
+// to pin bone00/bone01 on their two anchors.
+bool character_place_bone(void* key, int32_t type_id, const RpkIndex& packs, int bone,
+                          const float position_m[3]);
+// Scale `bone` (and so its children) about its joint, from its current
+// override or its bind pose. A tiny scale hides the skin it carries.
+bool character_scale_bone(void* key, int32_t type_id, const RpkIndex& packs, int bone,
+                          float scale);
 // Drop bone overrides so the next aim starts from the bind pose. A limb solved
 // from last frame's result shrinks, because the measured bone length drifts.
 void character_reset_pose(void* key);
