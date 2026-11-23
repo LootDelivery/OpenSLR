@@ -602,9 +602,20 @@ of this class, which is **7.7 and 9.9 bar** -- factors of 1.75 and 2.25 over wha
 produce. That is the "weak engine", quantified, and it is the same 1.76/2.25 the closed
 recovery predicted from the boost chain.
 
+**Settled, 2026-11-15: the sweep was fine, the conversion was not.** Reading
+`0x004b7020` and `0x004b77f0` found three lines that did not match: the torque carried
+`/(4*pi)` where the original carries `*0.125` (1.5708x), and friction was subtracted
+from the torque where the original's table is gross torque and friction only ever leaves
+the power figure (`rpm^3*2e-8` watts). Everything else -- burn, wall loss, intake and
+exhaust blending, the work integral, `prepare()` -- already matched line for line.
+Corrected, the MC GT reads **359 Nm** where it read 225, and it spins its wheels.
+Details in `CAR_MODEL_RECOVERY.md` 14.
+
+What follows was the road to that answer, kept because the heat response below is still
+unexplained and is the reason nobody should tune this generator by feel:
+
 The obvious repair is the charge heat: the burn is `dT = heat / c_v`, so 1 MJ/kg gives
-1400 K where a petrol-air charge carries about 2.8 MJ/kg. Scaling it does not work, and
-the reason is the real finding:
+1400 K where a petrol-air charge carries about 2.8 MJ/kg. Scaling it does not work:
 
 | heat scale | peak torque |
 |---|---|
