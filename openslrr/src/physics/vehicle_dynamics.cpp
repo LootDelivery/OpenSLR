@@ -807,18 +807,25 @@ void VehicleDynamics::step_drive() {
     // the engine. The engine may always flare above the driveline; it is only ever
     // pulled *up* to it, which is what a clutch does and what keeps a launch from
     // bogging.
-    // The original has no separately integrated crank while a gear is engaged:
-    // the engine turns with the driveline, so the tachometer follows the wheels and
-    // a spinning wheel flares it. An independently integrated crank sat at the
-    // limiter with the clutch slipping forever -- the car pulled away on a clutch
-    // that never locked.
+    // Automatic gearbox: a torque converter, not a clutch. The engine's speed is
+    // set by the throttle down to the converter's stall point and only then by the
+    // driveline, which is why flooring it flares the revs instead of dragging them
+    // up with road speed. Two earlier attempts failed here: a rigid link made the
+    // tachometer a copy of road speed (full throttle read as a slow squeeze), and a
+    // slip-proportional clutch had the engine locked almost at once, because
+    // ClutchF 500 is more than the engine makes.
+    const double stall_rpm =
+        drive.idle + (drive.limit - drive.idle) * 0.45 * std::clamp(gas, 0.0, 1.0);
     const double driveline_omega = std::abs(shaft * ratio);
-    const double idle_omega = drive.idle / rpm_per_rad;
-    engine_omega = std::clamp(std::max(driveline_omega, idle_omega), 0.0,
+    const double target = std::max(driveline_omega, stall_rpm / rpm_per_rad);
+    // The converter takes a moment to reach its stall speed, then holds there.
+    const double flare = 1.0 - std::exp(-timestep / .09);
+    engine_omega = std::clamp(engine_omega + (target - engine_omega) * flare,
+                              std::max(0.0, drive.idle * .5 / rpm_per_rad),
                               drive.limit * 1.02 / rpm_per_rad);
-    // `drive.clutch` is engagement here (1 = engaged), the complement of the
-    // pedal the original multiplies by.
-    const double requested = drive.torque(std::max(rpm, drive.idle)) * gas;
+    // Full engine torque at the speed it is actually turning, capped by what the
+    // gearbox can carry. `drive.clutch` is engagement here (1 = engaged).
+    const double requested = drive.torque(std::max(engine_omega * rpm_per_rad, drive.idle)) * gas;
     const double transmitted =
         std::min(std::max(0.0, requested) * std::clamp(drive.clutch, 0.0, 1.0),
                  std::max(0.0, drive.clutch_force));

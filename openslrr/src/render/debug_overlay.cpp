@@ -131,6 +131,14 @@ void draw_tuning(Jvm* vm) {
     bool original_drive = host_game_options().driving.original_drive;
     if (ImGui::Checkbox("Original drive coupling", &original_drive))
       host_game_options_set_original_drive(*vm, original_drive);
+    ImGui::SameLine();
+    bool drive_hud = host_game_options().driving.drive_hud;
+    if (ImGui::Checkbox("Drive readout", &drive_hud)) {
+      auto driving = host_game_options().driving;
+      driving.drive_hud = drive_hud;
+      host_game_options_set_drive_hud(*vm, drive_hud);
+    }
+    ImGui::SetItemTooltip("Speed, rpm and gear in the corner while driving.");
     ImGui::SetItemTooltip("On by default. Thrust from the engine torque with ClutchF "
                           "capping the clutch and no limit on the engine -- the "
                           "original's contract. Off: the host's crank-inertia slip "
@@ -347,9 +355,44 @@ void DebugOverlay::draw_vehicle_tab(std::span<Object* const> vehicles) {
   else ImGui::TextUnformatted("No vehicle in this section.");
 }
 
+// Driving readout: the three numbers a driver reads while moving. Drawn without
+// the debug window, in the corner, with no decoration and no input.
+void DebugOverlay::draw_drive_hud(std::span<Object* const> vehicles) {
+  Object* chassis = nullptr;
+  if (vehicles.empty() && jvm_) {
+    const auto player = jvm_->get_static("java.game.GameLogic", "player");
+    if (player.tag == ValueTag::Obj && player.v.o) {
+      const auto field = player.v.o->fields.find("car");
+      if (field != player.v.o->fields.end() && field->second.tag == ValueTag::Obj)
+        chassis = part_debug_chassis(field->second.v.o);
+    }
+  } else if (!vehicles.empty()) {
+    chassis = vehicles.front();
+  }
+  PartPhysicsState state;
+  if (!chassis || !part_physics_state(chassis, state))
+    return;
+  const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+                                 ImGuiWindowFlags_NoInputs |
+                                 ImGuiWindowFlags_NoMove |
+                                 ImGuiWindowFlags_AlwaysAutoResize |
+                                 ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_NoFocusOnAppearing |
+                                 ImGuiWindowFlags_NoBringToFrontOnFocus;
+  ImGui::SetNextWindowPos(ImVec2(12.f, 12.f), ImGuiCond_Always);
+  ImGui::SetNextWindowBgAlpha(.45f);
+  if (ImGui::Begin("##drive-hud", nullptr, flags)) {
+    ImGui::Text("%.0f km/h", state.speed_kph);
+    ImGui::Text("%.0f rpm", state.rpm);
+    ImGui::Text("gear %d", state.gear);
+  }
+  ImGui::End();
+}
+
 void DebugOverlay::draw(HWND hwnd, uint16_t width, uint16_t height, const char* reflection_status,
                         std::span<Object* const> vehicles) {
-  if (!open_) return;
+  const bool hud = host_game_options().driving.drive_hud;
+  if (!open_ && !hud) return;
   if (!initialized_) {
     imguiCreate();
     ImGui::GetIO().IniFilename = nullptr;
@@ -363,6 +406,11 @@ void DebugOverlay::draw(HWND hwnd, uint16_t width, uint16_t height, const char* 
   ImGui::SetNextWindowSize(ImVec2(std::min(640.f, width * .9f),
                                  std::min(380.f, height * .7f)), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowPos(ImVec2(20, 100), ImGuiCond_FirstUseEver);
+  if (!open_) {
+    if (hud) draw_drive_hud(vehicles);
+    imguiEndFrame();
+    return;
+  }
   if (ImGui::Begin("OpenSLRR Debug", &open_)) {
     ImGui::Text("Section: %s", sections_ ? sections_->actual_name().c_str() : "(none)");
     if (ImGui::BeginTabBar("debug-tabs")) {

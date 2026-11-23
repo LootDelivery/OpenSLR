@@ -205,3 +205,46 @@ torque not holding the car back.
 `test_vehicle_dynamics` (35 cases) still runs the host model, because
 `DriveInput::faithful` defaults to false there: the solver's own suite keeps
 pinning what upstream wrote, and the game chooses the other path explicitly.
+
+## 11. Why "as if I am pressing the pedal slowly", and the converter
+
+Report: "the revs climb smoothly, very smoothly -- not like full throttle, like I
+am gradually pressing the gas". That was the rigid coupling from section 10, and it
+was the third attempt at this one coupling:
+
+1. **Crank integration with a fixed transmitted torque.** The engine sat at the
+   limiter with the clutch slipping forever; the car pulled away on a clutch that
+   never locked, and first gear lasted past 50 km/h.
+2. **Rigid link -- engine turns with the driveline.** Physically defensible here,
+   because `ClutchF` 500 exceeds what the engine makes (225 Nm), so a real clutch
+   would hold. But the tachometer then becomes a copy of road speed: flooring it
+   drags the revs up exactly as fast as the car accelerates. That is the report.
+3. **Torque converter.** The gearbox is automatic (`player_transmission = 1` in the
+   game's own settings), and an automatic's engine speed is set by the throttle
+   down to the converter's stall point, and only above that by the driveline:
+
+```
+stall_rpm = idle + (limit - idle) * 0.45 * throttle      // 0.45 is host tuning
+target    = max(driveline_rpm, stall_rpm)
+engine_rpm -> target                                    // 90 ms
+thrust    = min(torque(rpm) * throttle * engage, ClutchF) * ratio / radius
+```
+
+Now the revs answer the pedal, the converter holds them at its stall speed while the
+car is still slow, and once the wheels outrun the stall point the two turn together.
+The limiter is still the only ceiling. `tests/test_drive_faithful.cpp`, flat ground,
+full throttle from rest:
+
+| Coupling | rpm at 0.5 s | rpm reaches 60% of limit | 0-100 km/h | Top speed | Wheel slip |
+|---|---|---|---|---|---|
+| **converter (default)** | **4075** | **1.41 s** | **5.81 s** | 234.4 km/h | up to 6.90 m/s |
+| host crank-inertia | 2800 | 2.08 s | 7.48 s | 222.2 km/h | 0.30 m/s |
+
+Eight cases pin it, including the flare itself (`rpm at 0.5 s > 3000`, 60% of the
+limit in under two seconds), so a future change that makes the revs lazy again fails
+a test rather than needing a driver to notice.
+
+Also added: a driving readout in the corner -- speed, rpm and gear -- drawn with the
+debug window closed (`player_drivehud`, F12 "Drive readout", on by default), because
+the numbers this section is about had to be readable while driving rather than
+inferred from a log.

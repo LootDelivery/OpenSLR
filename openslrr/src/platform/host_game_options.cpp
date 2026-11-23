@@ -90,6 +90,7 @@ GameOptions read_options(Jvm& jvm) {
   options.driving.steering_help = std::clamp(read("player_steeringhelp", .666f), 0.f, 1.f);
   options.driving.launch_rpm = std::clamp(read("player_launchrpm", .4f), .1f, 1.f);
   options.driving.original_drive = integer("player_originaldrive", 1) != 0;
+  options.driving.drive_hud = integer("player_drivehud", 1) != 0;
   if (const char *forced = std::getenv("SLRR_DRIVE_MODEL"))
     options.driving.original_drive = std::string(forced) != "host";;
   // SLRR_LAUNCH_RPM is the A/B switch for the launch aid: one binary, two
@@ -208,6 +209,13 @@ bool host_commit_video_dialog(Jvm& jvm, Object* handler, int command) {
   jvm.invoke(handler->class_name, "changeMode", "(I)V",
              {Value::make_obj(handler), group->second}, false);
   return true;
+}
+
+void host_game_options_set_drive_hud(Jvm& jvm, bool show) {
+  if (!loaded) return;
+  jvm.set_static("java.util.Config", "player_drivehud",
+                 Value::make_int(show ? 1 : 0));
+  host_game_options_apply(jvm);
 }
 
 void host_game_options_set_original_drive(Jvm& jvm, bool original) {

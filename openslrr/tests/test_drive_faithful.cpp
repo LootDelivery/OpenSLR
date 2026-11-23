@@ -82,6 +82,12 @@ struct Trace {
   int top_gear = 0;
   double max_slip_per_s = 0; // wheel spin against road speed, m/s
   bool finite = true;
+  // The flare: how fast the tachometer answers the throttle. A rigid coupling --
+  // the engine turning with the driveline -- made this several seconds, which is
+  // what a driver described as "the revs climb as if I am pressing the pedal
+  // slowly".
+  double rpm_at_half_second = 0;
+  double flare_seconds = -1;  // time to reach 60% of the limit, or -1
 };
 
 Trace run_car(bool faithful, double seconds = 25) {
@@ -101,6 +107,10 @@ Trace run_car(bool faithful, double seconds = 25) {
     if (trace.hundred_kmh < 0 && kph >= 100)
       trace.hundred_kmh = t;
     if (t > 1) trace.max_rpm = std::max(trace.max_rpm, rpm);
+    if (trace.rpm_at_half_second == 0 && t >= .5)
+      trace.rpm_at_half_second = rpm;
+    if (trace.flare_seconds < 0 && rpm >= 7000 * .6)
+      trace.flare_seconds = t;
     trace.top_gear = std::max(trace.top_gear, car.gear);
     for (size_t i = 2; i < 4; ++i) {
       const double wheel_speed = std::abs(car.state[i].spin) * 0.31;
@@ -125,6 +135,9 @@ SLRR_TEST(faithful_coupling_is_not_slower_than_the_host_model) {
                  "max_rpm=%6.0f gear=%d slip=%.2f m/s\n",
                  label, trace.hundred_kmh, trace.top_kmh, trace.max_rpm,
                  trace.top_gear, trace.max_slip_per_s);
+    std::fprintf(stderr,
+                 "[drive_faithful] %-8s rpm@0.5s=%5.0f flare(60%%)=%.2fs\n",
+                 label, trace.rpm_at_half_second, trace.flare_seconds);
   }
   SLRR_REQUIRE(original.finite && host.finite);
   SLRR_REQUIRE(original.hundred_kmh > 0);
@@ -138,6 +151,16 @@ SLRR_TEST(full_throttle_reaches_a_hundred_kilometres_an_hour) {
   SLRR_REQUIRE(trace.finite);
   SLRR_REQUIRE(trace.hundred_kmh > 0);
   SLRR_REQUIRE(trace.hundred_kmh < 15.0);
+}
+
+// The tachometer answers the throttle: flooring it from rest must flare the revs
+// within a fraction of a second, not drag them up with road speed.
+SLRR_TEST(the_revs_flare_when_the_throttle_goes_down) {
+  const Trace trace = run_car(true);
+  SLRR_REQUIRE(trace.finite);
+  SLRR_REQUIRE(trace.flare_seconds > 0);
+  SLRR_REQUIRE(trace.flare_seconds < 2.0);
+  SLRR_REQUIRE(trace.rpm_at_half_second > 3000);
 }
 
 // The revs follow the driveline and the limiter is the only ceiling: never more
@@ -183,6 +206,7 @@ SLRR_TEST(a_clutch_force_above_the_engine_torque_does_not_hold_the_car_back) {
 int main() {
   const slrr::standalone::Test tests[] = {
       faithful_coupling_is_not_slower_than_the_host_model,
+      the_revs_flare_when_the_throttle_goes_down,
       full_throttle_reaches_a_hundred_kilometres_an_hour,
       the_engine_revs_without_an_invented_ceiling,
       the_gearbox_moves_through_the_gears,

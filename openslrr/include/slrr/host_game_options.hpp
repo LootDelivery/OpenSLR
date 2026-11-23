@@ -101,6 +101,8 @@ struct DrivingOptions {
   // ClutchF capping the clutch, no engine-speed hold. Off switches to the host's
   // crank-inertia slip model, which is what the solver's own tests pin.
   bool original_drive = true;
+  // A driving readout in the corner: speed, rpm and gear. Off hides it.
+  bool drive_hud = true;
   bool operator==(const DrivingOptions&) const = default;
 };
 struct GameOptions {
@@ -126,5 +128,7 @@ void host_game_options_set_steering_help(Jvm& jvm, float strength);
 void host_game_options_set_launch_rpm(Jvm& jvm, float fraction);
 // True: the original's drive coupling. False: the host's crank-inertia model.
 void host_game_options_set_original_drive(Jvm& jvm, bool original);
+// Show the corner speed/rpm/gear readout.
+void host_game_options_set_drive_hud(Jvm& jvm, bool show);
 void host_game_options_update(Jvm& jvm, bool force = false);
 }
