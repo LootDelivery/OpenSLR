@@ -582,6 +582,48 @@ branches set it to 1 both below shaft speed and at or above target, which contra
 itself under either reading of the polarity. Modelled as closed because the measurement
 says it is closed to within 1%. The regulator shape remains unported.
 
+### 12.5 The engine is weak because the sweep does not converge
+
+The driver's read on the MC GT -- "it is not as fast, it does not want to slide, there is
+no burnout" -- is not the driveline. The driveline now spins the wheels in the test
+stand. What the car lacks is torque, and the torque table comes out of the sweep.
+
+Measured state of the sweep for that engine:
+
+```
+cyl=8   swept=0.000809 m3 (6.5 L)   compression 9.05
+air 0.18 / limit 0.30        fuel 0.0148 / limit 0.06      <- not starved
+indicated 236.0 Nm   net 225.3 Nm
+```
+
+225 Nm over 6.5 L is an indicated mean effective pressure of **4.4 bar**. A real engine
+of that size makes 9 to 12. The game's own engine screen shows 396 and 506 Nm for a block
+of this class, which is **7.7 and 9.9 bar** -- factors of 1.75 and 2.25 over what we
+produce. That is the "weak engine", quantified, and it is the same 1.76/2.25 the closed
+recovery predicted from the boost chain.
+
+The obvious repair is the charge heat: the burn is `dT = heat / c_v`, so 1 MJ/kg gives
+1400 K where a petrol-air charge carries about 2.8 MJ/kg. Scaling it does not work, and
+the reason is the real finding:
+
+| heat scale | peak torque |
+|---|---|
+| x1.0 | 225.3 Nm |
+| x1.5 | **4352.2** Nm |
+| x2.0 | **1727.4** Nm |
+| x2.85 | **188.6** Nm |
+
+A sweep that answers 186, 1727 and 4352 Nm to a smoothly rising input is not converging.
+So the engine parameters cannot be cranked into agreement -- that only chooses which
+nonsense number appears. The convergence loop is there (10 repeats, 5% band, as
+recovered) but the cycle it is iterating is not the original's: the fuel heat is scaled
+before `mixture()` and both the effective heat and the bank heat move together, so the
+terms the cycle balances against each other are not independent.
+
+Next step is a line-by-line comparison of the sweep with `0x004B6BF0`, `0x004B7020` and
+`0x004B77F0` (offered and not yet done). The numbers to check against are above; the
+target is 7.7 to 9.9 bar of indicated mean pressure on this block.
+
 ### 12.2 The engine's own numbers, from the game's engine screen
 
 Same engine, with and without a supercharger, as the game itself reports them:
