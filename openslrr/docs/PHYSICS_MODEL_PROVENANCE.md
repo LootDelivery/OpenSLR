@@ -773,6 +773,40 @@ through a 500 Nm clutch at 8.61:1 is 13.5 kN at the contact patch against 21.2 k
 grip, and at the recovered 628 Nm peak 17.0 kN -- i.e. under the tyre either way. Whatever
 `clutch` does, first gear is traction limited in this car, and that is arithmetic, not feel.
 
+### 12.9 `car+0x1DBC` is monotone: every writer only raises it
+
+The auto-clutch regulator `0x0044DD70` was ported in full, both ways, and it does not
+stand up -- because of what the writers actually are. Exhaustive list of every function in
+the decompiled corpus that writes `car+0x1DBC`:
+
+| function | write |
+| --- | --- |
+| `0x0044DD70` (auto-clutch) | ramps toward `wanted`, guarded by `if (clutch <= wanted)` and clamped to `wanted >= clutch` -- **only ever raises** |
+| `0x0044E120` (anti-wheelspin) | `clutch = 1 - (1-clutch)*f` with `f <= 1` -- algebraically `>= clutch` for `clutch <= 1`, so **also only raises** |
+| `0x0044D330`, `0x00447830` | force `0x3f800000` = **1.0** (fully disengaged) |
+
+Nothing lowers it. The field is monotone non-decreasing, and `1.0` is disengaged, so a car
+that once reaches 1.0 stays disengaged until something resets the whole car object.
+
+Which means the trajectory this port was built on -- `car+0x1DBC` going `0 -> 0.312 ->
+0.357 -> 0` over 235 ms of a launch -- **cannot have been that field.** A field that only
+rises does not return to zero in 235 ms. One of the two is mislabelled, and the monotone
+writers say it is the reading, not the writers: `0x1DBC` is some clutch quantity that
+saturates, while the value seen oscillating in the live trace is a different offset (the
+regulator's own previous-value field `car+0x1F44`, which is written from `0x1DBC` every
+frame, is the obvious candidate to have been confused with it).
+
+Measured consequence of porting it anyway, for the record: with the regulator alone the
+car reaches **51.6 km/h** and stops -- the clutch opens and the launch never re-engages.
+Adding `0x0044E120` alongside makes it **28.0 km/h**, worse, because the anti-wheelspin only
+acts on driven-wheel speed above `0.2/dt` and a standing launch never gets there. Both
+reverted.
+
+What this changes about 12.8: the missing piece is still `clutch`, but it is not obtained by
+porting `0x0044DD70` as if `0x1DBC` were a launch regulator with a round trip. The next
+move is to re-read the live row against the field map -- find which `car+` offset actually
+returns to zero over those 235 ms -- before writing any more of this.
+
 ### 12.2 The engine's own numbers, from the game's engine screen
 
 Same engine, with and without a supercharger, as the game itself reports them:
