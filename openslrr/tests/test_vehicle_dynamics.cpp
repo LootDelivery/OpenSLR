@@ -249,20 +249,29 @@ SLRR_TEST(stored_instant_centres_do_not_change_the_intended_solver) {
   SLRR_REQUIRE(std::abs(roll[1] - roll[0]) < 1e-12);
 }
 
-SLRR_TEST(more_grip_corners_harder) {
-  double lateral[2];
+// A grippier tyre makes more force under the same pedal. The test used to corner
+// under braking and compare yaw rate x speed, which orders two cars by their
+// speed rather than their grip: a grippier tyre brakes harder, arrives slower,
+// and the product came out lower. Braking distance is the same question with
+// nothing else in it.
+SLRR_TEST(more_grip_stops_shorter) {
+  double distance[2];
   for (int i = 0; i < 2; ++i) {
     Car car(true, i ? 1.25 : 1);
     car.run(1, 0, 0, 0);
     car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -20});
     for (auto& wheel : car.dynamics.state) wheel.spin = 20 / .31;
-    car.run(3, .4, 0, .2);
-    const auto omega = car.dynamics.body.omega();
-    lateral[i] = std::abs(omega.y) * car.speed();
+    const auto from = car.dynamics.body.position;
+    car.run(3, 0, 0, .2);
+    const auto to = car.dynamics.body.position;
+    distance[i] = std::hypot(to.x - from.x, to.z - from.z);
   }
-  SLRR_REQUIRE(lateral[1] > lateral[0] * 1.08);
+  // More grip, less road used to stop.
+  SLRR_REQUIRE(distance[1] < distance[0] * .98);
+  std::fprintf(stderr,
+               "[grip] stopping distance %.2f m at grip 1.00 vs %.2f m at 1.25\n",
+               distance[0], distance[1]);
 }
-
 SLRR_TEST(high_grip_braking_remains_finite_with_legacy_centre_fields) {
   // Legacy centre fields remain inert even with extreme values. Hard
   // braking with a grippy tyre must leave the support state finite.
@@ -878,7 +887,7 @@ int main() {
       parked_car_settles_without_vibration,
       full_lock_at_speed_slides_instead_of_rolling_over,
       stored_instant_centres_do_not_change_the_intended_solver,
-      more_grip_corners_harder,
+      more_grip_stops_shorter,
       high_grip_braking_remains_finite_with_legacy_centre_fields,
       a_brake_stronger_than_the_drive_holds_its_wheels,
       the_engine_beating_weak_rear_brakes_spins_the_driven_wheels,

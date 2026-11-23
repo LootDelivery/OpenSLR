@@ -306,7 +306,7 @@ below 42% of the limit, which a converter at stall (80%) never does.
 coupled_rpm = |road_shaft * ratios[gear]| * 9.549   // the driveline, not the engine
 up_rpm      = limit * (.58 + .40 * throttle)        // full throttle -> 0.98 * limit
 down_rpm    = limit * (.34 + .16 * throttle)
-upshift     if shaft > 2 and throttle > .05 and coupled_rpm > up_rpm
+upshift     if shaft > 2 and coupled_rpm > up_rpm
 downshift   if gear > 1 and coupled_rpm < down_rpm and the lower gear stays under
             .95 * limit
 ```
@@ -315,8 +315,10 @@ Three smaller defects fell out of the same block and are fixed with it:
 
 - `if (shaft <= 2) return;` skipped the whole schedule at a standstill. That is the
   literal reason a stopped car stayed in second. Only the upshift needs motion now.
-- The schedule upshifted on a **closed throttle** -- accelerating in the same gear
-  while braking, a car came to rest in fifth in the test harness.
+- The schedule upshifted on engine speed with a **closed throttle**, so braking to a
+  stop walked a car up to fifth in the harness. Judged on the driveline it cannot:
+  coupled_rpm falls with the car, so an upshift while coasting at speed stays one
+  upshift instead of a climb.
 - Downshifts now check that the lower gear would not exceed the limit before taking
   it.
 

@@ -713,10 +713,12 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
                  shift_time_);
   const double up_rpm = drive.limit * (.58 + .40 * std::clamp(drive.throttle, 0.0, 1.0));
   const double down_rpm = drive.limit * (.34 + .16 * std::clamp(drive.throttle, 0.0, 1.0));
-  // Never upshift on a closed throttle: that is engine braking, and shifting up
-  // during a stop was how a car parked in fifth.
-  if (shaft > 2 && drive.throttle > .05 && gear < drive.gears &&
-      drive.ratios[gear + 1] > 0 && coupled_rpm > up_rpm) {
+  // The upshift is judged on the driveline alone, closed throttle included: an
+  // automatic upshifts while coasting at speed too, and because coupled_rpm falls
+  // with the car it cannot walk up through the gears during a stop the way a
+  // schedule built on engine speed did.
+  if (shaft > 2 && gear < drive.gears && drive.ratios[gear + 1] > 0 &&
+      coupled_rpm > up_rpm) {
     ++gear;
     shift_time_ = .12;
   } else if (gear > 1 && coupled_rpm < down_rpm &&
