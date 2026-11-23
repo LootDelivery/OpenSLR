@@ -894,7 +894,12 @@ Measured after both, in the stand (`a_spin_that_stops_the_driven_wheels_does_not
 | speed after 2 s | 1.5 m/s | 4.1 m/s |
 
 The test asserts the mechanism (`brake_service() < .05`), not a speed threshold, and is
-registered as test 17. Note which fix each source supports: the anti-stall gate is proven by
+registered as test 17.
+
+**Confirmed by the driver on the 180-degree test case: "it works perfectly now."** That is
+the acceptance gate for this whole axis -- the stand could not reproduce it (its velocity
+reversal is instantaneous, not a rotating car), and no bench number would have caught a
+throttle that the game itself was zeroing. Note which fix each source supports: the anti-stall gate is proven by
 that test (it fails with the gate disabled), while the direction-brake gate is proven by the
 live row -- the fixture's instantaneous velocity reversal does not satisfy
 `forward_speed < -1` the way a real, rotating car does, so the fixture cannot carry it.
