@@ -1,10 +1,20 @@
 #pragma once
 
+#include <array>
+
 namespace slrr::physics {
 
 // The values a tyre script writes through WheelRef (stock Tyre.java), in the
 // units that script uses. Defaults are the stock Baiern 205/55 sport tyre.
 struct TireParameters {
+  // The 17 slots the script writes through WheelRef.setPacejka (wheel+0x1E8 on the
+  // EXE side), in order. Slots 0..10 are C0..C10 of the force law in
+  // CAR_MODEL_RECOVERY.md 5.3; the named fields below are the same values under
+  // their script names -- setSliction is slot 0, setFriction slot 2, setStiffness
+  // slot 4, setMaxLoad slot 11, setFrictn_x slot 12, setLoadSmooth slot 14.
+  // Defaults are Wheel.java's, i.e. the set used when a wheel carries no tyre.
+  std::array<double, 17> pacejka{1.4, 0, 1.49, 0, 15.2, 0, 0, 0, -1, 0,
+                                 0, 8000, 1, 0.015, 0.4, 0, 0};
   // setFriction: compound/width input, divided by the reference tyre's
   // default and clamped to scale grip; not itself the resulting peak mu.
   double friction = 1.76863;
