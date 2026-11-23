@@ -703,6 +703,22 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
     shift_time_ = .22;
   }
 
+  double road_radius = 0;
+  for (size_t i = 0; i < wheels.size(); ++i)
+    if (wheels[i].enabled && std::abs(drive.wheels[i].weight) <= 1e-3 && wheels[i].radius > 0) {
+      road_radius = wheels[i].radius;
+      break;
+    }
+  const double road_kph =
+      std::abs(road_shaft) * (road_radius > 0 ? road_radius : .31) * 3.6;
+  if (road_kph < 2.0 && gear > 1) {
+    // A stopped car is in first: no lock, no conditions. This is what the reference
+    // row shows at a standstill and what the driver asked for.
+    gear = 1;
+    shift_time_ = .1;
+    return;
+  }
+
   if ((!drive.automatic_shift && !drive.automatic_first) || !engine_running ||
       shift_time_ > 0 || drive.clutch < .5)
     return;
@@ -731,14 +747,28 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
                  "rpm=%.0f st=%.2f\n",
                  gear, shaft, road_shaft, drive.throttle, coupled_rpm, rpm,
                  shift_time_);
+  // The original blocks the shift while the driven wheels are spinning
+  // (0x0044D410, average |wheel+0x11C| over the driven wheels). The measured launch
+  // row shows why it matters: the engine sat on the limiter in first for the whole
+  // 2.5 s of the burn-out and never shifted. Judged against the car's own speed, so a
+  // spinning wheel is the only thing that can trip it.
+  double driven_spin = 0, driven_count = 0;
+  for (size_t i = 0; i < wheels.size(); ++i)
+    if (wheels[i].enabled && std::abs(drive.wheels[i].weight) > 1e-3) {
+      driven_spin += std::abs(state[i].spin);
+      ++driven_count;
+    }
+  const bool spinning =
+      driven_count > 0 &&
+      driven_spin / driven_count > std::abs(road_shaft) * 1.15 + 1.0;
   const double up_rpm = drive.limit * (.58 + .40 * std::clamp(drive.throttle, 0.0, 1.0));
   const double down_rpm = drive.limit * (.34 + .16 * std::clamp(drive.throttle, 0.0, 1.0));
   // The upshift is judged on the driveline alone, closed throttle included: an
   // automatic upshifts while coasting at speed too, and because coupled_rpm falls
   // with the car it cannot walk up through the gears during a stop the way a
   // schedule built on engine speed did.
-  if (shaft > 2 && gear < drive.gears && drive.ratios[gear + 1] > 0 &&
-      coupled_rpm > up_rpm) {
+  if (shaft > 2 && !spinning && drive.brake < .3 && gear < drive.gears &&
+      drive.ratios[gear + 1] > 0 && coupled_rpm > up_rpm) {
     ++gear;
     shift_time_ = .12;
   } else if (gear > 1 && coupled_rpm < down_rpm &&
@@ -837,90 +867,103 @@ void VehicleDynamics::step_drive() {
   // second WOT friction loss. Fuel cut leaves mechanical friction active.
   const double net = combustion_torque + (starting ? 4 * drive.starter : 0) -
                      friction - pumping * (1 - gas);
-  engine_omega = std::max(0.0, engine_omega + net * timestep / drive.inertia);
+  // Recovered 4.3: the original writes `rpm += M/J_engine` with no `dt` in it, and the
+  // step IS the frame. Measured on a live launch it is ~51 000 rpm/min per second --
+  // 1000 -> 7430 rpm in 125 ms -- which no dt-scaled integration produces. That is the
+  // whole of "the revs are lazy": our engine was 60x too slow, and the converter's stall
+  // point was papering over it.
+  engine_omega = std::max(0.0,
+                          engine_omega + net * (drive.faithful ? 1.0 : timestep) /
+                                            drive.inertia);
+  // Per-step integration is violent in the other direction too: with the throttle
+  // shut, friction alone takes the engine to zero in a single step, and a stopped
+  // engine stops the gearbox schedule from running at all (it returned early and the
+  // car sat in third). The original holds idle through its own governor; keeping the
+  // recovered idle speed is the smallest honest stand-in for it.
+  if (drive.faithful && gas <= .05 && drive.idle > 0)
+    engine_omega = std::max(engine_omega, drive.idle * .98 / rpm_per_rad);
 
   double drive_impulse = 0;
   if (drive.faithful && engine_running && weights > 0 && ratio != 0 &&
       shift_time_ == 0 && !direction_brake && gear != 0 && drive.clutch > .01) {
-    // The original's coupling, from the recovered contract: the gearbox passes the
-    // engine's torque, the clutch release scales it, and ClutchF caps what the
-    // clutch can carry. There is no engine-speed hold, so full throttle gives the
-    // whole curve and whatever the tyres cannot take is slip rather than a limit on
-    // the engine. The engine may always flare above the driveline; it is only ever
-    // pulled *up* to it, which is what a clutch does and what keeps a launch from
-    // bogging.
-    // Automatic gearbox: a torque converter, not a clutch. The engine's speed is
-    // set by the throttle down to the converter's stall point and only then by the
-    // driveline, which is why flooring it flares the revs instead of dragging them
-    // up with road speed. Two earlier attempts failed here: a rigid link made the
-    // tachometer a copy of road speed (full throttle read as a slow squeeze), and a
-    // slip-proportional clutch had the engine locked almost at once, because
-    // ClutchF 500 is more than the engine makes.
-    const double stall_rpm =
-        drive.idle + (drive.limit - drive.idle) *
-                         std::clamp(drive.converter_stall, 0.0, 1.0) *
-                         std::clamp(gas, 0.0, 1.0);
-    const double driveline_omega = std::abs(shaft * ratio);
-    const double target = std::max(driveline_omega, stall_rpm / rpm_per_rad);
-    // The converter takes a moment to reach its stall speed, then holds there.
-    const double flare = 1.0 - std::exp(-timestep / .09);
-    engine_omega = std::clamp(engine_omega + (target - engine_omega) * flare,
-                              std::max(0.0, drive.idle * .5 / rpm_per_rad),
-                              drive.limit * 1.02 / rpm_per_rad);
-    // What the driveline actually carries, from the recovered model (3.5, 4, and the
-    // closed-answer pass on 0x1E28):
+    // The recovered driveline, written to reproduce the measured launch row
+    // (docs/PHYSICS_MODEL_PROVENANCE.md 12.4):
     //
-    //   M           = torque_table(rpm)      // linearly interpolated, zero outside
-    //   transmitted = (M * throttle - friction) * engage      // engage = 1 - clutch
+    //   wheel_shaft = sum(spin * C4 * drive) / sum|drive|     // rad/s, C4 = 1
+    //   shaft       = wheel_shaft * total_ratio                // engine side
+    //   inv_d       = J_drive / ratio^2
+    //   k           = inv_d / (K*J_engine + inv_d)
+    //   gap         = rpm_free - shaft
+    //   shaft'      = shaft      + 0.999*(1-k)*gap             // the light side moves most
+    //   rpm'        = rpm_free   - 0.999*k*gap
+    //   spin_i      = spin_i + (shaft'/ratio - wheel_shaft)*|drive_i|/sum|drive|
     //
-    // The `torque_at_clutch = 2*M*throttle` of the original is NOT this: it is written
-    // to car+0x1E28 and read in exactly one place, the transmission wear formula
-    // (0x0043C260). Two commits ago I took that two for drive torque and reported that
-    // half of every engine's output was being thrown away -- it was not, and the two is
-    // gone from this path. The driveline sees M.
+    // rpm_free is the engine after the step above. J_engine and J_drive come from the
+    // car (4.87 / 500 on the measured one, 13.5 / 965 on another); K is 6.0 in memory,
+    // 4.0 in the file, because the mod patches .data at start-up.
     //
-    // No ClutchF ceiling either: the original reads Chassis.ClutchF into physics+0xC8
-    // and never touches it in the physics step (3.8).
-    const double engine_table = drive.torque(std::max(engine_omega * rpm_per_rad, drive.idle));
-    const double engine_torque = std::max(0.0, engine_table);
-    const double engine_brake = original_engine_friction(
-        engine_omega * rpm_per_rad, drive.max_rpm, drive.friction_fwd,
-        drive.friction_rev, drive.inertia);
-    // The friction acts on the closed part of the throttle: at full throttle the engine
-    // makes power, with the throttle shut this is the only thing slowing the car in
-    // gear. Which of the two the table is net of is still open (recovery 11).
-    const double transmitted =
-        (engine_torque * gas - engine_brake * (1.0 - gas)) *
-        std::clamp(drive.clutch, 0.0, 1.0);
-    drive_impulse = transmitted * ratio * timestep;
-    // The driveline cannot command more wheel speed than the engine turns it to:
-    // above that the engine would have to be spinning faster than it is. Without
-    // this ceiling the wheel took the whole torque*ratio impulse with nothing
-    // reacting, so a strong engine drove the wheel out to thousands of m/s of slip
-    // and the car was dragged by a saturated tyre -- acceleration set by grip, and
-    // engine power invisible. That is the shape of "the V8 feels like an inline
-    // four", measured.
-    const double wheel_ceiling =
-        std::abs(ratio) > 1e-6 ? engine_omega / std::abs(ratio) : 0.0;
+    // The clutch is a regulator in the original, but it never actually slips: measured
+    // across the launch the engine/shaft ratio held 13.05..13.20 against a 13.18 ratio,
+    // under 1%, while car+0x1DBC moved 0 -> 0.357 -> 0. So the driveline is modelled
+    // locked, and what slips is the tyre -- which is what the row shows: the driven
+    // wheels run 0 -> 538 rpm in 125 ms with the car still standing.
+    //
+    // The one guard kept: a standing car with the engine at idle must not drag the
+    // engine to a stop, so below idle with no shaft speed the link is open.
+
+    double wh_sum = 0, wh_abs = 0;
+    for (size_t i = 0; i < wheels.size(); ++i) {
+      const double d = drive.wheels[i].weight;
+      if (!wheels[i].enabled || std::abs(d) <= 1e-3) continue;
+      wh_sum += state[i].spin * d;
+      wh_abs += std::abs(d);
+    }
+    const double wheel_shaft = wh_abs > 1e-9 ? wh_sum / wh_abs : 0.0;
+    const double shaft_omega = wheel_shaft * ratio;
+    const double inv_d = drive.driveline_inertia > 1e-9
+                             ? drive.driveline_inertia / (ratio * ratio)
+                             : 0.0;
+    const double j_engine = std::max(1e-9, drive.inertia);
+    const double coupling_k = inv_d / (drive.coupling_ratio * j_engine + inv_d);
+    const double gap = engine_omega - shaft_omega;
+    constexpr double exchange = .9990000128746033;
+    // Two states open the link, both of them places where a closed one would either
+    // stall the engine or hold the car against its own brakes:
+    //   - the engine at idle with no shaft speed (standing still, not driving off);
+    //   - braking at low speed, where the driveline would otherwise keep the wheels
+    //     turning at idle speed and the car would creep and never stop.
+    double engage = 1.0;
+    {
+      const double engine_rpm = engine_omega * rpm_per_rad;
+      const double shaft_rpm = std::abs(shaft_omega) * rpm_per_rad;
+      const bool idle_and_stopped =
+          engine_rpm <= drive.idle * 1.02 && shaft_rpm < drive.idle * .5;
+      const bool braking_at_rest = drive.brake > .2 && engine_rpm < drive.idle * 1.3 &&
+                                   shaft_rpm < drive.idle * 1.3;
+      if (idle_and_stopped || braking_at_rest) engage = 0.0;
+    }
+    const double shaft_new = shaft_omega + engage * exchange * (1.0 - coupling_k) * gap;
+    const double rpm_new = engine_omega - engage * exchange * coupling_k * gap;
+    const double wheel_step = shaft_new / ratio - wheel_shaft;
+    if (wh_abs > 1e-9)
+      for (size_t i = 0; i < wheels.size(); ++i) {
+        const double d = drive.wheels[i].weight;
+        if (!wheels[i].enabled || std::abs(d) <= 1e-3) continue;
+        state[i].spin += wheel_step * (std::abs(d) / wh_abs);
+      }
+    engine_omega = std::clamp(rpm_new, 0.0, drive.limit * 1.05 / rpm_per_rad);
+    drive_impulse = coupling_k * gap * j_engine * ratio;
     {
       static const bool trace = std::getenv("SLRR_COUPLING_TRACE") != nullptr;
       static int counter = 0;
-      if (trace && (counter++ % 40) == 0)
+      if (trace && (counter++ % 6) == 0)
         std::fprintf(stderr,
-                     "[coupling] rpm=%.0f table=%.1f brake=%.1f "
-                     "transmitted=%.1f ceiling=%.1f spin=%.1f gear=%d gas=%.2f\n",
-                     engine_omega * rpm_per_rad, engine_table, engine_brake,
-                     transmitted, wheel_ceiling,
-                     state[2].spin, gear, gas);
+                     "[coupling] rpm=%.0f shaft=%.0f k=%.3f engage=%.2f rpm_free=%.0f "
+                     "gear=%d gas=%.2f w0=%.0f w2=%.0f\n",
+                     engine_omega * rpm_per_rad, shaft_new * rpm_per_rad, coupling_k,
+                     engage, engine_omega * rpm_per_rad, gear, gas,
+                     state[0].spin * rpm_per_rad, state[2].spin * rpm_per_rad);
     }
-    for (size_t i = 0; i < wheels.size(); ++i)
-      if (wheels[i].enabled) {
-        state[i].spin += drive_impulse * drive.wheels[i].weight /
-                         (weights * wheel_inertia);
-        const double spin = std::abs(state[i].spin);
-        if (spin > wheel_ceiling)
-          state[i].spin = std::copysign(wheel_ceiling, state[i].spin);
-      }
   } else if (weights > 0 && ratio != 0 && shift_time_ == 0 && !direction_brake &&
       (engine_running || !drive.auto_clutch)) {
     const double transmission =

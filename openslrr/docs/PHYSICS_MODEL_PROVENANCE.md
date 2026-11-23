@@ -524,6 +524,64 @@ inventing the very thing this whole recovery exists to remove. The converter pat
 game runs today is left in place; it has one invented number (the 0.8 stall point) and
 it is the last one in the drive path.
 
+### 12.4 The measured launch, and the driveline built from it
+
+A live trace of the first second and a half of a full-throttle launch settled three
+things that no amount of reading had:
+
+**1. There is no `dt` in the engine step.** `rpm += M/J_engine` runs per frame, and the
+frame is the step. Measured: 1000 -> 7430 rpm in 125 ms, about 51 000 rpm/s. Our engine
+integrated `M*timestep/J`, sixty times slower, and the converter's invented stall point
+was hiding it. That single line is "the revs are lazy".
+
+**2. The clutch does not slip.** `car+0x1DBC` moves 0 -> 0.312 -> 0.357 -> 0 over
+235 ms, but the engine/shaft ratio held 13.05..13.20 against a 13.18 overall ratio the
+whole time -- under 1%. So it is a regulator for launch smoothness, not the thing
+between the engine and the road, and modelling the link as closed is faithful to within
+1%. What slips is the **tyre**: the driven wheels went 0 -> 538 rpm in 125 ms with the
+car still standing, then sat at 540..600 rpm while the rears grew -13 -> -462. A burnout.
+
+**3. The gearbox does not shift while the wheels spin.** The engine sat on the limiter
+in first for the whole 2.5 s of that burnout. `0x0044D410` blocks the shift on the
+average driven-wheel speed, which is why "the car stalls in second" and "it upshifts
+mid-burnout" are the same missing gate.
+
+The limiter overshoot in the row (7500 limit, peaks to 7890, +5.2%) is what the
+`frac` formula of 3.5 predicts, so the clamp is +5%.
+
+Built from that, in the faithful path:
+
+```
+engine_omega += net / J_engine                  // per step, no dt
+wheel_shaft   = sum(spin * drive) / sum|drive|  // rad/s, C4 = 1
+inv_d         = J_drive / ratio^2
+k             = inv_d / (K*J_engine + inv_d)    // K = 6.0 in memory
+shaft'        = shaft + 0.999*(1-k)*(rpm - shaft)
+rpm'          = rpm   - 0.999*k*(rpm - shaft)
+spin_i       += (shaft'/ratio - wheel_shaft) * |drive_i| / sum|drive|
+```
+
+Measured after: flare 60% at **0.02 s** (was 2.08 s), 0-100 **4.66 s**, top **228.1**,
+max rpm 7350 on a 7000 limit (+5.0%), Mazda launch slip **15.95 m/s** at **73%** of its
+tyre limit -- a burnout, where the same car previously pulled 0.14 m/s of slip and 33%.
+
+Two things the port needed that the recovery does not spell out, and why:
+
+- **the idle governor.** With no `dt` the friction takes the engine to zero in one step
+  the moment the throttle shuts, which stops the gearbox schedule (it returns early on a
+  dead engine) and left a braking car stuck in third. The engine is held at the recovered
+  idle speed instead.
+- **stopping at rest.** The driveline holds the wheels at idle speed through the link,
+  so a braking car creeps and never stops. The link opens when the brake is down at low
+  speed, and a stopped car is put in first regardless of the shift lock -- both are the
+  behaviours the reference row shows at a standstill.
+
+**Open, and honestly so:** the clutch regulator's arithmetic. The middle branch of
+`0x0044DD70` gives the pedal as `1 - (rpm-idle)/(target-idle)` while its boundary
+branches set it to 1 both below shaft speed and at or above target, which contradicts
+itself under either reading of the polarity. Modelled as closed because the measurement
+says it is closed to within 1%. The regulator shape remains unported.
+
 ### 12.2 The engine's own numbers, from the game's engine screen
 
 Same engine, with and without a supercharger, as the game itself reports them:
