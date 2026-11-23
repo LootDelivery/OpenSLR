@@ -611,8 +611,14 @@ exhaust blending, the work integral, `prepare()` -- already matched line for lin
 Corrected, the MC GT reads **359 Nm** where it read 225, and it spins its wheels.
 Details in `CAR_MODEL_RECOVERY.md` 14.
 
-What follows was the road to that answer, kept because the heat response below is still
-unexplained and is the reason nobody should tune this generator by feel:
+**And the non-monotonic heat response below was my own instrument, not the model.** The
+`SLRR_DYNO_HEAT` hook multiplied `mixture_H` in place inside `prepare()`, which runs once
+per rpm point on state that persists between them, so x1.5 compounded to 1.5^16 by the
+top of the sweep. That is the whole of "the sweep does not converge". The hook is gone.
+Reading the sweep directly settled it: `0x004b77f0` iterates 10 times to a 5% band and
+the cycle underneath it is the one we already had.
+
+What follows was the road to that answer, kept as a record of a wrong turn:
 
 The obvious repair is the charge heat: the burn is `dT = heat / c_v`, so 1 MJ/kg gives
 1400 K where a petrol-air charge carries about 2.8 MJ/kg. Scaling it does not work:
@@ -624,12 +630,9 @@ The obvious repair is the charge heat: the burn is `dT = heat / c_v`, so 1 MJ/kg
 | x2.0 | **1727.4** Nm |
 | x2.85 | **188.6** Nm |
 
-A sweep that answers 186, 1727 and 4352 Nm to a smoothly rising input is not converging.
-So the engine parameters cannot be cranked into agreement -- that only chooses which
-nonsense number appears. The convergence loop is there (10 repeats, 5% band, as
-recovered) but the cycle it is iterating is not the original's: the fuel heat is scaled
-before `mixture()` and both the effective heat and the bank heat move together, so the
-terms the cycle balances against each other are not independent.
+Those numbers were produced by compounding my own scale factor, and say nothing about
+the sweep. The real defect was the conversion (above), and cranking engine parameters
+would never have found it.
 
 Next step is a line-by-line comparison of the sweep with `0x004B6BF0`, `0x004B7020` and
 `0x004B77F0` (offered and not yet done). The numbers to check against are above; the

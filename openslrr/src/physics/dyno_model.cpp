@@ -263,18 +263,6 @@ double turbo_pressure(const Bank& s, double rpm) {
 }
 
 void prepare(Bank& s) {
-  // Experiment hook: the charge heat is the one quantity in the sweep that no recovery
-  // has pinned, and every engine reads weak because of it. Scaled here so the response
-  // can be measured instead of guessed.
-  static const double heat_scale = [] {
-    const char *raw = std::getenv("SLRR_DYNO_HEAT");
-    const double x = raw ? std::atof(raw) : 0.0;
-    return x > 0 ? x : 1.0;
-  }();
-  if (heat_scale != 1.0) {
-    s.set(kMixtureHeat, s.get(kMixtureHeat) * heat_scale);
-    s.set(kEffectiveHeat, s.get(kEffectiveHeat) * heat_scale);
-  }
   mixture(s);
   s.set(kSpark, advance_timing(s, kSparkStart, kSparkShift, kSparkRpm0, kSparkRpm1));
   s.set(kIntakeOpen, advance_timing(s, kIntakeStart, kIntakeShift, kIntakeRpm0, kIntakeRpm1));
