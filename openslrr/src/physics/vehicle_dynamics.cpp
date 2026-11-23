@@ -867,36 +867,30 @@ void VehicleDynamics::step_drive() {
     engine_omega = std::clamp(engine_omega + (target - engine_omega) * flare,
                               std::max(0.0, drive.idle * .5 / rpm_per_rad),
                               drive.limit * 1.02 / rpm_per_rad);
-    // The original's own arithmetic, from the recovered model
-    // (docs/CAR_MODEL_RECOVERY.md 3.5, 4):
+    // What the driveline actually carries, from the recovered model (3.5, 4, and the
+    // closed-answer pass on 0x1E28):
     //
-    //   M                   = torque_table(rpm)          // linearly interpolated,
-    //                                                    //   zero outside its ends
-    //   torque_at_clutch    = 2 * M * throttle
-    //   transmitted         = torque_at_clutch * engage    // engage = 1 - clutch
+    //   M           = torque_table(rpm)      // linearly interpolated, zero outside
+    //   transmitted = (M * throttle - friction) * engage      // engage = 1 - clutch
     //
-    // The factor of two is the original's, not a slip effect: it is there in the
-    // recovered step and it also explains the "solver multiplies by 2" of the old
-    // engine we replaced. We were shipping the torque without it, at the wheels and
-    // in the wrong place -- half the engine's output, thrown away before the clutch.
+    // The `torque_at_clutch = 2*M*throttle` of the original is NOT this: it is written
+    // to car+0x1E28 and read in exactly one place, the transmission wear formula
+    // (0x0043C260). Two commits ago I took that two for drive torque and reported that
+    // half of every engine's output was being thrown away -- it was not, and the two is
+    // gone from this path. The driveline sees M.
     //
-    // No ClutchF ceiling: the original reads Chassis.ClutchF into physics+0xC8 and
-    // never touches that offset in the physics step. We had a 500 Nm cap there and it
-    // deleted every engine above it -- a supercharged V8 arrived as an inline four.
+    // No ClutchF ceiling either: the original reads Chassis.ClutchF into physics+0xC8
+    // and never touches it in the physics step (3.8).
     const double engine_table = drive.torque(std::max(engine_omega * rpm_per_rad, drive.idle));
-    const double torque_at_clutch = 2.0 * std::max(0.0, engine_table) * gas;
-    // Engine losses, applied where the original applies them: against the torque the
-    // clutch carries. With the throttle closed this is the only thing slowing the car
-    // down in gear, and without it a lifted car coasts like it is in neutral.
+    const double engine_torque = std::max(0.0, engine_table);
     const double engine_brake = original_engine_friction(
         engine_omega * rpm_per_rad, drive.max_rpm, drive.friction_fwd,
         drive.friction_rev, drive.inertia);
-    // Weighted by the closed part of the throttle: at full throttle the engine makes
-    // power, and with the throttle shut this term is the only thing slowing the car in
-    // gear. Which of the two the table is net of is still open (recovery 11); this
-    // keeps full throttle honest and gives a lifted car its engine braking.
+    // The friction acts on the closed part of the throttle: at full throttle the engine
+    // makes power, with the throttle shut this is the only thing slowing the car in
+    // gear. Which of the two the table is net of is still open (recovery 11).
     const double transmitted =
-        (torque_at_clutch - engine_brake * (1.0 - gas)) *
+        (engine_torque * gas - engine_brake * (1.0 - gas)) *
         std::clamp(drive.clutch, 0.0, 1.0);
     drive_impulse = transmitted * ratio * timestep;
     // The driveline cannot command more wheel speed than the engine turns it to:
@@ -913,10 +907,10 @@ void VehicleDynamics::step_drive() {
       static int counter = 0;
       if (trace && (counter++ % 40) == 0)
         std::fprintf(stderr,
-                     "[coupling] rpm=%.0f table=%.1f at_clutch=%.1f brake=%.1f "
+                     "[coupling] rpm=%.0f table=%.1f brake=%.1f "
                      "transmitted=%.1f ceiling=%.1f spin=%.1f gear=%d gas=%.2f\n",
-                     engine_omega * rpm_per_rad, engine_table, torque_at_clutch,
-                     engine_brake, transmitted, wheel_ceiling,
+                     engine_omega * rpm_per_rad, engine_table, engine_brake,
+                     transmitted, wheel_ceiling,
                      state[2].spin, gear, gas);
     }
     for (size_t i = 0; i < wheels.size(); ++i)

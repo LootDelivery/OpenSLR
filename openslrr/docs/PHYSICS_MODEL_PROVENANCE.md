@@ -453,6 +453,39 @@ of what has not been recovered yet. Inventing that here would be the third time 
 session that a plausible-looking number turned out to be the bug, so the runaway stays
 in place, visible and pinned, until the original's wheel/drive relationship is known.
 
+### 12.1b Correction: the factor of two is not drive torque
+
+The closed-answer pass on the original makes this unambiguous:
+
+```
+if (throttle <= 0.01) car[0x1E28] = 0;
+else { fVar2 = M*throttle + M*throttle; car[0x1E28] = fVar2; }
+```
+
+`car+0x1E28` is read in exactly one place -- the transmission wear formula at
+`0x0043C260:71`. The driveline does not see it. What the driveline carries is `M`, the
+interpolated table value, minus friction.
+
+So my earlier claim -- "we were shipping the torque without the original's factor of
+two, half of every engine's output lost before the clutch" -- was wrong, and §12.1 was
+written on it. The two is a wear-input quantity that happens to equal `2*M*throttle`.
+It has been removed from the drive path.
+
+With `M` in place the numbers become honest rather than dramatic:
+
+| | 0-100 | top speed | wheel slip | share of tyre limit |
+|---|---|---|---|---|
+| 200 Nm | 8.20 s | 126.7 km/h | 2.9 m/s | -- |
+| 600 Nm | 4.38 s | 213.5 km/h | 12.3 m/s | -- |
+| Mazda (225 Nm table, friction 1.95) | -- | -- | 0.14 m/s | **33%** |
+
+Three times the torque still halves the time to 100 km/h, so power reaches the road.
+And the Mazda's launch asks for **33% of what its rear tyres hold**: with this engine's
+table there is nothing to spin. A 506 Nm engine asks 13.7 kN of a 19.5 kN tyre -- 70%,
+also short. Any claim that the original spins these cars at a launch has to come from
+the tyre model (5.3) or from the table generator (the 225 vs 396 Nm discrepancy), not
+from the driveline.
+
 ### 12.2 The engine's own numbers, from the game's engine screen
 
 Same engine, with and without a supercharger, as the game itself reports them:
