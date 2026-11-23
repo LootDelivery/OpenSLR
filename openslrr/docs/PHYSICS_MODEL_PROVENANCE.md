@@ -119,3 +119,24 @@ and another (`C_drag`) is missing outright. Nothing in the list requires
 recovering anything new from the executable -- the fields are in the decompiled
 `Chassis.java`, and the natives that consume them are the ones already
 documented in `slrr-reverse`.
+
+## 8. Ambient traffic speed: measured, not inherited
+
+The speed of ambient cars is this host's own model -- the original's traffic
+natives (`addTrafficCar`, `setTrafficCarBehaviour`) do not carry a cruise speed
+this tree can read. So it is set here, and it was set low: cruise 15..35 km/h for
+every street, and an acceleration cap of 0.8 m/s^2, which needs seventeen seconds
+to reach 50 km/h. That is the "the traffic is asleep" report.
+
+Measured with `SLRR_TRAFFIC_SIGNAL_TRACE=1`, mean speed of the placed cars over a
+thirty second drive through ValoCity:
+
+| Cruise range | Acceleration | Mean ambient speed |
+|---|---|---|
+| 15..35 km/h | 2.5 m/s^2 | 23.5 km/h |
+| 40..65 km/h | 2.5 m/s^2 | **34.7 km/h** |
+
+Now 40..65 km/h at 2.5 m/s^2 by default, both adjustable without a rebuild:
+`SLRR_TRAFFIC_CRUISE` scales the range, `SLRR_TRAFFIC_ACCEL` sets m/s^2. The lamps
+keep working at the higher speed -- 40 red approaches, 28 rest, 12 through, the
+twelve entering too fast to stop -- and there are no chassis faults in the run.

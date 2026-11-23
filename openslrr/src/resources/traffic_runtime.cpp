@@ -432,7 +432,18 @@ constexpr float kTrafficBrake = 5.f;
 // able to follow the curve above or the approach is not executable: with 4 m/s^2
 // against a 5 m/s^2 curve every car overshot the stop line, was then "already
 // past the line", and the rule let it through -- which is what a driver saw.
-constexpr float kTrafficBrakeResponse = kTrafficBrake + 2.f;       // m/s^2, the drive loop's own order
+constexpr float kTrafficBrakeResponse = kTrafficBrake + 2.f;
+// How hard an ambient car may pick up speed. 0.8 m/s^2 -- the previous value --
+// needs seventeen seconds to reach 50 km/h, which no car does and which is the
+// other half of "the traffic is asleep". SLRR_TRAFFIC_ACCEL is the A/B switch.
+static float traffic_acceleration() {
+  static const float value = [] {
+    const char *e = std::getenv("SLRR_TRAFFIC_ACCEL");
+    const float v = e ? static_cast<float>(std::atof(e)) : 2.5f;
+    return v > 0.f && std::isfinite(v) ? v : 2.5f;
+  }();
+  return value;
+}
 constexpr double kTrafficLampCycle = 13.0; // matches RoadRoutes::signal
 constexpr double kTrafficLampStop = 5.0;
 
@@ -825,7 +836,16 @@ int32_t add_car(const RpkIndex &rpk, void *ground, Object *car, Object *where,
   scene_instances_set_fade(r.car, 0.f);
   r.owned = owned;
   r.notify = owned;
-  r.cruise = (15 + random() * 20) / 3.6f;
+  // Cruise: a host value, not recovered. 15..35 km/h kept the whole city at a
+  // crawl regardless of the street -- to a driver that reads as "the traffic is
+  // asleep" next to the original. 40..65 km/h is ordinary city driving. The range
+  // scales with SLRR_TRAFFIC_CRUISE so one binary can show both.
+  static const float cruise_scale = [] {
+    const char *e = std::getenv("SLRR_TRAFFIC_CRUISE");
+    const float v = e ? static_cast<float>(std::atof(e)) : 1.f;
+    return v > 0.f && std::isfinite(v) ? v : 1.f;
+  }();
+  r.cruise = (40 + random() * 25) / 3.6f * cruise_scale;
   // Traffic never rides the physics drive model in this block.
   if (owned)
     part_set_external_motion(r.car, true);
@@ -969,6 +989,19 @@ float race_traffic_signal_cap(const RoadRoutes &graph, size_t edge, float along,
   // The same shape the lane spacing uses -- sqrt(2 * a * d) -- so the last metres
   // are walked rather than driven and nothing overshoots the line.
   return std::sqrt(2.f * kTrafficBrake * remaining);
+}
+// Mean speed of the placed, visible ambient cars, in km/h. Diagnostic only.
+double traffic_mean_speed() {
+  double sum = 0;
+  size_t count = 0;
+  for (const auto &entry : registrations) {
+    const auto &r = entry.second;
+    if (!r.visible || r.unplaced)
+      continue;
+    sum += r.speed;
+    ++count;
+  }
+  return count ? sum / static_cast<double>(count) * 3.6 : 0.0;
 }
 void race_traffic_forget(void *key) {
   populations.erase(key);
@@ -1481,9 +1514,10 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       lamp_report = clock_seconds;
       std::fprintf(stderr,
                    "[traffic-lamp] capped_steps=%d t=%.1f red=%d rested=%d "
-                   "ran_red=%d worst=%.2f m/s\n",
+                   "ran_red=%d worst=%.2f m/s mean=%.1f km/h\n",
                    lamp_stops, clock_seconds, lamp_red_approaches, lamp_rested,
-                   lamp_ran, static_cast<double>(lamp_worst_speed));
+                   lamp_ran, static_cast<double>(lamp_worst_speed),
+                   traffic_mean_speed());
       lamp_stops = 0;
     }
     if (profiling()) {
@@ -1578,7 +1612,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         }
       }
       r.speed += std::clamp(desired - r.speed, -kTrafficBrakeResponse * seconds,
-                            .8f * seconds);
+                            traffic_acceleration() * seconds);
       float advance = r.speed * seconds;
       if (desired == 0)
         advance = std::min(advance, std::max(0.f, e.length - r.along));
