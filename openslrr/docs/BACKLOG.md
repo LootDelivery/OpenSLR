@@ -311,12 +311,16 @@ look at, so the check takes a minute rather than a session.
   branch is also 35 (measured on the fronts), and the `E8 := 0` trial fed
   J_drive there (0.028/s), which is what froze the undriven wheels and collapsed
   the launch. The driven value was never the culprit.
-- **Implied response:** 0.1/35 = 2.857e-3 against the committed 1/1.6 = 0.625/s:
-  the port is 1.6x stiffer at the tyre servo, and the brake decrement
-  `torque_step*brake_scale` (50/35 * cfg/1000 / 1.6) is 3.1x (A = 50*4) or 4.5x
-  (A = 50*2.8) stronger than `dt*A*0.1/fVar16*wheel[d8]`. The exact step
-  coefficient A is still ambiguous in the transcription, so port the form with
-  A as the single named constant and let the rows pick between 140 and 200.
+- **Both step coefficients read off the instructions (not guessed):**
+  `0x455C5B` brake: `spin -= dt*50*EC*T*[0x0060E024]` with
+  `T = (pedal+wheel[0xfc])*physics[0xd8]*wheel[0xd8] +
+  hbrake*physics[0xdc]*wheel[0xdc] + wheel[0xf0]`; `0x4563B6` tyre:
+  `spin -= dt*50*EC*F_long*wheel[0x60]*[0x0060E020]`. In the file those two
+  constants are 4.0 and 2.8; live in memory they are 6.0 and 7.0 (the mod
+  patches .data), i.e. the brake term is `300*EC*T` and the tyre term
+  `350*EC*F*r`. Effective inertias: 1.17 and 1.0 kg*m^2 at fVar16 = 35, so the
+  committed `wheel_inertia = 1.6` is 1.4-1.6x heavy but the same order, and the
+  port's brake (`50/35 * cfg/1000 / 1.6`) is 2.08x too strong, not 1000x.
 - **Next step:** port the step with fVar16 (E8 on every wheel, share term only
   for driven ones) and the slip measure live; re-measure the fixture and the
   launch rows -- in particular whether the undriven wheels now hold their spin
