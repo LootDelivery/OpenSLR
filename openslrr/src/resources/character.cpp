@@ -6,6 +6,8 @@
 #include "slrr/rpk_index.hpp"
 #include "slrr/scx_mesh.hpp"
 
+#include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -577,6 +579,47 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
                 &character->posed->positions, &character->posed->normals);
   character->posed_serial = character->pose_serial;
   character->posed->revision++;
+  // A triangle stretched away from the body means some vertices were skinned
+  // with a matrix the pose did not intend. Name the offender: which vertex,
+  // how far, and which bone carries the largest weight for it. Without this
+  // the only evidence is a picture, and the bone cannot be picked from a
+  // picture. Reported at most four times per process; the check itself costs
+  // one pass over the vertices and runs only with SLRR_SKIN_TRACE set.
+  if (std::getenv("SLRR_SKIN_TRACE")) {
+    static int reported = 0;
+    if (reported < 4) {
+      const size_t vertex_count = character->posed->positions.size() / 3;
+      for (size_t v = 0; v < vertex_count; ++v) {
+        const float x = character->posed->positions[v * 3];
+        const float y = character->posed->positions[v * 3 + 1];
+        const float z = character->posed->positions[v * 3 + 2];
+        const bool bad = !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z);
+        const float dx = x - bind->positions[v * 3];
+        const float dy = y - bind->positions[v * 3 + 1];
+        const float dz = z - bind->positions[v * 3 + 2];
+        const float moved = dx * dx + dy * dy + dz * dz;
+        if (!bad && moved < 80.f * 80.f) continue;
+        int best = 0;
+        float best_weight = -1.f;
+        for (int k = 0; k < 4; ++k) {
+          const float weight = bind->skin_weights[v * 4 + static_cast<size_t>(k)];
+          if (weight > best_weight) {
+            best_weight = weight;
+            best = bind->skin_bones[v * 4 + static_cast<size_t>(k)];
+          }
+        }
+        const char* name = best < static_cast<int>(character->bind->bones.size())
+                               ? character->bind->bones[static_cast<size_t>(best)].name.c_str()
+                               : "(out of range)";
+        std::fprintf(stderr,
+                     "[skin] key=%p type=%d vertex=%zu pos=%.1f %.1f %.1f "
+                     "bone=%d (%s) weight=%.2f\n",
+                     key, type_id, v, x, y, z, best, name, best_weight);
+        ++reported;
+        if (reported >= 4) break;
+      }
+    }
+  }
   return character->posed;
 }
 

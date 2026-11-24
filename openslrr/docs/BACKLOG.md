@@ -34,15 +34,36 @@ Move fixed items to the bottom with the fixing commit.
 - **Status:** open.
 
 ### GFX-D Driver triangle
-- **Symptom:** a black/undefined triangle stretches from the driver model
-  downward (the user suspects a leg). Present on several cars. It makes the
-  car pivot around it only when the tyre port is active, because a
-  degenerate polygon gets into the contact math; with the tyre rolled back
-  it is visual only.
+- **Symptom:** a black triangle stretches from the driver model downward (the
+  user suspects a leg). Present on several cars. It makes the car pivot around
+  it only when the tyre port is active, because a degenerate polygon gets into
+  the contact math; with the tyre rolled back it is visual only.
 - **Timing:** predates the upstream merge -- the rollback to `09b209f0`
   (before the merge) did not remove it. Not ours.
-- **Next:** check how legs are bound: skinned bones vs fixed attach points,
-  including the points the car `.cfg` passes to the driver pose.
+- **Checked and clean (read-only):**
+  - `humans/drivers/vin.SCX` unmodified since 2003; 1691 verts, 2058 tris, **0**
+    degenerate, **0** zero-weight or bad-sum vertices, all bone ids in range
+    (max 18 of 20), no outlier vertices (scan replicated the loader's v4
+    walk in Python).
+  - Mazda `_main_Mazda_3_2005.cfg` and MC `_main_GT.cfg` both have `seat`
+    and `pedals`; the leg targets are inside the cabin.
+  - Bench with `SLRR_SKIN_TRACE=1`: no vertex flies beyond 80 cm from its
+    bind position except hands to the wheel and feet to the pedals -- the
+    intended IK, not a spike.
+- **Leading hypothesis, from code only:** the driver resource carries
+  `flags 8.000`, and `(flags & 9) == 8` makes him a **vehicle-shadow caster**
+  (`bgfx_shadows.cpp`, the `car.casters` loop): his mesh is drawn white into
+  the car's shadow map and the ground is multiplied by it. A triangle that
+  appears "when the driver appears" and reaches down to the ground matches
+  his cast.
+- **Decisive check for the driver (10 s):** F12 debug menu -> uncheck
+  **Vehicle shadows**. If the triangle disappears, it is the driver's shadow
+  cast and the hunt moves into the caster pass; if it stays, the shadow path
+  is innocent and the hunt returns to the driver pose.
+- **Instrument:** `SLRR_SKIN_TRACE=1` now names any skinned vertex that is
+  non-finite or lands more than 80 cm from its bind position, with the bone
+  that carries the largest weight (`character.cpp`, CPU path; max four
+  reports per process).
 - **Status:** open.
 
 ### GFX-E Red inner fender
