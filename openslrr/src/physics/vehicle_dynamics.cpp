@@ -1098,6 +1098,10 @@ void VehicleDynamics::step_drive() {
       if (idle_and_stopped || braking_at_rest || idling_against_a_stop || dragged_backwards)
         engage = 0.0;
     }
+    // car+0x1DBC, the clutch measure the wheel step reads (0.1/fVar16 keeps the
+    // share term only while it is closed). Measured: 1.000 standing in gear, 0.000
+    // in neutral, which is exactly the port's `engage` inverted.
+    wheel_clutch_open_ = 1.0 - engage;
     // The recovered exchange, exactly as 0x00454500 (683-695) writes it:
     //
     //   shaft' = shaft + engage*0.999*(1-k)*(rpm_free - shaft)
@@ -1239,12 +1243,28 @@ void VehicleDynamics::step_drive() {
   // The ABS/ASR pedal modulations run above, before the pedal smoothing --
   // see FUN_0044df70 / FUN_0044e120 there.
 
+  // The wheel step's own inertia (0x00454500, recovered in 14.7): the listing asks
+  // each wheel for 0.1/fVar16 instead of a constant, so a driven wheel is heavier
+  // while a gear is engaged and every wheel falls back to gearbox+0xE8 when the
+  // clutch is open or the ratio is zero. `wheel_inertia` stays in the coupling and
+  // the differential above, which are the port's own model, not this listing's.
+  double share_sum = 0;
+  for (const auto &d : drive.wheels) share_sum += std::abs(d.weight);
+  const double clutch_open =
+      drive.faithful ? wheel_clutch_open_ : 1 - std::clamp(drive.clutch, 0.0, 1.0);
+  const double total_ratio = drive.ratios[std::clamp(gear, 0, 7)];
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &wheel = wheels[i];
     const auto &cfg = drive.wheels[i];
     auto &s = state[i];
     if (!wheel.enabled)
       continue;
+    const double ec = wheel_inverse_inertia(cfg.weight, share_sum, clutch_open,
+                                            total_ratio, drive.inertia,
+                                            drive.brake_inertia);
+    // dt*50*EC, the common prefix of both recovered steps.
+    const double brake_step = timestep * 50 * drive.brake_step_gain * ec;
+    const double tyre_step = timestep * 50 * drive.tyre_step_gain * ec;
     const auto brake = [](double speed, double amount) {
       return std::copysign(std::max(0.0, std::abs(speed) - amount), speed);
     };
@@ -1266,10 +1286,16 @@ void VehicleDynamics::step_drive() {
       remaining_brake += std::max(0.0, amount - std::abs(before - s.spin));
     };
     apply_brake(500 * timestep * cfg.bearing * drive.bearing_scale);
-    const double torque_step = timestep / wheel_inertia;
-    double service = torque_step * service_brake_ * cfg.brake * drive.brake_scale;
-    apply_brake(service);
-    apply_brake(torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale);
+    // The recovered brake/drag decrement (0x455C5B..0x455C6F):
+    //   dw = dt*50*EC*[(pedal + wheel[0xFC])*phys[0xD8]*wheel[0xD8]
+    //                  + hbrake*phys[0xDC]*wheel[0xDC] + wheel[0xF0]]*[0x0060E024]
+    // The moments are the wheel's own (cfg.brake is wheel+0xD8, cfg.handbrake is
+    // wheel+0xDC) -- measuring 2284/3270/6540 on the MC settled that the cfg-level
+    // brake_power must NOT scale them (14.8). The bearing term keeps its old form:
+    // wheel[0xFC] is not recovered. wheel[0xF0] stays out as well, because the port
+    // applies rolling resistance through rolling_torque below.
+    apply_brake(brake_step * service_brake_ * drive.brake * cfg.brake);
+    apply_brake(brake_step * drive.handbrake * cfg.handbrake);
 
     if (!s.contact || s.force <= 0) {
       // Recovered 0x00454500: without contact the slip memory is cleared
@@ -1321,7 +1347,9 @@ void VehicleDynamics::step_drive() {
           1 / body.mass +
           forward.dot(
               body.inverse_world_inertia(arm.cross(forward)).cross(arm));
-      const double inverse_spin = wheel.radius * wheel.radius / wheel_inertia;
+      // The same derivative the servo uses: d(wheel rotation)/d(force).
+      const double inverse_spin =
+          wheel.radius * wheel.radius * 50 * drive.tyre_step_gain * ec;
       const double limit =
           std::abs(s.slip_speed) / (timestep * (inverse_mass + inverse_spin));
       force.longitudinal = std::clamp(force.longitudinal, -limit, limit);
@@ -1349,9 +1377,13 @@ void VehicleDynamics::step_drive() {
                       : std::copysign(
                             s.force * wheel.radius * cfg.rolling_resistance,
                             s.spin);
+      // The recovered tyre response (0x4563B6..0x4563CB):
+      //   dw = dt*50*EC*F_long*wheel[0x60]*[0x0060E020]
+      // which is what `tyre_step` is; the spin damping and the rolling torque ride
+      // on the same inertia so the wheel does not stop being a wheel.
       s.spin -=
           (force.longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
-          timestep / wheel_inertia;
+          tyre_step;
       if (slide_trace() && std::abs(cfg.weight) > 1e-3)
         std::fprintf(stderr,
                      "[slide] w%zu spin=%7.2f road=%7.2f slip=%7.2f lat=%7.2f "
@@ -1372,7 +1404,10 @@ void VehicleDynamics::step_drive() {
     const double before_hold = s.spin;
     s.spin = brake(s.spin, remaining_brake);
     const double unspent = std::max(0.0, remaining_brake - std::abs(before_hold - s.spin));
-    s.holding_impulse = unspent * wheel_inertia / std::max(.01, wheel.radius);
+    // Unspent budget back to an impulse through the same step the brake used:
+    // dw = dt*50*K*EC*T  =>  T*dt = dw/(50*K*EC), impulse = T*dt/radius.
+    s.holding_impulse =
+        unspent / std::max(.01, 50 * drive.brake_step_gain * ec * wheel.radius);
     s.rotation =
         std::remainder(s.rotation + s.spin * timestep, 6.283185307179586);
   }

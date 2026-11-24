@@ -68,7 +68,7 @@ struct Car {
     drive.idle = kIdle;
     drive.limit = kLimit;
     drive.inertia = engine_inertia;
-    drive.brake_scale = drive.handbrake_scale = 1;
+    drive.brake_inertia = 35;
     drive.engaged = drive.automatic_shift = drive.auto_clutch = true;
     drive.torque = [](double rpm) { return std::clamp(150 + rpm * .02, 0., kPeakTorque); };
     dynamics.engine_running = true;

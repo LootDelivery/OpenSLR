@@ -336,9 +336,22 @@ look at, so the check takes a minute rather than a session.
   wheel_slip_denominator_reproduces_the_live_measurement (36/36,
   drive_faithful 18/18, missing_support 16/16). No behaviour change: the wheel
   model still runs wheel_inertia = 1.6.
-- **Next step:** swap the two recovered terms onto EC (tyre: 350*EC*F*r, brake:
-  300*EC*T with T as above, slip clamp 1/(r^2*350*EC)) and re-baseline the
-  launch/braking rows; the diff/coupling math keeps wheel_inertia for now.
+- **PORTED (CAR_MODEL_RECOVERY 14.7b):** both steps now run on EC. The wheel
+  model takes brake_inertia (E8), tyre_step_gain (0x0060E020) and brake_step_gain
+  (0x0060E024) from DriveInput, wheel_clutch_open_ carries car+0x1DBC, the cfg
+  brake_power/handbrake_power scales are gone, and wheel_inertia survives only in
+  the coupling/differential (our model, not this listing). 36/36, 18/18, 16/16.
+  Rows: 0-100 4.41 -> 4.02 s, top 227 -> 224.5, stopping 32.28 -> 31.86 m, and
+  the burnout fixture asserts saturation now (slip 3.69 m/s, F/Fz 1.55).
+  test_physics_tick_rate is 6/9, the SAME three rows red at HEAD (verified by
+  stashing the port and rebuilding), so that is a separate limiter debt.
+- **The pin did NOT move (0.1 rad/s, was 0.0):** the wheel's own inertia was not
+  its cause -- it scales the response, it does not set the moment balance. So the
+  next suspect is the balance itself: the exchange's share versus the tyre, and
+  what holds a driven wheel at ~0 while its twin runs. New lead: in the 77 km/h
+  slide the engine floor fell 6912 -> 1687 rpm against a 1600 guard (5% margin),
+  i.e. the pin is now dragging the crank -- exactly the driver's 'the wheels stop
+  and the revs fall'. Watch it live in a long slide before touching it.
 - **Status:** open (the airborne spin decay that used to finish the lifted
   wheel off is fixed in e8b589d7; the pin itself is this item).
 

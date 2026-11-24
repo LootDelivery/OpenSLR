@@ -69,7 +69,7 @@ VehicleDynamics make_car(bool faithful) {
   // and let it yank the engine around; the stand has to run the game's numbers.
   drive.inertia = 13.5;
   drive.host_inertia = .38;
-  drive.brake_scale = drive.handbrake_scale = 1;
+  drive.brake_inertia = 35;
   drive.engaged = drive.automatic_shift = drive.auto_clutch = true;
   drive.clutch = 1;
   drive.clutch_force = 500;

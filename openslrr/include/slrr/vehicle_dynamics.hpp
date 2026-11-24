@@ -172,7 +172,21 @@ struct DriveInput {
   bool engaged = false, reverse = false, automatic_shift = true, auto_clutch = true;
   bool automatic_first = false;
   double throttle = 0, brake = 0, handbrake = 0;
-  double brake_scale = 0, handbrake_scale = 0, bearing_scale = 0;
+  // Only the bearing term still uses a scale: its wheel[0xFC] meaning is not
+  // recovered, so it keeps the pre-recovery form. Brakes and the tyre no longer
+  // use a scale at all -- see the three fields below.
+  double bearing_scale = 0;
+  // wheel+0xEC, the recovered slip denominator (CAR_MODEL_RECOVERY 14.7):
+  //   fVar16 = share term + gearbox+0xE8,   wheel[0xEC] = 0.1/fVar16,
+  // where the share term vanishes when the wheel has no drive share or no gear
+  // is engaged. This field is gearbox+0xE8, the sixth float of the engine
+  // record -- NOT driveline_inertia (that one is 500-1000). Measured 35/38/40/50
+  // across cars; 35 is the MC and the fallback for a record that carries none.
+  double brake_inertia = 35;
+  // The two .data coefficients the recovered step multiplies EC by: 0x0060E020
+  // (tyre force) and 0x0060E024 (brake and drag). 2.8 and 4.0 sit in the exe;
+  // the mod patches them to 7.0 and 6.0, which is what the running game uses.
+  double tyre_step_gain = 7, brake_step_gain = 6;
   double abs_strength = 0;
   // car+0x1F54: the ABS's memory of the previous frame's slip measure.
   double abs_prev = 0;
@@ -299,6 +313,9 @@ private:
   double accumulator_ = 0;
   double previous_rpm_ = 0, shift_time_ = 0;
   double starter_remaining_ = 0, service_brake_ = 0;
+  // car+0x1DBC as the wheel step reads it: 1 is an open clutch, so the share
+  // term drops out. The faithful path writes it as 1 - engage.
+  double wheel_clutch_open_ = 1;
   double launch_factor_ = 1;
   int previous_shift_ = 0;
   bool accelerator_down_ = false, forced_reverse_ = false;

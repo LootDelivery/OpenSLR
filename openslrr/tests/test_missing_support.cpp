@@ -29,7 +29,7 @@ VehicleDynamics car(bool mechanical = false) {
     d.drive.inertia = .38;
     d.drive.idle = 800;
     d.drive.limit = 7000;
-    d.drive.brake_scale = 1;
+    d.drive.brake_inertia = 35;
   }
   Matrix frame{};
   frame[0] = frame[5] = frame[10] = frame[15] = 1;

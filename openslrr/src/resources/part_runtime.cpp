@@ -2526,13 +2526,18 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.automatic_first = rec.transmission == 5;
   drive.auto_clutch = rec.transmission != 2;
   drive.starter = std::max(0.f, comp(chassis, "starter_torque"));
+  // gearbox+0xE8: the engine record's sixth float (part_config's brake_inertia),
+  // which is the whole slip denominator of every wheel with no drive share and
+  // the additive term of the driven ones (14.7). Measured 35/38/40/50 across
+  // cars; the record is what the original reads, so a missing one keeps the
+  // measured default instead of zeroing every brake.
+  drive.brake_inertia = rec.config->brake_inertia > 0 ? rec.config->brake_inertia
+                                                      : 35;
   const double brake_inertia = std::max(.01f, rec.config->brake_inertia);
   drive.bearing_scale = .1 / brake_inertia;
-  // DiscBrake supplies torque. Normalize the CFG gains before using the
-  // physical wheel inertia, which is already expressed in SI units.
-  const double inertia_gain = 50 / brake_inertia;
-  drive.brake_scale = inertia_gain * std::max(0.f, rec.config->brake_power) / 1000;
-  drive.handbrake_scale = inertia_gain * std::max(0.f, rec.config->handbrake_power) / 2000;
+  // The disc torque itself rides on the wheel (wheel+0xD8/0xDC), so the cfg-level
+  // brake_power/handbrake_power no longer scale the decrement: 14.8 measured that
+  // the wheel carries the moment and physics+0xD8/0xDC are only its multipliers.
   drive.gears = std::clamp(field_int(chassis, "gears"), 1, 6);
   const double final_drive = comp(chassis, "rearend_ratio");
   drive.ratios[0] = 0;
