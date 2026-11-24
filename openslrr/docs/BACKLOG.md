@@ -321,10 +321,24 @@ look at, so the check takes a minute rather than a session.
   `350*EC*F*r`. Effective inertias: 1.17 and 1.0 kg*m^2 at fVar16 = 35, so the
   committed `wheel_inertia = 1.6` is 1.4-1.6x heavy but the same order, and the
   port's brake (`50/35 * cfg/1000 / 1.6`) is 2.08x too strong, not 1000x.
-- **Next step:** port the step with fVar16 (E8 on every wheel, share term only
-  for driven ones) and the slip measure live; re-measure the fixture and the
-  launch rows -- in particular whether the undriven wheels now hold their spin
-  (they get 35, i.e. 0.4/s, not 0.028/s).
+- **Neutral confirms the ratio fallback on the DRIVEN wheels (2026-11-24, §14.7a):**
+  the same MC, standing still in neutral (gear 0, clutch 0, pedals 0): all four
+  wheels read EC = 0.00285714283 -> fVar16 = 35 exactly, i.e. the rears dropped
+  from 35.0228195 in 1st to the same bit pattern as the fronts. Only the ratio
+  changed, so the `total_ratio == 0` branch is now closed on driven wheels too,
+  and the drive term is confirmed to switch off wholesale, not shrink. The same
+  pass caught a traffic car (AWD, shares 0.1/0.1/2/2, J_engine 20, E8 50): all
+  four wheels 0.00200000009 -> 50, so E8 is per-engine and the fallback ignores
+  the shares' magnitude; EC is stored as float32 (0.1/50 = 0.002 in double,
+  0.00200000009 in memory).
+- **Law in code, pinned (09a3c7b2):** wheel_slip_denominator /
+  wheel_inverse_inertia in src/physics/vehicle_dynamics.cpp, tested by
+  wheel_slip_denominator_reproduces_the_live_measurement (36/36,
+  drive_faithful 18/18, missing_support 16/16). No behaviour change: the wheel
+  model still runs wheel_inertia = 1.6.
+- **Next step:** swap the two recovered terms onto EC (tyre: 350*EC*F*r, brake:
+  300*EC*T with T as above, slip clamp 1/(r^2*350*EC)) and re-baseline the
+  launch/braking rows; the diff/coupling math keeps wheel_inertia for now.
 - **Status:** open (the airborne spin decay that used to finish the lifted
   wheel off is fixed in e8b589d7; the pin itself is this item).
 
