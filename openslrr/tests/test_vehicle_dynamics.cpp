@@ -540,19 +540,35 @@ SLRR_TEST(abs_releases_a_locked_wheel_while_the_road_moves) {
 // without it.
 SLRR_TEST(asr_cuts_the_throttle_and_presses_the_clutch) {
   Car off, on;
+  // The player's car runs the faithful driveline (options original_drive defaults
+  // to 1), so the ASR must be measured there: the host model has its own launch
+  // aid that slips the clutch for 0.5 s and puts the spin on the wrong side of
+  // the law's 0.3..0.5 band.
+  off.dynamics.drive.faithful = on.dynamics.drive.faithful = true;
   for (Car* car : {&off, &on}) car->run(1, 0, 0, 0);
   on.dynamics.drive.launch_help = 1;
-  off.run(3, 1, 0, 0);
-  on.run(3, 1, 0, 0);
+  // A held pedal: `run(3, 1, ...)` sets the throttle once and lets the ASR cut
+  // it for the remaining 179 frames, which compounds the cut into a stall.
+  for (int f = 0; f < 180; ++f) {
+    off.run(1. / 60, 1, 0, 0);
+    on.run(1. / 60, 1, 0, 0);
+  }
   const double off_slip = off.dynamics.state[2].slip_state.slip;
   const double on_slip = on.dynamics.state[2].slip_state.slip;
   std::printf("ASR launch 3s off=%.2f on=%.2f m/s slip off=%.2f on=%.2f press=%.3f\n",
               off.speed(), on.speed(), off_slip, on_slip,
               on.dynamics.drive.asr_clutch);
+  // The recovered law is a proportional cut, not a switch: at strength 1 it
+  // holds the driven slip in its 0.3..0.5 band and the car still pulls away
+  // (measured 3.74 m/s against 17.62 with ASR off) -- the original's "slow,
+  // smooth rev rise" -- while the clutch press follows the same service value.
   SLRR_REQUIRE(on.dynamics.drive.asr_clutch > 0);
   SLRR_REQUIRE(on.dynamics.drive.asr_clutch <= 1);
-  SLRR_REQUIRE(on.speed() <= off.speed() + .01);
+  SLRR_REQUIRE(on.dynamics.drive.asr_clutch < .9);
+  SLRR_REQUIRE(on.speed() < off.speed());
+  SLRR_REQUIRE(on.speed() > 2.0);
 }
+
 
 SLRR_TEST(nitrous_blends_the_wet_bank_without_changing_dry_drive) {
   Car dry, wet, unavailable;

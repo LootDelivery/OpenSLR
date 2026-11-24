@@ -262,54 +262,42 @@ look at, so the check takes a minute rather than a session.
   Side-by-side with the original is still required before closing.
 - **Status:** open.
 
-### DRV-11 The ASR clutch press waits on wheel+0x11C (input scale, not the law)
-- **State (2026-11-25):** the law and its writer are fully recovered --
-  `FUN_0044e120:41` presses the clutch (`open' = 1-(1-open)*service`, i.e. our
-  `engage *= service`), and `car+0x1DBC` is the pedal written every frame by
-  the input stage (`0x44F39A`) and by the anti-stall regulator (`FUN_0044DD70`).
-  Ported literally and measured: ASR strength 1, launch from rest, 3 s full
-  throttle -> **0.25 m/s vs 9.97 m/s with ASR off**, and the same 0.25 m/s with
-  the press removed, i.e. the **already committed throttle cut alone** bogs the
-  launch; the press changes nothing measurable. So the press is not the fault.
-- **The input field is wheel+0x14C after all (corrected 2026-11-25):** both laws
-  read `piVar5[0x47]` with `piVar5 = *(wheel_array+0x13E4) + 0x30`, so the field
-  is `0x30 + 0x47*4 = 0x14C`, the accumulated slip the tyre filter keeps --
-  exactly our `slip_state.slip`. (The first reading of `0x11C` forgot the `+0x30`
-  base; `piVar5[0x27]` = wheel+0xCC is the ASR's drive share and `piVar5[0x28]`
-  = wheel+0xD0 the ABS's flag.) So the scale is right and the suspect moved:
-  our accumulated slip pins at its 1.0 clamp where the original's stays around
-  0.2-0.4, and the derivative term `2*(x0-prev)+x0` amplifies that first jump
-  into a full cut.
-- **Driver's measurement of the original (2026-11-25), the target behaviour:**
-  ASR minimum -> the car launches briskly. ASR maximum -> a slow, smooth rise of
-  revs, "as if I am pressing the pedal slowly" -- i.e. a PARTIAL, proportional
-  cut that holds the slip in the linear band. Our port cuts to zero instead.
-- **Deciding experiment (driver, 1 minute, needed before any code change):** on
-  the ORIGINAL, set ASR to its maximum on the car and launch from rest at full
-  throttle. If it bogs the same way, our law is faithful and only the input
-  scale differs; if it pulls away cleanly, `wheel+0x11C` stays small at a launch
-  and the scale is wrong in the port.
-- **Ported completely (2026-11-25):** throttle cut and clutch press are both
-  applied; constants verified byte for byte from `0x60E02C..0x60E048`
-  (1.0, 1.0, 0.3, 0.5, 0.1, 0.1, 0.1, 0.2 = clamp, clamp, slip gain, angle gain,
-  ramp, threshold, slip rate, angle rate). `test_vehicle_dynamics` pins the press
-  as a 0..1 multiplier and that ASR never makes the car faster (39/39).
-- **The remaining behaviour gap is the launch, proven by the frame trace:** the
-  law's linear band is mean slip 0.3..0.5. Our launch spends 0.4 s with the rear
-  wheels standing still (`v ~ 0`) while the engine revs 873 -> 2733 rpm (the
-  port's auto-clutch slip phase), then the wheels break loose in one frame and
-  the mean jumps 0.00 -> 0.54, past the band, into a limit cycle (pedal 0 ->
-  torque 0 -> slip 0 -> pedal 1). The original's pedal is 0 at that moment, so
-  its wheels spin from the first frame and the ASR modulates smoothly -- exactly
-  the driver's "slow, smooth rev rise" at max ASR.
-- **Next, and it is shared with DRV-7:** replace the port's invented auto-clutch
-  slip profile with the recovered anti-stall regulator (`FUN_0044DD70`: press
-  only when the engine falls under the target, rates `dt*33.333336` / `dt*200`,
-  memories `car+0x1F44`/`0x1F48`), so a launch is connected from the first frame
-  and the ASR has a band to work in. Do not retune the 0.2/0.3 thresholds.
-- **Status:** ASR ported in full; behaviour blocked on the launch/clutch profile
-  (DRV-7 regime).
-
+### DRV-11 ASR: closed -- law, clutch press and launch behaviour verified (2026-11-25)
+- **The law and its writer are fully recovered:** `FUN_0044e120` reads the mean
+  `|wheel+0x14C|` over enabled, driven, contacting wheels (`piVar5[0x27]` is
+  wheel+0xCC, the drive share), computes `x0 = mean - 0.2*inv`, `x = (x0 -
+  car+0x1F50)*2 + x0`, and for `x > 0` sets `service = max(0, 1 - x/(0.3*inv))`,
+  applies `throttle *= service` and `car+0x1DBC = 1-(1-car+0x1DBC)*service`.
+  Constants verified byte for byte from `0x60E02C..0x60E048` (1.0, 1.0, 0.3,
+  0.5, 0.1, 0.1, 0.1, 0.2). Port: `DriveInput`/`vehicle_dynamics.cpp` ASR block.
+- **The field is wheel+0x14C** (`0x30 + 0x47*4`; an earlier `0x11C` reading
+  forgot the `+0x30` base) -- the accumulated slip the tyre filter keeps, i.e.
+  our `slip_state.slip`. Nothing else has to move: the scale was right.
+- **The "bogs to 0.25 m/s" measurement was wrong, twice over:**
+  (a) the fixture called `run(3, 1, 0, 0)`, which sets the throttle ONCE and
+  lets the law's own `throttle *= service` compound over the next 179 frames,
+  so the pedal decayed to zero on its own; (b) it ran the HOST driveline
+  (`faithful = false`), whose invented 0.5 s launch aid holds the driven wheels
+  at zero spin while the engine revs 873 -> 2733 rpm, so the mean slip jumps
+  0.00 -> 0.54 and lands outside the law's 0.3..0.5 band by construction. The
+  player never takes that path: `host_game_options.cpp:100` defaults
+  `player_originaldrive` to 1, and the driver's `save/game/openslrr_options`
+  carries no override (only `framerate_mode` and `handbrake`).
+- **Corrected measurement (faithful driveline, held pedal, 3 s from rest):**
+  ASR off -> **17.62 m/s**; ASR strength 1 -> **3.74 m/s**, mean driven slip
+  **0.40** (inside the band), service **0.256**, speed climbing monotonically
+  (1.45 m/s at 1 s, 2.61 at 2 s, 3.53 at 2.8 s) while the engine rises
+  790 -> 1627 rpm. No limit cycle, no stall: a partial proportional cut, which
+  is exactly the driver's reading of the original ("the revs come up slowly and
+  smoothly, as if I am pressing the pedal slowly") and the car still pulls away.
+  The same service value presses the clutch to 0.256 --
+  `open' = 1-(1-0)*0.256`, a quarter-pressed pedal, exactly `0x44E271:41`.
+- **Pinned by `test_vehicle_dynamics`** (faithful + held pedal): the press is a
+  0..1 multiplier below 0.9, ASR slows the launch and still leaves the car
+  moving (> 2 m/s in 3 s). 39/39.
+- **Status:** closed. The only ASR item still open in the port is publishing the
+  lamp value (DRV-10). Do not retune the 0.2/0.3/0.4 thresholds to chase a
+  behaviour difference.
 ### DRV-9 The car creeps downhill on the handbrake with locked wheels
 - **Reported by the driver (2026-11-24):** on a slope with the handbrake on
   and the wheels visually locked, the car still creeps downhill. The driver
@@ -457,12 +445,16 @@ look at, so the check takes a minute rather than a session.
   driving (pedal up) and only goes small when a pedal/auto-clutch/ASR presses it;
   the measured 35.0228 on the rear pair was taken with the pedal at 0.9996.
   There is no separate unknown regulator: this item no longer waits on one.
-- **The same regime seen from the ASR side (2026-11-25):** a launch trace shows
-  the rear pair standing still (`v ~ 0`, slip 0.00) for 0.4 s while the engine
-  revs 873 -> 2733 rpm, then breaking loose in ONE frame (mean slip 0.00 ->
-  0.54). That is the pin, not a tyre-curve artefact: a connected driveline with
-  the engine at 2733 rpm cannot hold a driven wheel at 0 rad/s, and the step it
-  makes on release is what denies the ASR its 0.3..0.5 operating band.
+- **The 0.4 s pinned launch is the HOST driveline, not the player's (corrected
+  2026-11-25):** the trace that showed the rear pair standing still for 0.4 s
+  while the engine revved 873 -> 2733 rpm, then breaking loose in one frame, was
+  taken with `faithful = false` -- that is the host model's invented launch aid
+  slipping the clutch, and the player never runs it (`player_originaldrive`
+  defaults to 1). On the faithful driveline the same launch is connected from
+  the first frame: spin 1.62 rad/s at t=0 and mean slip 0.42 by 0.2 s, steady
+  0.40..0.43 through the second, no step. So the host path is the only place
+  this regime exists, and DRV-7's pin must be measured on the faithful driveline
+  to know whether it is real at all.
 - **Status:** open (the airborne spin decay that used to finish the lifted
   wheel off is fixed in e8b589d7; the pin itself is this item).
 
