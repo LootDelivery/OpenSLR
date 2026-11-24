@@ -1560,7 +1560,8 @@ Tuning -> Driving и строка `HANDBRAKE STRENGTH` на странице GAM
 пишется в `save/game/openslrr_options` (`handbrake=`), а не в `java.util.Config`:
 у стокового Config фиксированный бинарный layout, и `player_handbrake` в
 `save/game/options` не переживает перезапуск. Строку меню рисует класс из
-`openslrr/patch`: порт ставит этот каталог впереди классов установки
+`openslrr/patch` — это декомпилированный стоковый диалог плюс одна строка
+(`HANDBRAKE STRENGTH`), то есть вёрстка в игре родная. Порт ставит этот каталог впереди классов установки
 (`find_patch_root` + `Jvm::prefer_patch_root`), а сама установка остаётся
 стоковой. В установку этот класс класть **нельзя**: он зовёт нативы, которые
 есть только у порта, и оригинальный `StreetLegal_Redline.exe` падает на нём с
