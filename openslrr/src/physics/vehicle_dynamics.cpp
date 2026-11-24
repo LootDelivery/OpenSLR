@@ -679,6 +679,40 @@ double limiter_factor(double rpm, double previous, double limit) {
 }
 } // namespace
 
+// wheel+0xEC, the slip denominator of 0x00454500 (CAR_MODEL_RECOVERY 14.7). The
+// listing writes, per wheel:
+//
+//   if (sum|share| <= 0.0001 || share <= 0.0001 || total_ratio == 0)
+//       fVar16 = gearbox+0xE8;
+//   else
+//       fVar16 = (share/sum|share|)*(1-car+0x1DBC)*|total_ratio|*gearbox+0xE0
+//                + gearbox+0xE8;
+//   wheel[0xEC] = 0.1/fVar16;
+//
+// The per-wheel `share <= 0.0001` test is what gives the undriven wheels exactly
+// gearbox+0xE8: measured live, the MC's fronts read 35.0000 and its rears
+// 35.0228195 in first gear with the clutch open (clutch 0.999608), which this
+// reproduces to nine significant digits. `brake_inertia` is the sixth float of
+// the engine record (part_config's brake_inertia).
+double wheel_slip_denominator(double share, double share_sum, double clutch_open,
+                              double total_ratio, double engine_inertia,
+                              double brake_inertia) {
+  const double e8 = brake_inertia;
+  if (!(share_sum > 0.0001) || !(share > 0.0001) || total_ratio == 0)
+    return e8;
+  return (share / share_sum) * (1 - clutch_open) * std::abs(total_ratio) *
+             engine_inertia +
+         e8;
+}
+
+double wheel_inverse_inertia(double share, double share_sum, double clutch_open,
+                             double total_ratio, double engine_inertia,
+                             double brake_inertia) {
+  const double denominator = wheel_slip_denominator(
+      share, share_sum, clutch_open, total_ratio, engine_inertia, brake_inertia);
+  return denominator > 0 ? 0.1 / denominator : 0.0;
+}
+
 void VehicleDynamics::update_gear(double rpm, double shaft,
                                   double road_shaft) {
   const bool shift_pressed = drive.shift && drive.shift != previous_shift_;

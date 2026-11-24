@@ -919,6 +919,37 @@ SLRR_TEST(anti_roll_on_an_engineless_coasting_car_does_not_rewrite_tyre_loads) {
   }
 }
 
+SLRR_TEST(wheel_slip_denominator_reproduces_the_live_measurement) {
+  // MC in first gear with the clutch open, read out of the running original
+  // (CAR_MODEL_RECOVERY 14.7): J_engine 13.5161991, gearbox+0xE8 = 35,
+  // rearend 2.666 x 3.230 = 8.61118, drive shares 0/0/1/1 and a rear wheel+0xEC
+  // of 0.00285528135 -- fVar16 = 35.0228195 against an even 35 on the undriven
+  // fronts. The clutch slip implied by the rear value is 0.000392.
+  const double j_engine = 13.5161991, e8 = 35;
+  const double total = 2.6660 * 3.23000;
+  const double clutch_open = 1 - 2 * .0228195 / (total * j_engine);
+  const double front =
+      wheel_slip_denominator(0, 2, clutch_open, total, j_engine, e8);
+  SLRR_REQUIRE(front == e8);
+  SLRR_REQUIRE(std::abs(wheel_inverse_inertia(0, 2, clutch_open, total, j_engine,
+                                              e8) -
+                        2.85714283e-3) < 1e-10);
+  const double rear =
+      wheel_slip_denominator(1, 2, clutch_open, total, j_engine, e8);
+  SLRR_REQUIRE(std::abs(rear - 35.0228195) < 1e-6);
+  SLRR_REQUIRE(std::abs(wheel_inverse_inertia(1, 2, clutch_open, total, j_engine,
+                                              e8) -
+                        2.85528135e-3) < 1e-10);
+  // The three fallbacks all collapse to gearbox+0xE8: no driven share at all,
+  // this wheel not driven, and no gear engaged.
+  SLRR_REQUIRE(wheel_slip_denominator(1, 0, 0, total, j_engine, e8) == e8);
+  SLRR_REQUIRE(wheel_slip_denominator(0, 2, 0, total, j_engine, e8) == e8);
+  SLRR_REQUIRE(wheel_slip_denominator(1, 2, 0, 0, j_engine, e8) == e8);
+  // Clutch fully engaged adds the whole reflected engine inertia instead.
+  SLRR_REQUIRE(std::abs(wheel_slip_denominator(1, 2, 0, total, j_engine, e8) -
+                        (e8 + .5 * total * j_engine)) < 1e-9);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       tyre_grip_follows_the_tyre_script,
@@ -956,6 +987,7 @@ int main() {
       invalid_anti_roll_coefficients_individually_act_as_zero,
       extreme_anti_roll_coefficients_stay_finite_at_the_paired_weight_cap,
       anti_roll_on_an_engineless_coasting_car_does_not_rewrite_tyre_loads,
+      wheel_slip_denominator_reproduces_the_live_measurement,
   };
   return slrr::standalone::run("vehicle_dynamics", tests);
 }

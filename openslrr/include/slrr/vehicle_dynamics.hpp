@@ -227,6 +227,19 @@ struct DriveInput {
   std::function<double(double)> nitro_torque;
   double nitro = 0;
 };
+// wheel+0xEC and the slip denominator behind it, both recovered from
+// 0x00454500 (CAR_MODEL_RECOVERY 14.7) and pinned to the live measurement.
+// `share` is this wheel's drive share (wheel+0xE0), `share_sum` the sum of
+// |share| over the wheels, `clutch_open` car+0x1DBC (1 = open), `total_ratio`
+// the engaged ratio times the final drive, `engine_inertia` gearbox+0xE0 and
+// `brake_inertia` gearbox+0xE8 (the sixth float of the engine record, which
+// part_config already loads as brake_inertia).
+double wheel_slip_denominator(double share, double share_sum, double clutch_open,
+                              double total_ratio, double engine_inertia,
+                              double brake_inertia);
+double wheel_inverse_inertia(double share, double share_sum, double clutch_open,
+                             double total_ratio, double engine_inertia,
+                             double brake_inertia);
 double suspension_force(double length, double velocity, double rest,
                         double maximum, double spring, double bump,
                         double rebound);
