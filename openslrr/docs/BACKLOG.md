@@ -298,11 +298,29 @@ look at, so the check takes a minute rather than a session.
   0.625/s holds every known row. The truth must sit between, and the
   `(1-clutch_slip)` factor plus gearbox+0xE8's real value are exactly what
   moves it — neither is recovered yet.
-- **Next step:** find the writer of gearbox+0xE8 (the gearbox object lives at
-  car+0x1fbc; its constructor FUN_0043e3e0 registers only script properties at
-  other offsets, so E8 is native-set) and the semantics of car+0x1dbc during a
-  slide; then port the step with the slip measure live and re-measure the
-  fixture and the launch rows.
+- **MEASURED (2026-11-24, §14.7 of CAR_MODEL_RECOVERY):** gearbox+0xE8 = **35**
+  on the MC, and wheel+0xEC came back non-zero at last: front wheels
+  0.00285714283 (fVar16 = 35.0000, share 0 -> the fallback term alone), rears
+  0.00285528135 (fVar16 = 35.0228195 = 35 + 0.0228 from a clutch slip of
+  0.0004 in 1st gear). The listing formula reproduces the rear value to nine
+  significant digits. So E8 is the per-engine brake/wheel inertia (the sixth
+  float of the engine record, read by part_config as brake_inertia), NOT
+  driveline_inertia: at FIXED clutch the wheel sees E8, and the share term adds
+  0.5*8.611*13.5162 = 58.2 only as the clutch re-engages. The two rejected
+  portings were therefore both wrong for the same reason -- the undriven/fallback
+  branch is also 35 (measured on the fronts), and the `E8 := 0` trial fed
+  J_drive there (0.028/s), which is what froze the undriven wheels and collapsed
+  the launch. The driven value was never the culprit.
+- **Implied response:** 0.1/35 = 2.857e-3 against the committed 1/1.6 = 0.625/s:
+  the port is 1.6x stiffer at the tyre servo, and the brake decrement
+  `torque_step*brake_scale` (50/35 * cfg/1000 / 1.6) is 3.1x (A = 50*4) or 4.5x
+  (A = 50*2.8) stronger than `dt*A*0.1/fVar16*wheel[d8]`. The exact step
+  coefficient A is still ambiguous in the transcription, so port the form with
+  A as the single named constant and let the rows pick between 140 and 200.
+- **Next step:** port the step with fVar16 (E8 on every wheel, share term only
+  for driven ones) and the slip measure live; re-measure the fixture and the
+  launch rows -- in particular whether the undriven wheels now hold their spin
+  (they get 35, i.e. 0.4/s, not 0.028/s).
 - **Status:** open (the airborne spin decay that used to finish the lifted
   wheel off is fixed in e8b589d7; the pin itself is this item).
 
