@@ -1002,6 +1002,13 @@ void VehicleDynamics::step_drive() {
     const double shaft_new = shaft_omega + engage * exchange * (1.0 - coupling_k) * gap;
     const double rpm_new = engine_omega - engage * exchange * coupling_k * gap;
     const double wheel_step = shaft_new / ratio - wheel_shaft;
+    if (slide_trace())
+      std::fprintf(stderr,
+                   "[drive] eng=%.0f gas=%.2f brk=%.2f erpm=%5.0f shrpm=%5.0f "
+                   "ratio=%5.2f shift=%.2f clutch=%.2f k=%.3f gap=%6.1f\n",
+                   engage, gas, drive.brake, engine_omega * rpm_per_rad,
+                   std::abs(shaft_omega) * rpm_per_rad, ratio, shift_time_,
+                   drive.clutch, coupling_k, gap);
     if (wh_abs > 1e-9)
       for (size_t i = 0; i < wheels.size(); ++i) {
         const double d = drive.wheels[i].weight;
