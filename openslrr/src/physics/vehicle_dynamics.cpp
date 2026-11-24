@@ -1164,7 +1164,13 @@ void VehicleDynamics::step_drive() {
     apply_brake(torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale);
 
     if (!s.contact || s.force <= 0) {
-      s.spin *= 1 - .25 * timestep / wheel_inertia;
+      // Recovered 0x00454500: without contact the slip memory is cleared
+      // (wheel 0x14C/0x150/0x158 zeroed) and the spin is left alone -- the
+      // listing has no airborne decay. The decay we had here was invented and
+      // is what finished off a wheel that lifts in a slide already pinned at
+      // zero by its tyre; the driver's own comparison agrees: airborne wheels
+      // with throttle keep spinning, lifted ones did not.
+      s.slip_state = {};
     } else {
       s.slip_speed = s.spin * wheel.radius - road;
       s.lateral_speed = lateral;
