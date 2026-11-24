@@ -221,6 +221,20 @@ look at, so the check takes a minute rather than a session.
 
 ## Driving
 
+### DRV-10 The OSD indicator icons (abs/asr) must be wired through the flags word
+- **Driver requirement (2026-11-24): mandatory check.** The original's
+  dashboard script reads the flags word through `GameRef.getFlags`
+  (native 0047df40: returns the object's +0x54). Our flags live as
+  `drive.abs_active` / `drive.asr_active` (bits 0x1000000 / 0x2000000) but are
+  not exposed to the script system, so the icons never light. In the original
+  the ASR icon lights, the ABS one does not (the 0x1000000 bit has no OSD
+  reader there either).
+- **Acceptance gate:** the ASR icon must light exactly when the original's
+  does (ASR cutting, service < 0.9), verified side by side with the original
+  game before/after; the ABS icon must stay dark. Do not close without the
+  comparison.
+- **Status:** open.
+
 ### DRV-9 The car creeps downhill on the handbrake with locked wheels
 - **Reported by the driver (2026-11-24):** on a slope with the handbrake on
   and the wheels visually locked, the car still creeps downhill. The driver
