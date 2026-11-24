@@ -240,39 +240,40 @@ look at, so the check takes a minute rather than a session.
 
 ## Driving
 
-### DRV-10 The OSD indicator icons (abs/asr): closed -- lamps found, drawn, fed (2026-11-25)
-- **The premise of the old title was wrong.** `osd_abs`/`osd_asr` are not names
-  published into a value table: they are the car config commands that declare two
-  HUD lamps. The parser table is at `0x60E3D0` and pairs each command with its
-  handler: `osd_abs` -> `FUN_00445520`, `osd_asr` -> `FUN_004455b0`, `osd_hbrake`
-  -> `FUN_00445640`, `osd_emergency` -> `FUN_004456d0`, `osd_damage_slot` ->
-  `FUN_004450e0`; all four lamp handlers parse the same `%d %f %f %f` prefix
-  (format string at `0x60F874`/`0x60F894`/`0x60F8B4`) and then build the element
-  with `FUN_00544590` + `FUN_00546070(handle, 0xE, 0)`.
-- **`0xFFFFFFFF` means "no car specific render".** The exe carries no `led_*`
-  string, so the lamp is not named from code: the only lamp meshes the packages
-  ship are the four below, and that is what has to be drawn. `cars.rpk` lists exactly four of them next to the other OSD resources
-  (`cars/osd/`): `led_ABS` 0x5E, `led_ER` 0x5F, `led_ASR` 0x60, `led_HB` 0x63,
-  with loose copies in `cars/meshes/{ABS,ASR,ER,HB}_led.scx`. Their vertices
-  carry the row placement itself: x = -499.19 / -471.85 / -444.89 / -416.80, all
-  y = 17.42 -- i.e. ABS, ASR, HB, ER left to right, the four icons the driver
-  sees. The shipped cfg declares all four with `0xFFFFFFFF 0.000 0.000 0.000`.
-- **The value side was never missing.** The original sets bit `0x1000000` (ABS)
-  or `0x2000000` (ASR) on `car+0x70` while the law's service factor is below
-  0.9; the port computes the same thing as `drive.abs_active` / `drive.asr_active`
-  (`vehicle_dynamics.cpp:918`, `:945`). So the two lamps must be lit exactly
-  while the aid intervenes -- the ASR one on every hard launch, the ABS one
-  almost never (stock cars ship `abs 0`, and the law needs a locking wheel).
-- **What was really missing was the parse and the draw:** the port's name table
-  knew only `osd_hbrake` of the four lamps, and a `0xFFFFFFFF` id was reduced to
-  resource 0, which `draw_vehicle_hud` skipped on its first line. Added
-  `HudSlot::Abs`/`HudSlot::Asr`, the two config names, the built-in LED
-  substitution and the lit gate, and fed `VehicleHudState::abs/asr` from the
-  dynamics.
-- **Status:** closed for the parse, the value and the draw. Placement of the
-  four lamps in the port's HUD is inherited from the HB slot that was measured
-  earlier, because all four meshes share one coordinate space and one anchor
-  positions the whole row -- one in-game look is enough to confirm it.
+### DRV-10 The OSD indicator icons (abs/asr): closed -- lamps drawn in panel space (2026-11-25)
+- **The commands are lamp declarations, not published values.** The car config
+  parser table at `0x60E3D0` pairs each command with its handler: `osd_abs` ->
+  `FUN_00445520`, `osd_asr` -> `FUN_004455b0`, `osd_hbrake` -> `FUN_00445640`,
+  `osd_emergency` -> `FUN_004456d0`, `osd_damage_slot` -> `FUN_004450e0`; the
+  handlers parse `%d %f %f %f` (formats `0x60F874` / `0x60F894` / `0x60F8B4`)
+  and build the element with `FUN_00544590` + `FUN_00546070(handle, 0xE, 0)`.
+- **`0xFFFFFFFF` is "no car specific render".** No `led_*` string exists in the
+  exe, so the lamp is not named from code; the stock LEDs are the only lamp
+  meshes the package ships. Verified from `cars.rpk` (pack 31): `led_ABS` 0x5D,
+  `led_ASR` 0x5E, `led_HB` 0x5F, `led_ER` 0x60 are `typeof 5` (model entries)
+  and 0x61..0x64 repeat the four as `typeof 14`; those four are the only ones
+  whose model resolves the panel atlas (`cars/textures/LongOSDGauge.png`), and
+  0x61./0x62./0x63 resolve to `ABS_led.scx` / `ASR_led.scx` / `HB_led.scx`.
+- **The lamps live in the panel's pixel space, anchored to the bottom-right
+  corner of the screen.** `newosd` (0x55) spans x -502..0, y 0..99.2; the LED
+  quads are 26x17 px at x -499.19 (ABS) / -471.85 (ASR) / -444.89 (HB) /
+  -416.80 (ER), y 0.69..17.42. So clip `x = 1 + px*(2/1280)`,
+  `y = -1 + py*(2/768)`: the row covers 61..70% of the width along the bottom
+  edge, four icons left to right -- exactly the row the driver sees.
+- **What was broken in the port, twice over.** The name table knew only
+  `osd_hbrake` of the four lamps; a `0xFFFFFFFF` id became resource 0, which
+  `draw_vehicle_hud` skipped on its first line; and the LED quads were drawn
+  with the generic HUD transform (`xscale*position_scale`, position (0,0)),
+  which put a 26 px icon ~7 screen-widths to the left, so even the handbrake
+  lamp was invisible. Fixed: `HudSlot::Abs`/`Asr`, built-in LED substitution
+  (0x61 / 0x62 / 0x63 for HB), a dedicated panel-space draw, and
+  `VehicleHudState::abs/asr` fed from `drive.abs_active/asr_active`.
+- **Regression test:** `test_hud_lamps` pins the three ids, the atlas and the
+  clip-space row (`x 0.220..0.346`, `y -0.998..-0.955`), so the rows cannot
+  drift off screen again without a failing test.
+- **Status:** closed. The lamps are drawn only while their aid intervenes,
+  which is the original rule: ASR on a hard launch, ABS only on a locking
+  wheel (stock cars also ship `abs 0`).
 ### DRV-11 ASR: closed -- law, clutch press and launch behaviour verified (2026-11-25)
 - **The law and its writer are fully recovered:** `FUN_0044e120` reads the mean
   `|wheel+0x14C|` over enabled, driven, contacting wheels (`piVar5[0x27]` is

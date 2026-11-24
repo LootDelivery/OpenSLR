@@ -21,6 +21,8 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -631,11 +633,9 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       {true, cars_resource(0x57), {.646f, .631f, 0}},
       {true, cars_resource(0x5c), {-.126f, .843f, 0}, {}, 0xff000000},
       {true, cars_resource(0x5c), {-.126f, .948f, 0}, {}, 0xff000000},
-      // The four lamps sit in one row of the panel and their meshes carry the
-      // row pitch themselves (led_ABS -499.19, led_ASR -471.85, led_HB -444.89,
-      // led_ER -416.80, all y 17.42): one shared anchor is what place them.
-      {true, cars_resource(0x5e), {-.227f, .925f, 0}},
-      {true, cars_resource(0x60), {-.227f, .925f, 0}},
+      // Lamps: the meshes carry the row placement (see the LED branch below).
+      {true, cars_resource(0x61), {}},
+      {true, cars_resource(0x62), {}},
   }};
   const float pixel_aspect = static_cast<float>(height_) / width_;
   // Size the stock strip from the viewport width while preserving its aspect.
@@ -653,16 +653,17 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     const HudElement& item = override.defined ? override : stock[i];
     // The lamp commands ship 0xFFFFFFFF as their render id (see the shipped
     // cfg: `osd_abs 0xFFFFFFFF 0.000 0.000 0.000`): there is no car specific
-    // mesh, so the engine substitutes its own LED from cars.rpk (led_ABS 0x5E,
-    // led_ASR 0x60, led_HB 0x63) and draws it only while the lamp is lit.
+    // mesh, so the stock LED is used (cars.rpk: led_ABS 0x61, led_ASR 0x62,
+    // led_HB 0x63, all typeof 14, the only entries that carry the panel atlas)
+    // and the lamp is drawn only while it is lit.
     uint32_t render = item.resource;
     bool lit = true;
     if (slot == HudSlot::Handbrake || slot == HudSlot::Abs || slot == HudSlot::Asr) {
       lit = slot == HudSlot::Handbrake ? hud.handbrake
           : slot == HudSlot::Abs ? hud.abs : hud.asr;
       if (!render)
-        render = cars_resource(slot == HudSlot::Abs ? 0x5e
-            : slot == HudSlot::Asr ? 0x60 : 0x63);
+        render = cars_resource(slot == HudSlot::Abs ? 0x61
+            : slot == HudSlot::Asr ? 0x62 : 0x63);
     }
     if (!render || !lit) continue;
 
@@ -771,6 +772,19 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     const size_t count = mesh->positions.size() / 3;
     if (count > 65535) continue;
     const std::vector<uint16_t> indices(mesh->indices.begin(), mesh->indices.end());
+    if (slot == HudSlot::Handbrake || slot == HudSlot::Abs || slot == HudSlot::Asr) {
+      // The LED meshes live in the panel's own pixel space, which is anchored
+      // to the bottom-right corner of the screen: the newosd panel spans
+      // x -502..0, y 0..99.2, and the row sits at x -499.19 (ABS) -471.85
+      // (ASR) -444.89 (HB) -416.80 (ER), y 0.69..17.42 -- 26 x 17 px icons,
+      // i.e. 61..70% of the width along the bottom edge. So x = 1 + px*(2/W),
+      // y = -1 + py*(2/H) for the 1280x768 panel: a fraction of the viewport,
+      // not the config position (0,0) and not the mesh position_scale, which
+      // belongs to world meshes.
+      draw(*mesh, 0, count, indices.data(), indices.size(), 1.f, -1.f,
+           2.f / 1280.f, 2.f / 768.f, 0, 0, 0, 0xffffffffu);
+      continue;
+    }
     const float yscale = override.defined ? -.82f : -.406f * stock_scale;
     const float xscale = -yscale * pixel_aspect;
     const float x = override.defined ? item.position[0] * xscale : item.position[0];
