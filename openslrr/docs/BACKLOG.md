@@ -222,12 +222,16 @@ look at, so the check takes a minute rather than a session.
 ## Driving
 
 ### DRV-7 A driven wheel pinned at zero in a long slide (open diff)
-- **Symptom:** in the 105-degree slide fixture (62 km/h, throttle 1.0, engine
-  6908 rpm) the loaded driven wheel hovers at ~0 rad/s — the driveline
-  exchange's share and the sliding tyre's longitudinal force eat each other —
-  while its unloaded twin runs away to twice case speed. Live-confirmed by the
-  driver's own trace (MC GT, 2026-11-24): w2 pinned at 2.9 rad/s under an
-  8 m/s road for 10 frames while w3 burned; engine 7000 rpm, link engaged.
+- **Symptom:** one driven rear wheel hovers near zero while its twin burns at
+  twice case speed. WHICH wheel pins depends on the situation: the driver's
+  live trace (MC GT, 2026-11-24) pins the LIGHTLY-loaded one (w2, load
+  1375-1497 N, spin 2.6-3.0 rad/s under an 8 m/s road, 10+ frames, engine
+  7000 rpm, link engaged) while the heavily-loaded w3 (5100-5400 N) burns —
+  exactly what the driver reported. The 105-degree slide fixture (62 km/h,
+  throttle 1.0) pins the LOADED one (load 5690) with the unloaded twin at
+  95-105 rad/s. Both are the same balance: the exchange's share versus the
+  wheel's own tyre force; the fixture alone is not the driver's case and must
+  not stand in for it.
 - **Recovered so far (0x00454500):** the wheel's response to the tyre force is
   `wheel[0xEC] = 0.1/fVar16`, step `dt*50*EC*F_long*radius*2.8`, with
   `fVar16 = (wheel_E0/sum|E0|)*(1-clutch_slip)*|total_ratio|*gearbox+0xE0
