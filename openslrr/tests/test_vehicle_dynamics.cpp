@@ -371,6 +371,29 @@ SLRR_TEST(the_engine_beating_weak_rear_brakes_spins_the_driven_wheels) {
   SLRR_REQUIRE(std::abs(spun.tire_force.longitudinal) > 1.4 * spun.force);
 }
 
+SLRR_TEST(the_handbrake_locks_the_rears_and_holds_far_beyond_the_pedal_hack) {
+  // _main_.cfg says `brakepower 1000 2000`, so the rear handbrake moment is
+  // twice the rear service brake's (the live rear wheel read 0xDC 6540.775
+  // against 0xD8 3270.387), and the binding is a button: the pedal is 1 or 0.
+  // With the old unscaled moment and a .3 pedal the handbrake could not lock a
+  // rear wheel at any speed, which is what the driver kept reporting.
+  Car car;
+  for (int i = 2; i < 4; ++i) car.dynamics.drive.wheels[i].handbrake = 4000;
+  car.run(1, 0, 0, 0);
+  car.run(6, 1, 0, 0);
+  const double entry = car.speed();
+  car.dynamics.drive.engaged = false;  // neutral: the brakes alone slow it
+  car.dynamics.drive.handbrake = 1;
+  car.run(1, 0, 0, 0);
+  const double after = car.speed();
+  const double rear = std::abs(car.dynamics.state[2].spin);
+  const double front = std::abs(car.dynamics.state[0].spin);
+  std::printf("[handbrake] %.0f -> %.0f km/h in 1 s, rear spin %.2f, front %.1f rad/s\n",
+              entry * 3.6, after * 3.6, rear, front);
+  SLRR_REQUIRE(rear < 1);        // the rears lock
+  SLRR_REQUIRE(front > 10);      // and only the rears: the fronts keep rolling
+  SLRR_REQUIRE(after < entry - 3);
+}
 SLRR_TEST(a_car_without_an_engine_coasts_and_still_brakes) {
   // The drive configure_drive gives a car whose engine was torn off: a
   // zero-torque engine that never starts and no gears.
@@ -970,6 +993,7 @@ int main() {
       high_grip_braking_remains_finite_with_legacy_centre_fields,
       a_brake_stronger_than_the_drive_holds_its_wheels,
       the_engine_beating_weak_rear_brakes_spins_the_driven_wheels,
+  the_handbrake_locks_the_rears_and_holds_far_beyond_the_pedal_hack,
       a_car_without_an_engine_coasts_and_still_brakes,
       preapplied_brakes_hold_against_drive_in_both_directions,
       abs_releases_a_locked_wheel_while_the_road_moves,

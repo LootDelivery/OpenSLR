@@ -2487,7 +2487,12 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   const auto &in = host_input();
   drive.throttle = controls ? in.drive_throttle : 0.f;
   drive.brake = controls ? in.drive_brake : 0.f;
-  drive.handbrake = controls && in.drive_handbrake ? .3 : 0;
+  // The binding is a button, so the pedal is all or nothing: measured as the
+  // game's own 0/1 byte, and every shipped brake script writes the handbrake
+  // moment at twice the service brake's (14.7a). The old .3 was a feel hack
+  // from before the wheel carried that moment, and it left the handbrake unable
+  // to lock the rears at any speed.
+  drive.handbrake = controls && in.drive_handbrake ? 1.0 : 0.0;
   drive.abs_strength = rec.abs_strength;
   drive.launch_help = rec.launch_help;
   drive.differential_lock = std::clamp(comp(chassis, "diff_lock"), 0.f, 1.f);
@@ -2607,15 +2612,22 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
     const auto &wheel = rec.wheels[i];
     out.weight = std::max(0.f, wheel.drive);
     out.brake = std::max(0.f, wheel.brake);
-    // No shipped wheel script writes hbrake, so every car's handbrake torque was zero
-    // and the control did nothing at all -- measured on the stand as 60 -> 58.6 km/h
-    // with it held for 4 s, and reported by the driver long before that. Fall back to
-    // the part's own rear brake torque rather than inventing a value: the handbrake acts
-    // on the same rear brakes. A script that does provide hbrake still wins.
+    // The car's _main_.cfg carries `brakepower <brake_power> <handbrake_power>`
+    // and the game turns both into the same kind of wheel moment, so the handbrake
+    // torque is the rear brake's scaled by their ratio. Every shipped racer writes
+    // 1000 2000, and the live rear wheel read wheel+0xDC 6540.775 against
+    // wheel+0xD8 3270.387 -- exactly 2x (14.7). Using the brake moment unscaled
+    // made the handbrake half strength on top of the old .3 pedal.
     if (wheel.hbrake > 0.f) {
       out.handbrake = wheel.hbrake;
+    } else if (i >= 2) {
+      const double ratio = rec.config && rec.config->brake_power > 0.f &&
+                                   rec.config->handbrake_power > 0.f
+                               ? rec.config->handbrake_power / rec.config->brake_power
+                               : 1.0;
+      out.handbrake = std::max(0.f, wheel.brake) * ratio;
     } else {
-      out.handbrake = i >= 2 ? std::max(0.f, wheel.brake) : 0.f;
+      out.handbrake = 0.f;
     }
     out.bearing = std::max(0.f, wheel.bearing);
     // Raw wheel[0x74]: the recovered rolling-resistance force consumes the

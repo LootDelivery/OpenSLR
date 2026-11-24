@@ -67,14 +67,18 @@ Move fixed items to the bottom with the fixing commit.
   Recorded so nobody hunts for it in the renderer.
 - **Status:** open, belongs to the model.
 
-- [x] **The handbrake did nothing at all.** Two dead ends, both found by measurement
-      after the invented direction brake was deleted (it had been doing the stopping,
-      which is why no test ever caught this): no shipped wheel script writes `hbrake`,
-      so every car's per-wheel handbrake torque was 0, and the input was capped at
-      `0.3` by the first import with no provenance. Stand measurement with the control
-      held: **60 -> 58.6 km/h in 4 s**. Fixed by falling back to the part's own rear
-      brake torque when the script provides none (a script value still wins); the
-      stand now goes 60 -> 0.6 km/h. Reported by the driver long before it was measured.
+- [x] **The handbrake did nothing at all.** Three layers, each found only by
+      measuring: no shipped wheel script writes `hbrake`, so every car's per-wheel
+      torque was 0; the fallback used the rear brake moment unscaled; and the input
+      was capped at `0.3` by the first import with no provenance. Fixing the first
+      layer made the *stand* work (60 -> 0.6 km/h) while the game stayed dead,
+      because the stand sets the pedal to 1.0 and the game used .3: 0.3*3270 = 981
+      N m against a ~1700 N m rear grip limit cannot lock anything. The driver kept
+      reporting it, correctly. Now `handbrake = rear brake * handbrake_power/brake_power`
+      (`brakepower 1000 2000` on every racer, and the live rear wheel reads 0xDC
+      6540.775 against 0xD8 3270.387 -- exactly 2x) with the button pedal at 1.0.
+      Guarded by `the_handbrake_locks_the_rears_and_holds_far_beyond_the_pedal_hack`
+      (66 -> 43 km/h in 1 s, rears 0.00 rad/s, fronts 38.8).
 
 ## Awaiting driver verification
 
@@ -373,9 +377,16 @@ look at, so the check takes a minute rather than a session.
 
 ### DRV-3 Handbrake barely locks the wheels
 - **Symptom:** the handbrake has minimal effect; wheels keep rolling.
-- **Suspect:** handbrake brake-torque blend in the wheel model, or the
-  handbrake input not reaching the rear wheels.
-- **Status:** open.
+- **Cause (2026-11-15, CAR_MODEL_RECOVERY 14.7c):** two multipliers, both wrong.
+  The runtime fed the rear *service* moment (half of what the game uses) and the
+  pedal was a hard-coded `.3`, so the handbrake applied ~981 N m against a rear
+  grip limit of ~1700 N m: it could not lock a wheel at any speed. The stand
+  looked fixed only because it sets the pedal to 1.0.
+- **Fix:** moment from `brakepower <brake_power> <handbrake_power>` (2x on every
+  shipped racer; the live rear wheel reads 0xDC 6540.775 vs 0xD8 3270.387) and the
+  button pedal at 1.0. Regression test added.
+- **Status:** awaiting driver verification (does the handbrake now lock and rotate
+  the car?).
 
 ### DRV-4 Wheel rotation changes on part attach/detach; sky shifts
 - **Symptom:** removing or attaching any part in the garage rotates the
