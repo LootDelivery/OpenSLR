@@ -5,6 +5,53 @@ Move fixed items to the bottom with the fixing commit.
 
 ## Known defects
 
+### STB-1 Crashes on scene transitions
+- **Symptom:** the game crashes on various scene transitions: garage -> map,
+  -> shop, shop -> back, double-clicking the map chooser, and others.
+- **Timing:** began before the tyre work; unrelated to the tyre port (the
+  full rollback to `09b209f0` did not change it).
+- **Evidence gathered:** `SectionMachine::change_active_section`
+  (`section_machine.cpp:130`) notifies Java only; no native per-scene state
+  is reset. Proof that no unload hook exists at all: `fade_table()`
+  (`scene_instances.cpp:1783`) is keyed by raw pointers and is never cleared,
+  so after a scene change new objects allocated at the same addresses inherit
+  a dead object's fade. Cleared of suspicion (read-only): `mesh_span` cache
+  (keyed by resource id, value copied), traffic `warm_ground` (raw pointer
+  survives a scene, but only ever compared, never dereferenced),
+  `frontend_scripts` cache (built once, affects a second game start, not
+  transitions).
+- **Next:** ring log of transitions written unbuffered to disk, then a scene
+  unload hook; the log must land first so a new clean-up cannot hide the
+  cause.
+- **Status:** open.
+
+### STB-2 Second spawn lands at a different point
+- **Symptom:** in ValoCity the player can spawn twice in a row; the first
+  spawn is by the garage, the second somewhere else. Reproduced by pressing
+  the map-chooser transition twice.
+- **Suspect:** same class as STB-1 -- spawn selection reads state that did
+  not reset on the previous scene exit.
+- **Status:** open.
+
+### GFX-D Driver triangle
+- **Symptom:** a black/undefined triangle stretches from the driver model
+  downward (the user suspects a leg). Present on several cars. It makes the
+  car pivot around it only when the tyre port is active, because a
+  degenerate polygon gets into the contact math; with the tyre rolled back
+  it is visual only.
+- **Timing:** predates the upstream merge -- the rollback to `09b209f0`
+  (before the merge) did not remove it. Not ours.
+- **Next:** check how legs are bound: skinned bones vs fixed attach points,
+  including the points the car `.cfg` passes to the driver pose.
+- **Status:** open.
+
+### GFX-E Red inner fender
+- **Symptom:** the inner fender renders bright red (a material default),
+  most visible on the Mazda wheel-arch shot.
+- **Owner:** the car model itself (user confirmed); not a render defect.
+  Recorded so nobody hunts for it in the renderer.
+- **Status:** open, belongs to the model.
+
 - [x] **The handbrake did nothing at all.** Two dead ends, both found by measurement
       after the invented direction brake was deleted (it had been doing the stopping,
       which is why no test ever caught this): no shipped wheel script writes `hbrake`,
