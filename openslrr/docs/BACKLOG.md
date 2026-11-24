@@ -455,8 +455,19 @@ look at, so the check takes a minute rather than a session.
   0.40..0.43 through the second, no step. So the host path is the only place
   this regime exists, and DRV-7's pin must be measured on the faithful driveline
   to know whether it is real at all.
-- **Status:** open (the airborne spin decay that used to finish the lifted
-  wheel off is fixed in e8b589d7; the pin itself is this item).
+- **Measured on the faithful driveline (2026-11-25), and it is no longer a pin:**
+  the 105-degree slide fixture reports `lowest 1709 rpm` (the engine holds, > 2x
+  idle) and `below 1 rad/s for 8/0 frames` out of 240 at 120 Hz -- 67 ms of
+  transit through zero, not a wheel held there. What remains is the tyre's
+  longitudinal force reversing as the wheel's forward axis turns against the
+  car's motion: a curve artefact of the axis flip, not a driveline one, and not
+  something the anti-stall regulator (`FUN_0044DD70`) can touch -- the regulator
+  acts on the pedal when the crank falls toward idle, and 1709 rpm is far above
+  that. So the regulator port is NOT needed for this item either.
+- **Status:** engine side closed (the airborne spin decay is fixed in e8b589d7,
+  the crank holds through the slide); the residual is a 67 ms zero transit of a
+  driven wheel at the axis flip. Re-open only if a live trace shows a wheel held
+  at ~0 rad/s for more than ~0.1 s.
 
 ### DRV-1 Poor steering at speed
 - **Symptom:** the car barely turns at high speed ("поворачиваемость говно").
