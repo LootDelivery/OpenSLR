@@ -221,6 +221,19 @@ look at, so the check takes a minute rather than a session.
 
 ## Driving
 
+### DRV-9 The car creeps downhill on the handbrake with locked wheels
+- **Reported by the driver (2026-11-24):** on a slope with the handbrake on
+  and the wheels visually locked, the car still creeps downhill. The driver
+  states the original game does the same, so this is original behaviour, not
+  a port defect. Recorded so it is not "fixed" as a deviation, and so the
+  mechanism is documented: our rest-contact hold caps the impulse by the
+  tyre's peak, and the brake torque at rest competes with gravity through
+  `braking_at_rest`; a slope steeper than the balance creeps in both.
+- **If a fix is ever wanted** (a deviation from the original would be needed):
+  raise the static brake hold or the rest-contact friction for handbraked
+  wheels. Not scheduled.
+- **Status:** open, no action.
+
 ### DRV-8 A braked rear wheel hovers below rolling in a braking slide
 - **Symptom:** the driver's MC GT trace (2026-11-24): in braking slides
   (brk 0.90, gas 0.08) both rear wheels are held near zero while the road
