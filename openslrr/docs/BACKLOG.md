@@ -224,20 +224,34 @@ look at, so the check takes a minute rather than a session.
 ### DRV-7 A driven wheel pinned at zero in a long slide (open diff)
 - **Symptom:** in the 105-degree slide fixture (62 km/h, throttle 1.0, engine
   6908 rpm) the loaded driven wheel hovers at ~0 rad/s — the driveline
-  exchange's share (+4.4 rad/s per step at 7000 rpm) and the sliding tyre's
-  longitudinal force eat each other — while its unloaded twin runs away to
-  twice case speed (95-105 rad/s), the classic open-diff one-wheel spin. The
-  driver sees the same pair in game: one wheel stopped, the other burning.
-- **What is known:** the airborne branch that used to finish the lifted wheel
-  off is fixed (e8b589d7 — no spin decay off contact). The pinned wheel is
-  grounded; its balance is between the exchange and the tyre's slip-limit
-  clamp. The original's wheel step is `dt·50·wheel[0xEC]·F_long·wheel[0x60]·2.8`
-  plus a slip-sign-change clamp on the step itself; we use our own force
-  clamp (`|slip|/(dt·(inv_mass+inv_spin))`) and a plain `F·r/I` step, so the
-  balance constants are not the original's.
-- **Next step:** read wheel+0xEC's writer and the step's constants from the
-  exe, port the wheel step as recovered, re-measure the fixture.
-- **Status:** open.
+  exchange's share and the sliding tyre's longitudinal force eat each other —
+  while its unloaded twin runs away to twice case speed. Live-confirmed by the
+  driver's own trace (MC GT, 2026-11-24): w2 pinned at 2.9 rad/s under an
+  8 m/s road for 10 frames while w3 burned; engine 7000 rpm, link engaged.
+- **Recovered so far (0x00454500):** the wheel's response to the tyre force is
+  `wheel[0xEC] = 0.1/fVar16`, step `dt*50*EC*F_long*radius*2.8`, with
+  `fVar16 = (wheel_E0/sum|E0|)*(1-clutch_slip)*|total_ratio|*gearbox+0xE0
+  + gearbox+0xE8`; the undriven/no-ratio fallback is `fVar16 = gearbox+0xE8`.
+  gearbox+0xE0 = J_engine, +0xE4 = J_drive (both verified against our coupling
+  k). `sum|E0|` is the same share the exchange distributes by; `car+0x1dbc` is
+  the clutch slip measure (0 -> 0.357 -> 0 in the measured launch).
+- **Two portings measured and rejected (2026-11-24):** with `+0xE8 :=
+  driveline_inertia` the response is 0.026/s — the pin dies (fixture wheel
+  39.4 rad/s, was 0.0) but the launch collapses (0-100 4.41 -> 7.52 s, top
+  227 -> 180, test 6 NaN). With `+0xE8 := 0` for driven wheels (and J_drive
+  for the undriven fallback) the response is 0.436/s — the pin is marginal
+  (fixture 16.0 rad/s), the launch collapses worse (8.68 s) and the undriven
+  wheels freeze (0.028/s), 9 tests red. Our committed response 1/1.6 =
+  0.625/s holds every known row. The truth must sit between, and the
+  `(1-clutch_slip)` factor plus gearbox+0xE8's real value are exactly what
+  moves it — neither is recovered yet.
+- **Next step:** find the writer of gearbox+0xE8 (the gearbox object lives at
+  car+0x1fbc; its constructor FUN_0043e3e0 registers only script properties at
+  other offsets, so E8 is native-set) and the semantics of car+0x1dbc during a
+  slide; then port the step with the slip measure live and re-measure the
+  fixture and the launch rows.
+- **Status:** open (the airborne spin decay that used to finish the lifted
+  wheel off is fixed in e8b589d7; the pin itself is this item).
 
 ### DRV-1 Poor steering at speed
 - **Symptom:** the car barely turns at high speed ("поворачиваемость говно").
