@@ -82,10 +82,15 @@ Move fixed items to the bottom with the fixing commit.
       Under throttle the law is a torque balance, not a mode: the engine can
       out-pull the brake above ~1010 N m in first gear on an MC, which is what
       the original does too. Ctrl+F12 -> Tuning -> Driving -> `Handbrake
-      strength` (0..5, default 1, runtime only) scales the moment so the feel and
-      a future hydraulic mod can be judged without touching the data;
-      `the_handbrake_strength_scales_the_recovered_moment` pins 0/1/2 with the
-      throttle held down (rears 51.8 / 33.1 / 0.0 rad/s after 0.5 s).
+      strength` (0..5 step 0.1, **default 1.4**, saved as `player_handbrake` in
+      Game Options) scales the moment so the feel and a future hydraulic mod can
+      be judged without touching the data; 1 is the recovered law, 0 disables the
+      handbrake including the parked hold. `the_handbrake_strength_scales_the_
+      recovered_moment` pins 0/1/2 with the throttle held down (rears 51.8 /
+      33.1 / 0.0 rad/s after 0.5 s). Only the rear wheels get the moment; the
+      smaller effect on acceleration is their locked-tyre drag, measured at
+      -4860 N per rear wheel on an FWD car, and the three aids the pedal also
+      switches off (launch aid, auto-clutch launch, steering help).
 
 ## Awaiting driver verification
 

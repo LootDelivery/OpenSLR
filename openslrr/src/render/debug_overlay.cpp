@@ -151,17 +151,16 @@ void draw_tuning(Jvm* vm) {
                           "capping the clutch and no limit on the engine -- the "
                           "original's contract. Off: the host's crank-inertia slip "
                           "model.");
-    float handbrake = physics::drive_tuning().handbrake;
+    float handbrake = host_game_options().driving.handbrake_strength;
     ImGui::SetNextItemWidth(160.f);
-    if (ImGui::SliderFloat("Handbrake strength", &handbrake, 0.f, 5.f, "%.2fx",
-                            ImGuiSliderFlags_NoInput))
-      physics::drive_tuning().handbrake = handbrake;
-    ImGui::SetItemTooltip("Scales the handbrake moment on the rear wheels, not the "
-                          "pedal, so the original's button stays a button. 1 is the "
-                          "recovered law (twice the rear brake moment); 0 disables it. "
-                          "Runtime only: it is not saved, which is what a hydraulic "
-                          "handbrake mod should change in the car's brakepower line "
-                          "instead.");
+    if (ImGui::SliderFloat("Handbrake strength", &handbrake, 0.f, 5.f, "%.1fx"))
+      host_game_options_set_handbrake_strength(*vm, handbrake);
+    ImGui::SetItemTooltip("Saved in Game Options, 0.1 steps. Scales the handbrake "
+                          "moment on the rear wheels, not the pedal, so the "
+                          "original's button stays a button. 1 is the recovered law "
+                          "(twice the rear brake moment), 0 disables it; the default "
+                          "is 1.4. A hydraulic handbrake mod raises the second number "
+                          "in the car's brakepower line instead.");
     ImGui::SeparatorText("Session");
     ImGui::Text("Simulation time: %.2f s", vm->sim_time());
     float warp = vm->time_warp(-1.f);

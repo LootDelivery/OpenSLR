@@ -93,6 +93,13 @@ GameOptions read_options(Jvm& jvm) {
   options.driving.drive_hud = integer("player_drivehud", 1) != 0;
   options.driving.converter_stall =
       std::clamp(read("player_converterstall", .8f), .1f, 1.f);
+  // Taste, not recovery: the law is 1. The default sits at the setting where an
+  // FWD car's rears lock as the driver expects.
+  options.driving.handbrake_strength =
+      std::clamp(read("player_handbrake", 1.4f), 0.f, 5.f);
+  if (const char *forced = std::getenv("SLRR_HANDBRAKE"))
+    options.driving.handbrake_strength =
+        std::clamp(static_cast<float>(std::atof(forced)), 0.f, 5.f);
   if (const char *forced = std::getenv("SLRR_DRIVE_MODEL"))
     options.driving.original_drive = std::string(forced) != "host";;
   // SLRR_LAUNCH_RPM is the A/B switch for the launch aid: one binary, two
@@ -220,6 +227,14 @@ void host_game_options_set_converter_stall(Jvm& jvm, float fraction) {
   if (!loaded || !std::isfinite(fraction)) return;
   jvm.set_static("java.util.Config", "player_converterstall",
                  Value::make_float(std::clamp(fraction, .1f, 1.f)));
+  host_game_options_apply(jvm);
+}
+
+void host_game_options_set_handbrake_strength(Jvm& jvm, float strength) {
+  if (!loaded || !std::isfinite(strength)) return;
+  // The panel moves in 0.1 steps; rounding here keeps the saved value on them.
+  const float value = std::round(std::clamp(strength, 0.f, 5.f) * 10.f) / 10.f;
+  jvm.set_static("java.util.Config", "player_handbrake", Value::make_float(value));
   host_game_options_apply(jvm);
 }
 

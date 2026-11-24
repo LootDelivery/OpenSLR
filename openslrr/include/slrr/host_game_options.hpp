@@ -103,6 +103,12 @@ struct DrivingOptions {
   bool original_drive = true;
   // A driving readout in the corner: speed, rpm and gear. Off hides it.
   bool drive_hud = true;
+  // The handbrake moment as a multiple of the recovered law (1 = twice the rear
+  // service-brake moment, CAR_MODEL_RECOVERY 14.7c). Saved in Game Options and
+  // edited from the F12 panel in 0.1 steps. 1.4 is the driver's default: it is
+  // the setting at which an FWD car's rears lock reliably, while 1 is the law.
+  // 0 disables the handbrake; 5 is the panel's ceiling.
+  float handbrake_strength = 1.4f;
   // Torque converter stall point, as a fraction of the rev limit.
   float converter_stall = .8f;
   bool operator==(const DrivingOptions&) const = default;
@@ -134,5 +140,7 @@ void host_game_options_set_original_drive(Jvm& jvm, bool original);
 void host_game_options_set_drive_hud(Jvm& jvm, bool show);
 // Torque converter stall point, as a fraction of the rev limit.
 void host_game_options_set_converter_stall(Jvm& jvm, float fraction);
+// Handbrake moment as a multiple of the recovered law, 0..5 in 0.1 steps.
+void host_game_options_set_handbrake_strength(Jvm& jvm, float strength);
 void host_game_options_update(Jvm& jvm, bool force = false);
 }

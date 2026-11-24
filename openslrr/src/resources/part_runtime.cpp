@@ -2498,6 +2498,11 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.differential_lock = std::clamp(comp(chassis, "diff_lock"), 0.f, 1.f);
   // Player aid, off unless chosen; the physics reads 0 as "no launch hold".
   drive.launch_rpm = host_game_options().driving.launch_rpm;
+  // The handbrake moment's multiple over the recovered law: a saved player
+  // setting (CAR_MODEL_RECOVERY 14.7c), read here because the solver keeps it
+  // outside DriveInput -- it scales every car the same way, like the tyre sliders.
+  physics::drive_tuning().handbrake =
+      host_game_options().driving.handbrake_strength;
   // The original's coupling: ClutchF caps the torque the clutch passes, and the
   // drive path itself is the recovered one unless the host model is asked for.
   const float clutch_force = comp(chassis, "ClutchF");
