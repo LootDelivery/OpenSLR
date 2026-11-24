@@ -352,10 +352,12 @@ look at, so the check takes a minute rather than a session.
 - **The pin did NOT move (0.1 rad/s, was 0.0):** the wheel's own inertia was not
   its cause -- it scales the response, it does not set the moment balance. So the
   next suspect is the balance itself: the exchange's share versus the tyre, and
-  what holds a driven wheel at ~0 while its twin runs. New lead: in the 77 km/h
-  slide the engine floor fell 6912 -> 1687 rpm against a 1600 guard (5% margin),
-  i.e. the pin is now dragging the crank -- exactly the driver's 'the wheels stop
-  and the revs fall'. Watch it live in a long slide before touching it.
+  what holds a driven wheel at ~0 while its twin runs.
+- **Driver check 2026-11-15:** in a live slide the revs do NOT fall, and the
+  behaviour is close to the original. That retires the engine-drag concern (the
+  fixture's 1687 rpm is a pessimistic fixture, not the car), and leaves DRV-7 as
+  the wheel-level pin only: the car is drivable, but a driven wheel at ~0 rad/s
+  while its twin burns is still not what the original does.
 - **Status:** open (the airborne spin decay that used to finish the lifted
   wheel off is fixed in e8b589d7; the pin itself is this item).
 
