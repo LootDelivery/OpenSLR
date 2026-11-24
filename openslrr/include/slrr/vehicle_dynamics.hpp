@@ -192,6 +192,12 @@ struct DriveInput {
   double abs_prev = 0;
   // car+0x1F50: the ASR's memory of the previous frame's slip measure.
   double asr_prev = 0;
+  // The ASR's clutch press (FUN_0044e120:41 writes car+0x1DBC, the clutch pedal,
+  // as `open = 1-(1-open)*service`, i.e. engagement *= service). 1.0 leaves the
+  // clutch alone. The pedal itself is written every frame by the input stage
+  // (0x44F39A) and pressed by the anti-stall regulator (FUN_0044DD70); the ASR
+  // only multiplies on top of it.
+  double asr_clutch = 1;
   // Flags 0x1000000 / 0x2000000: the ABS / ASR indicators (raised under
   // service < 0.9). The original reads them in FUN_00451730 (0x452746 /
   // 0x452779) and publishes osd_abs / osd_asr (1.0/0.0) for the dashboard, so

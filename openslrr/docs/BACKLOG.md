@@ -270,21 +270,45 @@ look at, so the check takes a minute rather than a session.
   Ported literally and measured: ASR strength 1, launch from rest, 3 s full
   throttle -> **0.25 m/s vs 9.97 m/s with ASR off**, and the same 0.25 m/s with
   the press removed, i.e. the **already committed throttle cut alone** bogs the
-  launch; the press changes nothing measurable. So the press is not the fault:
-  **both laws read wheel+0x11C** (`0044df70:25`, `0044e120:25` -- the same
-  `piVar5[0x47]`), not `wheel+0x14C`; our stand-in (`slip_state.slip`, the
-  accumulated ratio) clamps at 1.0 where that field does not, so `x` clears the
-  0.3 threshold every frame and the pedal pins at 0.
+  launch; the press changes nothing measurable. So the press is not the fault.
+- **The input field is wheel+0x14C after all (corrected 2026-11-25):** both laws
+  read `piVar5[0x47]` with `piVar5 = *(wheel_array+0x13E4) + 0x30`, so the field
+  is `0x30 + 0x47*4 = 0x14C`, the accumulated slip the tyre filter keeps --
+  exactly our `slip_state.slip`. (The first reading of `0x11C` forgot the `+0x30`
+  base; `piVar5[0x27]` = wheel+0xCC is the ASR's drive share and `piVar5[0x28]`
+  = wheel+0xD0 the ABS's flag.) So the scale is right and the suspect moved:
+  our accumulated slip pins at its 1.0 clamp where the original's stays around
+  0.2-0.4, and the derivative term `2*(x0-prev)+x0` amplifies that first jump
+  into a full cut.
+- **Driver's measurement of the original (2026-11-25), the target behaviour:**
+  ASR minimum -> the car launches briskly. ASR maximum -> a slow, smooth rise of
+  revs, "as if I am pressing the pedal slowly" -- i.e. a PARTIAL, proportional
+  cut that holds the slip in the linear band. Our port cuts to zero instead.
 - **Deciding experiment (driver, 1 minute, needed before any code change):** on
   the ORIGINAL, set ASR to its maximum on the car and launch from rest at full
   throttle. If it bogs the same way, our law is faithful and only the input
   scale differs; if it pulls away cleanly, `wheel+0x11C` stays small at a launch
   and the scale is wrong in the port.
-- **Next:** decode `wheel+0x11C` (its writer is not in `FUN_00454500`; the
-  candidates in the decompile are the wheel-accumulator sites around
-  `00521620`/`0050fcc0`), feed both laws the recovered field, then re-enable the
-  press and re-measure the same row. Do not retune the 0.2/0.3 thresholds.
-- **Status:** open, blocked on `wheel+0x11C` only.
+- **Ported completely (2026-11-25):** throttle cut and clutch press are both
+  applied; constants verified byte for byte from `0x60E02C..0x60E048`
+  (1.0, 1.0, 0.3, 0.5, 0.1, 0.1, 0.1, 0.2 = clamp, clamp, slip gain, angle gain,
+  ramp, threshold, slip rate, angle rate). `test_vehicle_dynamics` pins the press
+  as a 0..1 multiplier and that ASR never makes the car faster (39/39).
+- **The remaining behaviour gap is the launch, proven by the frame trace:** the
+  law's linear band is mean slip 0.3..0.5. Our launch spends 0.4 s with the rear
+  wheels standing still (`v ~ 0`) while the engine revs 873 -> 2733 rpm (the
+  port's auto-clutch slip phase), then the wheels break loose in one frame and
+  the mean jumps 0.00 -> 0.54, past the band, into a limit cycle (pedal 0 ->
+  torque 0 -> slip 0 -> pedal 1). The original's pedal is 0 at that moment, so
+  its wheels spin from the first frame and the ASR modulates smoothly -- exactly
+  the driver's "slow, smooth rev rise" at max ASR.
+- **Next, and it is shared with DRV-7:** replace the port's invented auto-clutch
+  slip profile with the recovered anti-stall regulator (`FUN_0044DD70`: press
+  only when the engine falls under the target, rates `dt*33.333336` / `dt*200`,
+  memories `car+0x1F44`/`0x1F48`), so a launch is connected from the first frame
+  and the ASR has a band to work in. Do not retune the 0.2/0.3 thresholds.
+- **Status:** ASR ported in full; behaviour blocked on the launch/clutch profile
+  (DRV-7 regime).
 
 ### DRV-9 The car creeps downhill on the handbrake with locked wheels
 - **Reported by the driver (2026-11-24):** on a slope with the handbrake on
@@ -347,7 +371,8 @@ look at, so the check takes a minute rather than a session.
   + gearbox+0xE8`; the undriven/no-ratio fallback is `fVar16 = gearbox+0xE8`.
   gearbox+0xE0 = J_engine, +0xE4 = J_drive (both verified against our coupling
   k). `sum|E0|` is the same share the exchange distributes by; `car+0x1dbc` is
-  the clutch slip measure (0 -> 0.357 -> 0 in the measured launch).
+  the CLUTCH PEDAL (0 released, 1 pressed; the 0 -> 0.357 -> 0 was the pedal
+  moving), see the recovered writer below.
 - **Two portings measured and rejected (2026-11-24):** with `+0xE8 :=
   driveline_inertia` the response is 0.026/s — the pin dies (fixture wheel
   39.4 rad/s, was 0.0) but the launch collapses (0-100 4.41 -> 7.52 s, top
@@ -432,6 +457,12 @@ look at, so the check takes a minute rather than a session.
   driving (pedal up) and only goes small when a pedal/auto-clutch/ASR presses it;
   the measured 35.0228 on the rear pair was taken with the pedal at 0.9996.
   There is no separate unknown regulator: this item no longer waits on one.
+- **The same regime seen from the ASR side (2026-11-25):** a launch trace shows
+  the rear pair standing still (`v ~ 0`, slip 0.00) for 0.4 s while the engine
+  revs 873 -> 2733 rpm, then breaking loose in ONE frame (mean slip 0.00 ->
+  0.54). That is the pin, not a tyre-curve artefact: a connected driveline with
+  the engine at 2733 rpm cannot hold a driven wheel at 0 rad/s, and the step it
+  makes on release is what denies the ASR its 0.3..0.5 operating band.
 - **Status:** open (the airborne spin decay that used to finish the lifted
   wheel off is fixed in e8b589d7; the pin itself is this item).
 

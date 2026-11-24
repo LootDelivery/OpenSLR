@@ -922,6 +922,7 @@ void VehicleDynamics::step_drive() {
       drive.abs_prev = 0;
     }
   }
+  drive.asr_clutch = 1;
   if (drive.launch_help > 0 && drive.throttle > .01) {
     double sum = 0;
     int driven = 0;
@@ -942,6 +943,8 @@ void VehicleDynamics::step_drive() {
         const double pedal = std::max(0.0, 1.0 - x / (inv * .3));
         drive.throttle = pedal * drive.throttle;
         drive.asr_active = pedal < .9;
+        if (drive.asr_active)
+          drive.asr_clutch = pedal;
         // The listing also presses the clutch (car+0x1DBC, FUN_0044e120:41:
         // `open = 1 - (1-open)*service`). 0x1DBC is the clutch pedal: the input
         // stage writes it every frame (0x44F39A: `pedal = (pedal-x)*k + x`) and
@@ -1113,7 +1116,7 @@ void VehicleDynamics::step_drive() {
     // car+0x1DBC, the clutch measure the wheel step reads (0.1/fVar16 keeps the
     // share term only while it is closed). Measured: 1.000 standing in gear, 0.000
     // in neutral, which is exactly the port's `engage` inverted.
-    wheel_clutch_open_ = 1.0 - engage;
+    wheel_clutch_open_ = 1.0 - engage * drive.asr_clutch;
     // The recovered exchange, exactly as 0x00454500 (683-695) writes it:
     //
     //   shaft' = shaft + engage*0.999*(1-k)*(rpm_free - shaft)
@@ -1263,7 +1266,9 @@ void VehicleDynamics::step_drive() {
   double share_sum = 0;
   for (const auto &d : drive.wheels) share_sum += std::abs(d.weight);
   const double clutch_open =
-      drive.faithful ? wheel_clutch_open_ : 1 - std::clamp(drive.clutch, 0.0, 1.0);
+      drive.faithful
+          ? wheel_clutch_open_
+          : 1 - std::clamp(drive.clutch * drive.asr_clutch, 0.0, 1.0);
   const double total_ratio = drive.ratios[std::clamp(gear, 0, 7)];
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &wheel = wheels[i];

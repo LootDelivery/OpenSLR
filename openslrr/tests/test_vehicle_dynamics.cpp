@@ -534,6 +534,26 @@ SLRR_TEST(abs_releases_a_locked_wheel_while_the_road_moves) {
   SLRR_REQUIRE(cars[1].speed() < 20);
 }
 
+// The ASR's two writes (FUN_0044e120:40 and :41): the throttle cut and the
+// clutch press. Both are recovered; the press must stay a multiplier on the
+// pedal (0..1), and ASR must never make the car faster than the same launch
+// without it.
+SLRR_TEST(asr_cuts_the_throttle_and_presses_the_clutch) {
+  Car off, on;
+  for (Car* car : {&off, &on}) car->run(1, 0, 0, 0);
+  on.dynamics.drive.launch_help = 1;
+  off.run(3, 1, 0, 0);
+  on.run(3, 1, 0, 0);
+  const double off_slip = off.dynamics.state[2].slip_state.slip;
+  const double on_slip = on.dynamics.state[2].slip_state.slip;
+  std::printf("ASR launch 3s off=%.2f on=%.2f m/s slip off=%.2f on=%.2f press=%.3f\n",
+              off.speed(), on.speed(), off_slip, on_slip,
+              on.dynamics.drive.asr_clutch);
+  SLRR_REQUIRE(on.dynamics.drive.asr_clutch > 0);
+  SLRR_REQUIRE(on.dynamics.drive.asr_clutch <= 1);
+  SLRR_REQUIRE(on.speed() <= off.speed() + .01);
+}
+
 SLRR_TEST(nitrous_blends_the_wet_bank_without_changing_dry_drive) {
   Car dry, wet, unavailable;
   for (Car* car : {&dry, &wet, &unavailable}) {
@@ -1068,6 +1088,7 @@ int main() {
       a_car_without_an_engine_coasts_and_still_brakes,
       preapplied_brakes_hold_against_drive_in_both_directions,
       abs_releases_a_locked_wheel_while_the_road_moves,
+      asr_cuts_the_throttle_and_presses_the_clutch,
       nitrous_blends_the_wet_bank_without_changing_dry_drive,
       body_drag_and_lift_follow_half_rho_v_squared,
       sliding_sideways_meets_the_side_area_without_lift,
