@@ -221,6 +221,28 @@ look at, so the check takes a minute rather than a session.
 
 ## Driving
 
+### DRV-8 A braked rear wheel hovers below rolling in a braking slide
+- **Symptom:** the driver's MC GT trace (2026-11-24): in braking slides
+  (brk 0.90, gas 0.08) both rear wheels are held near zero while the road
+  moves at 8+ m/s — w2 at 2.6-3.0 rad/s (load 1375-1497 N, Flong -1650..-1828),
+  w3 at 10-11 rad/s (load 5100-5400 N, Flong -6100..-6700). The lighter wheel
+  visually "stops", the heavier one creeps — the reported "outer wheel stops
+  when it lifts". The exchange is pushing both up (+3.7/step at engine 1846
+  rpm), the tyre is spinning both up, so the holder is the brake path
+  balanced against them.
+- **Suspect:** our ABS path is not recovered. `abs_strength` is the game
+  option, but the logic itself (minimum = |road|/radius*0.85, allowed =
+  |spin| - minimum, service = lerp(service, min(service, allowed),
+  abs_strength)) has no section in PHYSICS_MODEL_PROVENANCE.md and no known
+  exe source. With abs_strength < 1 the brake never fully releases below the
+  minimum and the wheel parks at the lerp equilibrium instead of climbing to
+  rolling.
+- **Next step:** recover the original's ABS branch (search 0x0044xxxx/
+  0x00454500 callers for the brake path) or, if the original has none for
+  these cars, establish what its braked-slide wheel actually does from a live
+  trace before touching ours.
+- **Status:** open.
+
 ### DRV-7 A driven wheel pinned at zero in a long slide (open diff)
 - **Symptom:** one driven rear wheel hovers near zero while its twin burns at
   twice case speed. WHICH wheel pins depends on the situation: the driver's
