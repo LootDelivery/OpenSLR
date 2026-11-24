@@ -240,19 +240,51 @@ look at, so the check takes a minute rather than a session.
 
 ## Driving
 
-### DRV-10 The OSD indicator icons (abs/asr) must be wired through the flags word
-- **Driver requirement (2026-11-24): mandatory check.** The original's
-  dashboard script reads the flags word through `GameRef.getFlags`
-  (native 0047df40: returns the object's +0x54). Our flags live as
-  `drive.abs_active` / `drive.asr_active` (bits 0x1000000 / 0x2000000) but are
-  not exposed to the script system, so the icons never light. In the original
-  the ASR icon lights, the ABS one does not (the 0x1000000 bit has no OSD
-  reader there either).
-- **Acceptance gate:** the ASR icon must light exactly when the original's
-  does (ASR cutting, service < 0.9), verified side by side with the original
-  game before/after; the ABS icon must stay dark. Do not close without the
-  comparison.
+### DRV-10 The OSD indicator icons (abs/asr) must be published as osd_abs/osd_asr
+- **CORRECTED 2026-11-25 (the premise above was wrong in two ways).** The
+  original does not read the indicator bits through `GameRef.getFlags`: that
+  returns `object+0x54`, a different word, and no shipped script calls it
+  (`findstr /S /M /C:"getFlags" *.class` matches only GameRef.class itself).
+  The real reader is `FUN_00451730`: every frame it tests `car+0x70 & 0x1000000`
+  (at `0x452746`) and `& 0x2000000` (at `0x452779`) and publishes 1.0/0.0 through
+  `FUN_0043C0A0` under the names `osd_abs` / `osd_asr` (name table `0x60E3D0`,
+  next to `osd_turbo`, `osd_mileage`, `osd_hbrake`, `osd_emergency`,
+  `osd_damage_slot`). So BOTH lamps are wired in the original; the reason one
+  never sees the ABS lamp is the default `abs 0` that car init writes
+  (`0x00431990`, string `0x60DAD8`; ASR likewise `asr 0` at `0x60DAE0`), so the
+  law is never called and the bit never sets. With `abs > 0` on the car the lamp
+  does light; the same applies to ASR.
+- **What the port lacks:** we compute `drive.abs_active`/`drive.asr_active` but
+  publish nothing, so no lamp can light regardless of the option. Porting means
+  exposing `osd_abs`/`osd_asr` (1.0/0.0) from those two states the same way.
+- **Acceptance gate:** in the port, with the option enabled and the law cutting,
+  the published `osd_abs`/`osd_asr` must read 1.0; with the option off, 0.0.
+  Side-by-side with the original is still required before closing.
 - **Status:** open.
+
+### DRV-11 The ASR clutch press waits on wheel+0x11C (input scale, not the law)
+- **State (2026-11-25):** the law and its writer are fully recovered --
+  `FUN_0044e120:41` presses the clutch (`open' = 1-(1-open)*service`, i.e. our
+  `engage *= service`), and `car+0x1DBC` is the pedal written every frame by
+  the input stage (`0x44F39A`) and by the anti-stall regulator (`FUN_0044DD70`).
+  Ported literally and measured: ASR strength 1, launch from rest, 3 s full
+  throttle -> **0.25 m/s vs 9.97 m/s with ASR off**, and the same 0.25 m/s with
+  the press removed, i.e. the **already committed throttle cut alone** bogs the
+  launch; the press changes nothing measurable. So the press is not the fault:
+  **both laws read wheel+0x11C** (`0044df70:25`, `0044e120:25` -- the same
+  `piVar5[0x47]`), not `wheel+0x14C`; our stand-in (`slip_state.slip`, the
+  accumulated ratio) clamps at 1.0 where that field does not, so `x` clears the
+  0.3 threshold every frame and the pedal pins at 0.
+- **Deciding experiment (driver, 1 minute, needed before any code change):** on
+  the ORIGINAL, set ASR to its maximum on the car and launch from rest at full
+  throttle. If it bogs the same way, our law is faithful and only the input
+  scale differs; if it pulls away cleanly, `wheel+0x11C` stays small at a launch
+  and the scale is wrong in the port.
+- **Next:** decode `wheel+0x11C` (its writer is not in `FUN_00454500`; the
+  candidates in the decompile are the wheel-accumulator sites around
+  `00521620`/`0050fcc0`), feed both laws the recovered field, then re-enable the
+  press and re-measure the same row. Do not retune the 0.2/0.3 thresholds.
+- **Status:** open, blocked on `wheel+0x11C` only.
 
 ### DRV-9 The car creeps downhill on the handbrake with locked wheels
 - **Reported by the driver (2026-11-24):** on a slope with the handbrake on
@@ -390,6 +422,16 @@ look at, so the check takes a minute rather than a session.
   fixture's 1687 rpm is a pessimistic fixture, not the car), and leaves DRV-7 as
   the wheel-level pin only: the car is drivable, but a driven wheel at ~0 rad/s
   while its twin burns is still not what the original does.
+- **`car+0x1DBC` recovered (2026-11-25), the dependency this item carried:** the
+  factor `(1 - car+0x1DBC)` in `fVar16` is the CLUTCH ENGAGEMENT, because
+  `0x1DBC` is the clutch pedal position: it is written every frame from the input
+  axis (`0x44E7C9`: `pedal = axis*[0x5F0C30]`, smoothed at `0x44F39A-0x44F3BA` as
+  `pedal = (pedal-x)*k + x`), pressed automatically by `FUN_0044DD70` when the
+  engine is about to be dragged below the driveline, and pressed further by ASR
+  (`0x44E271`: `open = 1-(1-open)*service`). So `(1-0x1DBC)` is 1.0 in ordinary
+  driving (pedal up) and only goes small when a pedal/auto-clutch/ASR presses it;
+  the measured 35.0228 on the rear pair was taken with the pedal at 0.9996.
+  There is no separate unknown regulator: this item no longer waits on one.
 - **Status:** open (the airborne spin decay that used to finish the lifted
   wheel off is fixed in e8b589d7; the pin itself is this item).
 

@@ -942,13 +942,20 @@ void VehicleDynamics::step_drive() {
         const double pedal = std::max(0.0, 1.0 - x / (inv * .3));
         drive.throttle = pedal * drive.throttle;
         drive.asr_active = pedal < .9;
-        // The listing also writes car+0x1DBC (the ASR opens the clutch), but
-        // that slot's net effect depends on its per-frame writer (the
-        // auto-clutch/gearbox code, the open DRV-7 question). Ported, it
-        // collapsed the driveline: the driver measured "the ASR eats almost
-        // all the throttle, the car barely accelerates" against the
-        // original's working max-ASR. Held back until the 0x1DBC writer is
-        // recovered, not tuned.
+        // The listing also presses the clutch (car+0x1DBC, FUN_0044e120:41:
+        // `open = 1 - (1-open)*service`). 0x1DBC is the clutch pedal: the input
+        // stage writes it every frame (0x44F39A: `pedal = (pedal-x)*k + x`) and
+        // FUN_0044DD70 presses it to keep the engine off the driveline, so the
+        // ASR multiplies the engagement on top of a value it does not own.
+        // Ported literally and measured 2026-11-25 (ASR strength 1, launch):
+        // 0.25 m/s after 3 s against 9.97 m/s with ASR off, i.e. the cut fires
+        // fully and the car crawls -- the driver's original complaint. The law
+        // itself is now complete; the fault is the INPUT scale: both laws read
+        // wheel+0x11C (FUN_0044df70:25 and FUN_0044e120:25 read the same field,
+        // NOT 0x14C), and our stand-in saturates at 1.0 where the listing's
+        // field does not, so `x` clears the 0.3 threshold every frame. Decode
+        // wheel+0x11C before enabling the write, and do not retune the
+        // threshold to hide it.
       }
       drive.asr_prev = mean - inv * .2;
     } else {
