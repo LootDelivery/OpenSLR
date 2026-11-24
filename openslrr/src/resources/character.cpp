@@ -30,6 +30,7 @@ struct BoneOverride {
 struct Character {
   int32_t type_id = 0;
   bool tried = false;
+  bool dumped = false;
   std::shared_ptr<const Skeleton> bind;
   std::shared_ptr<const Skeleton> lengths;
   std::shared_ptr<const Clip> clip;
@@ -579,6 +580,57 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
                 &character->posed->positions, &character->posed->normals);
   character->posed_serial = character->pose_serial;
   character->posed->revision++;
+  // One-shot dump of the posed driver (and its bind) as OBJ, for an offline
+  // hunt for a stretched triangle. Positions are in the skeleton's own
+  // centimetres; a rigid transform cannot stretch them later.
+  if (std::getenv("SLRR_SKIN_DUMP") && !character->dumped) {
+    character->dumped = true;
+    for (int probe = 0; probe < 8; ++probe) {
+      std::fprintf(stderr, "[skindump] v%d weights=[%.4f %.4f %.4f %.4f] bones=[%d %d %d %d]\n",
+                   probe,
+                   probe * 4 + 0 < bind->skin_weights.size() ? bind->skin_weights[probe * 4] : -1.f,
+                   probe * 4 + 1 < bind->skin_weights.size() ? bind->skin_weights[probe * 4 + 1] : -1.f,
+                   probe * 4 + 2 < bind->skin_weights.size() ? bind->skin_weights[probe * 4 + 2] : -1.f,
+                   probe * 4 + 3 < bind->skin_weights.size() ? bind->skin_weights[probe * 4 + 3] : -1.f,
+                   probe * 4 + 0 < bind->skin_bones.size() ? bind->skin_bones[probe * 4] : -1,
+                   probe * 4 + 1 < bind->skin_bones.size() ? bind->skin_bones[probe * 4 + 1] : -1,
+                   probe * 4 + 2 < bind->skin_bones.size() ? bind->skin_bones[probe * 4 + 2] : -1,
+                   probe * 4 + 3 < bind->skin_bones.size() ? bind->skin_bones[probe * 4 + 3] : -1);
+    }
+    const char* path = std::getenv("SLRR_SKIN_DUMP_PATH");
+    std::string base = path && *path ? path : "slrr_skin_dump";
+    std::FILE* posed_f = std::fopen((base + "_posed.obj").c_str(), "w");
+    std::FILE* bind_f = std::fopen((base + "_bind.obj").c_str(), "w");
+    if (posed_f && bind_f) {
+      const size_t n = character->posed->positions.size() / 3;
+      for (size_t v = 0; v < n; ++v) {
+        int best = 0;
+        float best_weight = -1.f;
+        for (int k = 0; k < 4; ++k) {
+          const float weight = bind->skin_weights[v * 4 + static_cast<size_t>(k)];
+          if (weight > best_weight) {
+            best_weight = weight;
+            best = bind->skin_bones[v * 4 + static_cast<size_t>(k)];
+          }
+        }
+        const char* name = best < static_cast<int>(character->bind->bones.size())
+                               ? character->bind->bones[static_cast<size_t>(best)].name.c_str()
+                               : "(out)";
+        std::fprintf(bind_f, "v %.4f %.4f %.4f # %d %s\n",
+                     bind->positions[v * 3], bind->positions[v * 3 + 1],
+                     bind->positions[v * 3 + 2], best, name);
+        std::fprintf(posed_f, "v %.4f %.4f %.4f # %d %s\n",
+                     character->posed->positions[v * 3],
+                     character->posed->positions[v * 3 + 1],
+                     character->posed->positions[v * 3 + 2], best, name);
+      }
+      for (size_t t = 0; t + 2 < bind->indices.size(); t += 3)
+        std::fprintf(posed_f, "f %u %u %u\n", bind->indices[t] + 1,
+                     bind->indices[t + 1] + 1, bind->indices[t + 2] + 1);
+    }
+    if (posed_f) std::fclose(posed_f);
+    if (bind_f) std::fclose(bind_f);
+  }
   // A triangle stretched away from the body means some vertices were skinned
   // with a matrix the pose did not intend. Name the offender: which vertex,
   // how far, and which bone carries the largest weight for it. Without this
@@ -587,6 +639,19 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
   // pass over the vertices and runs only with SLRR_SKIN_TRACE set.
   if (std::getenv("SLRR_SKIN_TRACE")) {
     static int reported = 0;
+    // stderr is flooded by the render diagnostics, so the report also goes to
+    // slrr_skin_trace.log next to the game root. Empty file means the CPU
+    // skinning produced nothing suspicious.
+    static std::FILE* log = [] {
+      const char* path = std::getenv("SLRR_SKIN_TRACE_LOG");
+      return std::fopen(path && *path ? path : "slrr_skin_trace.log", "w");
+    }();
+    (void)log;
+    std::fprintf(stderr, "[skindump] bind=%p verts=%zu skinsize=%zu v0=(%.2f %.2f %.2f)\n",
+                 (void*)bind, bind->positions.size() / 3, bind->skin_weights.size(),
+                 bind->positions.size() >= 3 ? bind->positions[0] : -1.f,
+                 bind->positions.size() >= 3 ? bind->positions[1] : -1.f,
+                 bind->positions.size() >= 3 ? bind->positions[2] : -1.f);
     if (reported < 12) {
       const size_t vertex_count = character->posed->positions.size() / 3;
       for (size_t v = 0; v < vertex_count && reported < 12; ++v) {
@@ -611,6 +676,7 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
                        "[skin] key=%p type=%d vertex=%zu NONFINITE "
                        "pos=%.1f %.1f %.1f bone=%d (%s) weight=%.2f\n",
                        key, type_id, v, x, y, z, best, name, best_weight);
+          if (log) std::fprintf(log, "[skin] key=%p type=%d vertex=%zu NONFINITE pos=%.1f %.1f %.1f bone=%d (%s) w=%.2f\n", key, type_id, v, x, y, z, best, name, best_weight);
           ++reported;
           continue;
         }
@@ -649,6 +715,13 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
                      key, type_id, v, moved, with_bone, x, y, z,
                      bind->positions[v * 3], bind->positions[v * 3 + 1],
                      bind->positions[v * 3 + 2], best, name, best_weight);
+        if (log)
+          std::fprintf(log,
+                       "[skin] key=%p type=%d vertex=%zu moved=%.1f with_bone=%.1f "
+                       "pos=%.1f %.1f %.1f bind=%.1f %.1f %.1f bone=%d (%s) w=%.2f\n",
+                       key, type_id, v, moved, with_bone, x, y, z,
+                       bind->positions[v * 3], bind->positions[v * 3 + 1],
+                       bind->positions[v * 3 + 2], best, name, best_weight);
         ++reported;
       }
     }

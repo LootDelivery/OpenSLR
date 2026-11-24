@@ -33,38 +33,32 @@ Move fixed items to the bottom with the fixing commit.
   not reset on the previous scene exit.
 - **Status:** open.
 
-### GFX-D Driver triangle
-- **Symptom:** a black triangle stretches from the driver model downward (the
-  user suspects a leg). Present on several cars. It makes the car pivot around
-  it only when the tyre port is active, because a degenerate polygon gets into
-  the contact math; with the tyre rolled back it is visual only.
-- **Timing:** predates the upstream merge -- the rollback to `09b209f0`
-  (before the merge) did not remove it. Not ours.
-- **Checked and clean (read-only):**
-  - `humans/drivers/vin.SCX` unmodified since 2003; 1691 verts, 2058 tris, **0**
-    degenerate, **0** zero-weight or bad-sum vertices, all bone ids in range
-    (max 18 of 20), no outlier vertices (scan replicated the loader's v4
-    walk in Python).
-  - Mazda `_main_Mazda_3_2005.cfg` and MC `_main_GT.cfg` both have `seat`
-    and `pedals`; the leg targets are inside the cabin.
-  - Bench with `SLRR_SKIN_TRACE=1`: no vertex flies beyond 80 cm from its
-    bind position except hands to the wheel and feet to the pedals -- the
-    intended IK, not a spike.
-- **Leading hypothesis, from code only:** the driver resource carries
-  `flags 8.000`, and `(flags & 9) == 8` makes him a **vehicle-shadow caster**
-  (`bgfx_shadows.cpp`, the `car.casters` loop): his mesh is drawn white into
-  the car's shadow map and the ground is multiplied by it. A triangle that
-  appears "when the driver appears" and reaches down to the ground matches
-  his cast.
-- **Decisive check for the driver (10 s):** F12 debug menu -> uncheck
-  **Vehicle shadows**. If the triangle disappears, it is the driver's shadow
-  cast and the hunt moves into the caster pass; if it stays, the shadow path
-  is innocent and the hunt returns to the driver pose.
-- **Instrument:** `SLRR_SKIN_TRACE=1` now names any skinned vertex that is
-  non-finite or lands more than 80 cm from its bind position, with the bone
-  that carries the largest weight (`character.cpp`, CPU path; max four
-  reports per process).
-- **Status:** open.
+### GFX-D Driver triangle (fixed)
+- **Symptom:** a black triangle stretched from the driver model downward, one
+  vertex pulled toward the ground. Present on several cars; the car pivoted
+  around it only when the tyre port was active.
+- **Root cause, proved:** our SCX loader, not the mesh. `parse_v4` initialised
+  the skin arrays lazily at the first skinned vertex; with `prior == 0` the
+  `assign` left the vectors empty, the append gated on non-emptiness skipped
+  vertex 0, and the second vertex's init wrote vertex 0's slots as zeros. A
+  zero-weight vertex keeps its bind position forever. `vin.SCX`'s vertex 0
+  sits at the right foot, so when our leg IK raised the feet to the pedals the
+  triangles around it stretched ~44 cm -- the sliver. Stock never posed the
+  legs, so the latent loader defect stayed invisible until ours exposed it.
+- **Evidence chain:** the mesh file is clean (0 degenerate, weights sum to 1,
+  bone ids in range); the loader probe showed vertex 0 skinned `[1,0,0,0] / [4,
+  4,4,4]` inside `parse_v4` while the returned geometry carried zeros there;
+  `SLRR_HIDE_DRIVER=1` removed the sliver, proving the driver draw was the
+  source; the OBJ dump of the posed driver showed vertex 0 as the single
+  anomaly (84 cm edge, 4.8 cm thickness).
+- **Fix:** `skin_started` flag replaces the emptiness test, so the first
+  skinned vertex appends its own slots. After the fix the cached geometry has
+  `v0 w=1.0 bone=4` and the skin trace is silent.
+- **Instruments kept (all off by default):** `SLRR_SKIN_TRACE` (names any
+  vertex that is non-finite or does not travel with its dominant bone, also
+  logs to `slrr_skin_trace.log`), `SLRR_SKIN_DUMP` (OBJ dump of the posed
+  driver and its bind), `SLRR_HIDE_DRIVER` (skips drawing the seated driver).
+- **Status:** fixed; awaiting the driver's confirmation in game.
 
 ### GFX-E Red inner fender
 - **Symptom:** the inner fender renders bright red (a material default),

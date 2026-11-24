@@ -4147,6 +4147,13 @@ void pose_driver() {
   std::copy(seat_m.begin(), seat_m.end(), node->local_matrix);
   node->matrix_override = true;
   hide_duplicate_drivers(chassis, seat.render, node->type_id, seat);
+  // Diagnostic only (SLRR_HIDE_DRIVER): stop drawing the seated driver. If a
+  // visual artifact follows the driver, it disappears with him; if it stays,
+  // the driver draw is innocent and the hunt moves to what remains.
+  if (std::getenv("SLRR_HIDE_DRIVER")) {
+    node->empty = true;
+    return;
+  }
   // Solve from the bind pose every frame. Carrying last frame's joints makes
   // the measured limb length shrink until the body collapses onto the wheel.
   character_reset_pose(seat.render);
@@ -4451,7 +4458,8 @@ PedView ped_view() {
   view.tan_x = view.tan_y * (800.f / 600.f);
   view.ok = true;
   return view;
-}// Profiling knob, not a gameplay setting: SLRR_PEDESTRIAN_DENSITY overrides the
+}
+// Profiling knob, not a gameplay setting: SLRR_PEDESTRIAN_DENSITY overrides the
 // shipped slider so one build can be measured at the slider's maximum.
 float pedestrian_slider() {
   static const float override_value = [] {

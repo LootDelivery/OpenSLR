@@ -328,8 +328,7 @@ void local_matrix(const GameRefState &n, float *m) {
   m[14] = n.pos[2];
 }
 
-std::shared_ptr<const ScxGeometry> load_geometry(const RpkIndex& resources, uint32_t id) {
-  std::shared_ptr<const ScxGeometry> result;
+std::shared_ptr<const ScxGeometry> load_geometry(const RpkIndex& resources, uint32_t id) {  std::shared_ptr<const ScxGeometry> result;
   const int pack = RpkIndex::pack_from_full(id);
   auto model = resources.model_for_resource(pack, id & 0xffffu);
   if (model.ok) {
@@ -354,6 +353,19 @@ std::shared_ptr<const ScxGeometry> load_geometry(const RpkIndex& resources, uint
       auto mesh =
           std::make_shared<ScxGeometry>(load_scx_geometry(path.string()));
       if (mesh->info.ok && !mesh->indices.empty()) {
+        const char* trace = std::getenv("SLRR_SKIN_DUMP");
+        if (trace && mesh->positions.size() >= 3 && mesh->positions[0] > 34.3f &&
+            mesh->positions[0] < 34.6f && mesh->positions[1] > -85.9f &&
+            mesh->positions[1] < -85.5f && mesh->positions[2] > -22.9f &&
+            mesh->positions[2] < -22.4f)
+          std::fprintf(stderr,
+                       "[geom] id=0x%x mesh=%p v0=(%.2f %.2f %.2f) "
+                       "w0=%.4f b0=%d skinsize=%zu\n",
+                       id, (void*)mesh.get(), mesh->positions[0],
+                       mesh->positions[1], mesh->positions[2],
+                       mesh->skin_weights.empty() ? -1.f : mesh->skin_weights[0],
+                       mesh->skin_bones.empty() ? -1 : mesh->skin_bones[0],
+                       mesh->skin_weights.size());
         for (auto &texture : model.textures) {
           std::replace(texture.begin(), texture.end(), '\\', '/');
           if (!texture.empty() && std::filesystem::path(texture).is_relative())

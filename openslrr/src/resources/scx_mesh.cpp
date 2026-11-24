@@ -207,6 +207,7 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
   ScxGroup mat{};
   std::vector<uint32_t> palette;
   bool have_mat = false;
+  bool skin_started = false;
   bool have_verts = false;
   uint32_t base = 0;
   uint32_t last_vcount = 0;
@@ -422,10 +423,19 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
         if(flags&0x400) {u2=rd_f32(v+o);v2=rd_f32(v+o+4);o+=8;}
         if(flags&0x800) {u3=rd_f32(v+o);v3=rd_f32(v+o+4);o+=8;}
         if (want_geo) {
-          if (skinned && geo.skin_weights.empty()) {
+          // The skin arrays start at the first skinned vertex. The old lazy
+          // init lost the first vertex itself: assign(prior*4) with prior==0
+          // leaves the vectors empty, the append below was gated on non-empty,
+          // and vertex 0's slots were then written as zeros by the second
+          // vertex's init. A zero-weight vertex keeps its bind position
+          // forever and stretches the triangles around it when the pose moves
+          // -- the sliver under the driver's foot. skin_started replaces the
+          // emptiness test so the first skinned vertex appends its own slots.
+          if (skinned && !skin_started) {
             const size_t prior = geo.positions.size() / 3;
             geo.skin_weights.assign(prior * 4, 0.f);
             geo.skin_bones.assign(prior * 4, 0);
+            skin_started = true;
           }
           geo.positions.push_back(x);
           geo.positions.push_back(y);
@@ -437,7 +447,7 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
           geo.uvs.push_back(vv);
           geo.uv2.push_back(u2); geo.uv2.push_back(v2);
           geo.uv3.push_back(u3); geo.uv3.push_back(v3);
-          if (!geo.skin_weights.empty()) {
+          if (skin_started) {
             for (int k = 0; k < 4; ++k) {
               geo.skin_weights.push_back(skinned ? skin_w[k] : 0.f);
               geo.skin_bones.push_back(skinned ? skin_b[k] : 0);
