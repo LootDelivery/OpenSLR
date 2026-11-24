@@ -422,9 +422,12 @@ SLRR_TEST(abs_releases_a_locked_wheel_while_the_road_moves) {
     for (auto& wheel : car.dynamics.drive.wheels) wheel.brake = 10000;
     car.run(1, 0, 0, 0);
     car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -20});
-    // Start locked: ABS must let the tyre reaction spin it back up.
+    // Start locked: ABS must let the tyre reaction spin it back up. The
+    // recovered law (FUN_0044df70) detects the lockup through the accumulated
+    // slip wheel[0x14C], which builds over ~0.5 s before it saturates and the
+    // pedal collapses -- the release is not instant, so the window is 2 s.
     for (auto& wheel : car.dynamics.state) wheel.spin = 0;
-    car.run(.3, 0, 1, 0);
+    car.run(2, 0, 1, 0);
   }
   SLRR_REQUIRE(std::abs(cars[0].dynamics.state[0].spin) < 1e-6);
   SLRR_REQUIRE(cars[1].dynamics.state[0].spin * .31 > 5);

@@ -1124,6 +1124,42 @@ void VehicleDynamics::step_drive() {
     starter_remaining_ = 0;
   }
 
+  // The recovered ABS (FUN_0044df70), whole-car pedal modulation: with the
+  // pedal pressed, the mean of the braked loaded wheels' accumulated slip
+  // (wheel[0x14C], the same filter state the force law consumes) reduces the
+  // pedal. The strength store is 1/abs (gearbox+0xA28, the car script's `abs`
+  // handler also raises flags bit 0x80), the thresholds are 0.2/0.4 scaled by
+  // it, the rate blend is (x - prev) * 4 + x, the memory is car+0x1F54, and
+  // the original raises flags bit 0x1000000 under service < 0.9 (the ABS
+  // indicator; we have no light, so it is not carried). Replaces our invented
+  // per-wheel |road|/r*0.85 branch. abs <= 0.01 leaves the memory untouched,
+  // no loaded wheels zeroes it -- both as in the listing.
+  if (drive.abs_strength > 0 && drive.brake > .01) {
+    double sum = 0;
+    int loaded = 0;
+    for (size_t i = 0; i < wheels.size(); ++i) {
+      const auto &s = state[i];
+      if (!wheels[i].enabled || drive.wheels[i].brake <= 0 || !s.contact ||
+          s.force <= 0)
+        continue;
+      sum += std::abs(s.slip_state.slip);
+      ++loaded;
+    }
+    if (loaded > 0) {
+      const double inv = 1 / std::max(1e-6, (double)drive.abs_strength);
+      const double mean = sum / loaded;
+      double x = mean - inv * .2;
+      x = (x - drive.abs_prev) * 4.0 + x;
+      if (x > 0) {
+        const double pedal = std::max(0.0, 1.0 - x / (inv * .4));
+        drive.brake = std::min(pedal * drive.brake, drive.brake);
+      }
+      drive.abs_prev = mean - inv * .2;
+    } else {
+      drive.abs_prev = 0;
+    }
+  }
+
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &wheel = wheels[i];
     const auto &cfg = drive.wheels[i];
@@ -1153,13 +1189,6 @@ void VehicleDynamics::step_drive() {
     apply_brake(500 * timestep * cfg.bearing * drive.bearing_scale);
     const double torque_step = timestep / wheel_inertia;
     double service = torque_step * service_brake_ * cfg.brake * drive.brake_scale;
-    if (drive.abs_strength > 0 && s.contact && std::abs(road) >= 3 &&
-        s.spin * road >= 0) {
-      const double minimum = std::abs(road) / std::max(.01, wheel.radius) * .85;
-      const double allowed = std::max(0.0, std::abs(s.spin) - minimum);
-      service = std::lerp(service, std::min(service, allowed),
-                          std::clamp(drive.abs_strength, 0.0, 1.0));
-    }
     apply_brake(service);
     apply_brake(torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale);
 

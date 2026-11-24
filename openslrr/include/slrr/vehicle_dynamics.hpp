@@ -174,6 +174,8 @@ struct DriveInput {
   double throttle = 0, brake = 0, handbrake = 0;
   double brake_scale = 0, handbrake_scale = 0, bearing_scale = 0;
   double abs_strength = 0;
+  // car+0x1F54: the ABS's memory of the previous frame's slip measure.
+  double abs_prev = 0;
   double launch_help = 0;
   double differential_lock = 0;
   // Automatic clutch slip revs, used by the host model only (see `faithful`):
