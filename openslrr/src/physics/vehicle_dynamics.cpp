@@ -1218,7 +1218,23 @@ void VehicleDynamics::step_drive() {
           std::abs(s.slip_speed) / (timestep * (inverse_mass + inverse_spin));
       force.longitudinal = std::clamp(force.longitudinal, -limit, limit);
       s.tire_force = force;
-      body.add_force(forward * force.longitudinal + side * force.lateral,
+      // The recovered rolling-resistance force (0x00454500, line of local_20):
+      // s * v_roll * wheel[0x21c] * 0.01 - F_long applied to the body through
+      // the wheel frame, where wheel[0x21c] = surface[0x54] + wheel[0x74]
+      // (setRollRes). The tyre's own F_long already enters through
+      // force.longitudinal above, so only the s*v*0x21c*0.01 part is new here;
+      // it stays out of the slip clamp and the wheel servo on purpose -- in
+      // the listing the wheel spin is dragged by bearing/brakes, not by this
+      // force. The surface adder surface[0x54] stays 0 until a surface layer
+      // exists (the map material loader FUN_00546e10 zero-inits it and has no
+      // rolling-resistance property). Sign measured: the term must oppose the
+      // road speed, the listing's frame-axis reading is ambiguous in Ghidra's
+      // output (both readings of the rolling axis flip the sign).
+      const double roll_drag =
+          tire_scale(s.force, tangent, cfg.tyre) * road * cfg.rolling_resistance *
+          0.01;
+      body.add_force(forward * (force.longitudinal - roll_drag) +
+                         side * force.lateral,
                      s.patch);
       const double rolling_torque =
           s.spin == 0 ? 0

@@ -2613,7 +2613,10 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
       out.handbrake = i >= 2 ? std::max(0.f, wheel.brake) : 0.f;
     }
     out.bearing = std::max(0.f, wheel.bearing);
-    out.rolling_resistance = std::max(0., wheel.roll_res - .003625);
+    // Raw wheel[0x74]: the recovered rolling-resistance force consumes the
+    // setRollRes value as stored (rollres = inflation factor * 0.005 *
+    // roll_res_mul in Tyre.java). The old .003625 subtraction belonged to the
+    // invented copysign torque form and is gone.
     // Assign by name: this struct was reordered upstream (load_smoothing and
     // longitudinal_grip swapped places), and the positional form silently put
     // the longitudinal grip (1.0) into the load smoothing and the smoothing

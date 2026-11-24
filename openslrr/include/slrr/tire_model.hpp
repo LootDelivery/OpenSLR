@@ -68,6 +68,13 @@ TireTuning& tire_tuning();
 TireForces tire_friction_limits(double load, double tangent,
                                 const TireParameters& tire);
 
+// The scale s of the recovered force law (0x00454500):
+// (sqrt of the contact normal's non-axle part + 1) * 0.5 * load_curve(load).
+// The rolling-resistance term consumes it too:
+// F_rollres = s * v_roll * wheel[0x21c] * 0.01 - F_long, where
+// wheel[0x21c] = surface[0x54] + wheel[0x74] (setRollRes).
+double tire_scale(double load, double tangent, const TireParameters& tire);
+
 // The recovered force law (0x0043BA80 clamped, 0x0043BB30 signed) on the 17 script
 // slots, with the load curve of 0x00454500 and the composite slip of the same
 // listing. `tangent` is the magnitude of the contact normal's components in the

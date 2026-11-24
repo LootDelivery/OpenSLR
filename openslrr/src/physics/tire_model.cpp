@@ -133,6 +133,15 @@ TireForces tire_friction_limits(double load, double tangent,
   return {tire.longitudinal_grip > 0.0 ? d : 0.0, d};
 }
 
+double tire_scale(double load, double tangent, const TireParameters& tire) {
+  // The scale s of the recovered law (0x00454500, line of local_3c at the
+  // force assembly): (sqrt of the normal's non-axle part + 1) * 0.5, times
+  // the load curve. The rolling-resistance term consumes the same s:
+  // F_rollres = s * v_roll * wheel[0x21c] * 0.01 - F_long.
+  if (!(load > 0.0)) return 0;
+  return (std::clamp(tangent, 0.0, 1.0) + 1.0) * 0.5 * load_curve(load, tire);
+}
+
 namespace {
 
 TireForces forces_from_inputs(double load, double tangent, double slip,
