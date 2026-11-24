@@ -249,8 +249,9 @@ look at, so the check takes a minute rather than a session.
   `FUN_004450e0`; all four lamp handlers parse the same `%d %f %f %f` prefix
   (format string at `0x60F874`/`0x60F894`/`0x60F8B4`) and then build the element
   with `FUN_00544590` + `FUN_00546070(handle, 0xE, 0)`.
-- **`0xFFFFFFFF` means "no car specific render": the engine substitutes its own
-  LED.** `cars.rpk` lists exactly four of them next to the other OSD resources
+- **`0xFFFFFFFF` means "no car specific render".** The exe carries no `led_*`
+  string, so the lamp is not named from code: the only lamp meshes the packages
+  ship are the four below, and that is what has to be drawn. `cars.rpk` lists exactly four of them next to the other OSD resources
   (`cars/osd/`): `led_ABS` 0x5E, `led_ER` 0x5F, `led_ASR` 0x60, `led_HB` 0x63,
   with loose copies in `cars/meshes/{ABS,ASR,ER,HB}_led.scx`. Their vertices
   carry the row placement itself: x = -499.19 / -471.85 / -444.89 / -416.80, all
