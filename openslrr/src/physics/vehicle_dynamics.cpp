@@ -1185,6 +1185,14 @@ void VehicleDynamics::step_drive() {
         // 0x0043BBD0 is fed the timestep and stores its result in the wheel.
         force = tire_forces(s.force, tangent, s.spin * wheel.radius, road,
                             lateral, cfg.tyre, s.slip_state, timestep);
+        // The recovered listing measures the filter velocities ground-relative
+        // (v_surf = -wheel_speed) and applies its lateral output as stored, so
+        // in this branch's car-relative axis the force must be negated to
+        // oppose the measured lateral velocity. Measured, not tuned: without
+        // the negation the bench auto-drive spins in place -- Flat grows along
+        // the lateral velocity (lat=+6.3 m/s, Flat=+8891 N) and the accumulated
+        // angle saturates and holds the full lateral peak in one direction.
+        force.lateral = -force.lateral;
       }
 
       const Vec3 arm = s.patch - body.position;
@@ -1211,11 +1219,12 @@ void VehicleDynamics::step_drive() {
         std::fprintf(stderr,
                      "[slide] w%zu spin=%7.2f road=%7.2f slip=%7.2f lat=%7.2f "
                      "Flong=%8.1f Flat=%8.1f load=%7.0f rpm=%5.0f shaft=%7.1f "
-                     "gap=%7.1f gear=%d\n",
+                     "gap=%7.1f gear=%d ang=%6.3f mslip=%6.3f\n",
                      i, s.spin, (s.spin * wheel.radius - s.slip_speed), s.slip_speed,
                      s.lateral_speed, force.longitudinal, force.lateral, s.force,
                      engine_omega * rpm_per_rad, s.spin * 12.9,
-                     engine_omega - s.spin * 12.9, gear);
+                     engine_omega - s.spin * 12.9, gear,
+                     s.slip_state.angle, s.slip_state.slip);
       // Tried twice and reverted twice: letting the driveline own a driven wheel's speed
       // outright, with the tyre acting through force alone. It does not fix the wheel
       // stopping in a slide, and it removes torque sensitivity -- 200 against 600 Nm

@@ -171,8 +171,16 @@ TireForces forces_from_inputs(double load, double tangent, double slip,
   const double longitudinal =
       (slip * longitudinal_weight * cos_angle / composite) *
       principle_force(composite, s, tire, true);
+  // 0x00454500: local_7c = (sin(angle)/sigma) * FUN_0043ba80(sigma, s). The
+  // lateral magnitude comes from the clamped law of the COMPOSITE, not from a
+  // signed law of the angle -- the angle-signed FUN_0043bb30 call in the same
+  // listing stores into wheel+0x158 (a grip coefficient), it is not this force.
+  // The original's wheel frame measures velocities ground-relative
+  // (v_surf = -wheel_speed), so its as-stored force corresponds to the
+  // negative of ours; our branch applies forces along the car-relative axis,
+  // which is why the minus lives at the application site in vehicle_dynamics.
   const double lateral = (sin_angle / composite) *
-                         principle_force(angle, s, tire, false);
+                         principle_force(composite, s, tire, true);
   return {longitudinal, lateral};
 }
 } // namespace

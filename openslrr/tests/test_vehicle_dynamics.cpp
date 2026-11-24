@@ -166,11 +166,14 @@ SLRR_TEST(tyre_grip_follows_the_tyre_script) {
   // Pin a reference sample of the recovered law (0x0043BA80 on the 17 slots, with
   // the load curve of 0x00454500), not of the previous hand-written curve: this
   // number is the model's own, measured, and it changes only if the model does.
+  // Lateral argument is the composite sigma with the clamped law, per the
+  // 0x00454500 listing (local_7c); the earlier pin 4086.891029 was sampled from
+  // the signed angle-argument call that the listing stores to wheel+0x158.
   const auto reference = tire_forces(3500, 1, 20, 20, 2, TireParameters{});
   std::fprintf(stderr, "[tyre] reference sample lon %.6f lat %.6f\n",
                reference.longitudinal, reference.lateral);
   SLRR_REQUIRE(reference.longitudinal == 0);
-  SLRR_REQUIRE(std::abs(reference.lateral - 4086.891029) < 1e-4);
+  SLRR_REQUIRE(std::abs(reference.lateral - 4083.818764) < 1e-4);
   // The peak scales with the compound's friction, which is what a sticky tyre means.
   auto sticky = TireParameters{};
   sticky.friction *= 1.25;
