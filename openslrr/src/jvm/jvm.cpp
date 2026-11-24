@@ -1,4 +1,5 @@
 #include "slrr/jvm.hpp"
+#include "slrr/script_compiler.hpp"
 #include "slrr/scene_presentation.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
@@ -356,8 +357,29 @@ void Jvm::apply_field_defaults(Object* obj) {
   --field_init_depth_;
 }
 
+void Jvm::refresh_script_source(const std::string& path) {
+  if (game_root_.empty()) return;
+  std::error_code error;
+  const std::filesystem::path container(path);
+  const std::filesystem::path source = container.parent_path() / "src" /
+      (container.stem().string() + ".java");
+  if (!std::filesystem::is_regular_file(source, error)) return;
+  const auto written = std::filesystem::last_write_time(source, error);
+  if (error) return;
+  const auto produced = std::filesystem::last_write_time(container, error);
+  if (!error && produced >= written) return;
+  const auto root = std::filesystem::absolute(game_root_);
+  const auto directory = std::filesystem::relative(container.parent_path(), root, error);
+  if (error || directory.empty() || *directory.begin() == "..") return;
+  const std::string relative = directory.generic_string();
+  const auto report = script_compile_all(game_root_, relative, {});
+  std::printf("[compile] %s on load: %d source(s), %d ok, %d failed\n",
+              relative.c_str(), report.attempted, report.succeeded, report.failed);
+}
+
 bool Jvm::load_class_file(const std::string& path) {
   if (!loading_paths_.insert(path).second) return true;
+  refresh_script_source(path);
   struct LoadingGuard {
     std::unordered_set<std::string>* set;
     std::string path;

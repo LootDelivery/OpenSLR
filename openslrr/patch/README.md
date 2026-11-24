@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl` folder from this patch into the game root. It ships the Java source next to the stock class; `slrr_host` rebuilds a source that is newer than its class when it starts, so the menu row appears on the next launch without a manual build. The original `StreetLegal_Redline.exe` does the same for edited sources.
+Do **not** copy this tree into the game root: the dialog calls natives that only `slrr_host` implements, and the original `StreetLegal_Redline.exe` stops with `native implementation missing for ...getRendererOption`. `slrr_host` finds the tree on its own (`SLRR_PATCH_DIR`, next to the executable, or `../patch` of the build folder) and puts it ahead of the game's class roots, so the install stays stock and the original game keeps working. The Java source ships next to the class; the host rebuilds a source that is newer than its class when it loads it.
 
 The **Video Options** menu applies the resolution and the Enhanced settings in game. Exterior scenery range is 5 km. The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **F12 → Renderer** also sets how many reflection faces are computed per frame.
 

@@ -56,7 +56,7 @@ validation; successful compilation does not establish runtime equivalence.
   Point it at a directory holding only the edited source so sibling units are
   not rebuilt.
 
-### Start-up pass
+### When a source is compiled
 
 The original runtime rebuilds script sources when it starts, before any class is
 loaded, so an edited `.java` takes effect on the next launch. The port does the
@@ -74,6 +74,16 @@ explicit compile:
 - One line is printed when anything was rebuilt:
   `[compile] start-up: N source(s), M ok, F failed`. Failures keep the previous
   container and never stop the launch.
+
+Class loading also compiles: `Jvm::load_class_file` calls
+`refresh_script_source` before it reads a container, and rebuilds that one
+directory when `<dir>/src/<Name>.java` is newer than `<dir>/<Name>.class`. This
+covers every tree, including a mod's private `parts/<name>/scripts`, and it is
+where a mod source actually gets rebuilt: a 2020 source in an unloaded mod is
+left alone at start-up and compiled the first time the game asks for its class.
+Measured on the original runtime: editing `sl/Scripts/game/src/GameLogic.java`
+rewrites its container on the next launch (it is loaded during `Init`), while a
+stale `parts/Work_VS_XX/scripts` source stays untouched at the main menu.
 
 Compilation does not pretend to enqueue resource loading work in isLoading.
 

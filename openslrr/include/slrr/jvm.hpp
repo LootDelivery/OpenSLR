@@ -44,6 +44,10 @@ class Jvm : public TreeHost {
   void prefer_patch_root(const std::string& root);
   bool load_class(const std::string& fqn_or_path);
   bool load_class_file(const std::string& path);
+  // A source newer than the container beside it is rebuilt before the
+  // container is read: the original runtime compiles scripts when they are
+  // loaded, wherever they live, not only in its own script trees.
+  void refresh_script_source(const std::string& path);
   const TufaClass* find_class(const std::string& fqn) const;
 
   Object* new_object(const std::string& class_fqn);

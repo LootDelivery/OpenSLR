@@ -109,9 +109,19 @@ public class Safety {
     auto edited=script_compile_stale(f.root.string());
     SLRR_REQUIRE(edited.attempted==1 && edited.succeeded==1);
     fs::create_directories(f.root/"parts/Mod/scripts/src");
-    std::ofstream(f.root/"parts/Mod/scripts/src/Private.java")<<"public class Private {}\n";
+    const auto mod_source=f.root/"parts/Mod/scripts/src/Private.java";
+    std::ofstream(mod_source)<<"public class Private { public static int value(){return 3;} }\n";
     auto mods=script_compile_stale(f.root.string());
     SLRR_REQUIRE(mods.attempted==0);
+    // Loading a container whose source is newer rebuilds it first, wherever it
+    // lives: a mod's private tree is compiled when the game actually asks for it.
+    const auto mod_class=f.root/"parts/Mod/scripts/Private.class";
+    SLRR_REQUIRE(!fs::exists(mod_class));
+    SLRR_REQUIRE(f.vm.load_class_file(mod_class.string()) && fs::exists(mod_class));
+    const auto produced=fs::last_write_time(mod_class);
+    fs::last_write_time(mod_source,produced+std::chrono::seconds(5));
+    SLRR_REQUIRE(f.vm.load_class_file(mod_class.string()));
+    SLRR_REQUIRE(fs::last_write_time(mod_class)>produced);
   }
   std::puts("PASS native short/mistagged/boxed arguments; bounded direct and compound array stores");
 }
