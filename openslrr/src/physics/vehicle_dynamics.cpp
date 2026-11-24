@@ -1164,7 +1164,16 @@ void VehicleDynamics::step_drive() {
       const double tilt =
           body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0}))
               .dot(s.normal);
-      const double alignment = std::max(.25, tilt * tilt);
+      // The recovered force scale is sqrt of the contact normal's components other
+      // than the first one (0x00454500: sqrt(s[1]^2 + s[2]^2)). Which axis is first
+      // follows from the same listing: component 2 of the patch velocity is the
+      // rolling axis, so the frame is (X = axle, Y = up, Z = rolling) and the
+      // excluded component is the axle. The normal is unit, so everything but its
+      // axle part is the cosine of the camber -- 1.0 for a square wheel, which is
+      // where the recovered grip lands; a leaning wheel loses it down to 0.5.
+      // This replaces the invented alignment = max(.25, tilt*tilt) load multiplier.
+      const double along_axle = s.normal.dot(side);
+      const double tangent = std::sqrt(std::max(0.0, 1.0 - along_axle * along_axle));
       TireForces force{};
       if (wheel.metal_contact) {
         // Hub/disc contact is sliding metal, never the removed tyre's curve.
@@ -1174,7 +1183,8 @@ void VehicleDynamics::step_drive() {
       } else {
         // The low-speed path needs the wheel's own slip memory and the step:
         // 0x0043BBD0 is fed the timestep and stores its result in the wheel.
-        force = tire_forces(s.force, alignment, s.spin * wheel.radius, road, lateral, cfg.tyre);
+        force = tire_forces(s.force, tangent, s.spin * wheel.radius, road,
+                            lateral, cfg.tyre, s.slip_state, timestep);
       }
 
       const Vec3 arm = s.patch - body.position;

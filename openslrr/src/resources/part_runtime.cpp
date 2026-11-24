@@ -2627,6 +2627,10 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
     out.tyre.longitudinal_grip = wheel.frictn_x;
     // setCPatch stores the sine of the scripted patch angle.
     out.tyre.patch_angle = std::asin(std::clamp(wheel.cpatch_ang, 0.f, 1.f));
+    // The slot array itself, because a compound can write slots no named setter
+    // reaches (setPacejka takes an index).
+    for (size_t slot = 0; slot < out.tyre.pacejka.size(); ++slot)
+      out.tyre.pacejka[slot] = wheel.pacejka[slot];
   }
 }
 
