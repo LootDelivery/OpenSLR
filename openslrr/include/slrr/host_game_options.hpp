@@ -141,6 +141,9 @@ void host_game_options_set_drive_hud(Jvm& jvm, bool show);
 // Torque converter stall point, as a fraction of the rev limit.
 void host_game_options_set_converter_stall(Jvm& jvm, float fraction);
 // Handbrake moment as a multiple of the recovered law, 0..5 in 0.1 steps.
+// Saved in save/game/openslrr_options, not in Config: the stock Config has a
+// fixed layout. The Jvm-free form is what the scripted menu calls.
+void host_set_handbrake_strength(float strength);
 void host_game_options_set_handbrake_strength(Jvm& jvm, float strength);
 void host_game_options_update(Jvm& jvm, bool force = false);
 }

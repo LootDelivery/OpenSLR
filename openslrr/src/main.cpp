@@ -3,6 +3,7 @@
 #include "slrr/jvm.hpp"
 #include "slrr/native_registry.hpp"
 #include "slrr/render_backend.hpp"
+#include "slrr/script_compiler.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/sl2_pacejka.hpp"
 #include "slrr/natives_boot.hpp"
@@ -12,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -87,6 +89,7 @@ void usage() {
       "  slrr_host --probe-dyno\n"
       "  slrr_host --probe-gc [--root DIR]\n"
       "  slrr_host --game [--root DIR] [--window] [--no-wait] [--auto-new]\n"
+  "  slrr_host --root DIR --compile-scripts DIR [DIR...]\n"
       "           [--auto-cmd mainmenu|street|N]\n"
       "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
       "           [--vehicle-osd PATH]\n"
@@ -120,6 +123,7 @@ int main(int argc, char** argv) {
   bool want_gc = false;
   BootOptions opt;
   const char* root_arg = nullptr;
+  std::vector<std::string> compile_dirs;
 
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
@@ -150,6 +154,10 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--window") == 0) {
       opt.window = true;
+      continue;
+    }
+    if (std::strcmp(a, "--compile-scripts") == 0 && i + 1 < argc) {
+      compile_dirs.emplace_back(argv[++i]);
       continue;
     }
     if (std::strcmp(a, "--no-wait") == 0) {
@@ -240,7 +248,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  if (!want_probe && !want_game && !want_pacejka && !want_dyno && !want_gc) {
+  if (!want_probe && !want_game && !want_pacejka && !want_dyno && !want_gc &&
+      compile_dirs.empty()) {
     usage();
     return 1;
   }
@@ -273,6 +282,20 @@ int main(int argc, char** argv) {
     return 1;
   }
   std::printf("[host] game_root=%s\n", opt.game_root.c_str());
+
+  // Script recompilation without a game window: the same compiler the game
+  // exposes as System.compileAll, so a patched class can be built from source.
+  if (!compile_dirs.empty()) {
+    bool ok = true;
+    for (const auto& dir : compile_dirs) {
+      const auto report = script_compile_all(opt.game_root, dir);
+      std::printf("[compile] %s attempted=%d succeeded=%d failed=%d classes=%d\n",
+                  dir.c_str(), report.attempted, report.succeeded, report.failed,
+                  report.classes);
+      if (report.failed != 0 || report.succeeded == 0) ok = false;
+    }
+    return ok ? 0 : 4;
+  }
 
   NativeRegistry natives;
   Jvm jvm(&natives);

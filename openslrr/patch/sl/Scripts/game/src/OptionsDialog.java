@@ -32,6 +32,8 @@ public class OptionsDialog extends Dialog
 	final static int RENDERER_FRAMERATE_MODE = 5;
 	public static native int getRendererOption(int option);
 	public static native void setRendererOption(int option, int value);
+	public static native float getHandbrakeStrength();
+	public static native void setHandbrakeStrength(float value);
 
 	final static int	CMD_TEXTURE_DETAIL = 12;
 	final static int	CMD_SHADOW_DETAIL = 13;
@@ -69,6 +71,7 @@ public class OptionsDialog extends Dialog
 	final static int	CMD_PARTICLE = 44;
 	final static int	CMD_HEADLIGHTS = 45;
 	final static int	CMD_FLARES = 46;
+	final static int	CMD_HANDBRAKE = 47;
 	
 	final static int	CMD_SKIDMARK = 402;
 	final static int	CMD_SHADOW_RANGE = 403;
@@ -711,6 +714,7 @@ public class OptionsDialog extends Dialog
 		m.addItem( "STEERING HELP", CMD_STEERHELP, Config.player_steeringhelp, null );
 		m.addItem( "ABS", CMD_ABS_SLIDER, Config.player_abs, null );
 		m.addItem( "ASR", CMD_ASR_SLIDER, Config.player_asr, null );
+		m.addItem( "HANDBRAKE STRENGTH", CMD_HANDBRAKE, getHandbrakeStrength(), 0.0, 5.0, 0, "HOW HARD THE HANDBRAKE BITES. 1.0 IS THE ORIGINAL GAME" );
 
 		m = osd.createMenu( butt2, 0.98, 0.85, 0 );
 		m.addItem( "BACK", CMD_GAME_OPTIONS_DONE );
@@ -962,6 +966,11 @@ public class OptionsDialog extends Dialog
 		if (command == CMD_ASR_SLIDER)
 		{
 			Config.player_asr = osd.sliderValue;
+		}
+		else
+		if (command == CMD_HANDBRAKE)
+		{
+			setHandbrakeStrength( osd.sliderValue );
 		}
 		else
 		if (command == CMD_HMF_1)

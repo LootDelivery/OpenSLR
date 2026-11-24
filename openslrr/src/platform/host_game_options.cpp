@@ -16,6 +16,9 @@ Clock::time_point changed, next_sample;
 GameOptions current;
 uint64_t driving_revision = 0;
 FramerateMode framerate_mode = FramerateMode::Adaptive;
+// The handbrake moment's multiple over the recovered law. It lives in the host
+// options file rather than in Config, whose binary layout is fixed.
+float handbrake_strength = 1.4f;
 std::string host_options_path;
 
 // Host-only settings live beside the stock options. Config has a fixed
@@ -30,6 +33,10 @@ void load_host_options(const std::string& root) {
   for (std::string line; std::getline(in, line);)
     if (line == "framerate_mode=classic") framerate_mode = FramerateMode::Classic;
     else if (line == "framerate_mode=adaptive") framerate_mode = FramerateMode::Adaptive;
+    else if (line.rfind("handbrake=", 0) == 0) {
+      const float value = static_cast<float>(std::atof(line.c_str() + 10));
+      if (std::isfinite(value)) handbrake_strength = std::clamp(value, 0.f, 5.f);
+    }
 }
 
 void save_host_options() {
@@ -37,6 +44,7 @@ void save_host_options() {
   std::ofstream out(host_options_path, std::ios::trunc);
   out << "framerate_mode="
       << (framerate_mode == FramerateMode::Classic ? "classic" : "adaptive") << '\n';
+  out << "handbrake=" << handbrake_strength << '\n';
   if (!out) std::fprintf(stderr, "[options] could not save %s\n", host_options_path.c_str());
 }
 
@@ -94,9 +102,9 @@ GameOptions read_options(Jvm& jvm) {
   options.driving.converter_stall =
       std::clamp(read("player_converterstall", .8f), .1f, 1.f);
   // Taste, not recovery: the law is 1. The default sits at the setting where an
-  // FWD car's rears lock as the driver expects.
-  options.driving.handbrake_strength =
-      std::clamp(read("player_handbrake", 1.4f), 0.f, 5.f);
+  // FWD car's rears lock as the driver expects. The host options file owns it,
+  // and the in-game Advanced Game Options row writes it back.
+  options.driving.handbrake_strength = handbrake_strength;
   if (const char *forced = std::getenv("SLRR_HANDBRAKE"))
     options.driving.handbrake_strength =
         std::clamp(static_cast<float>(std::atof(forced)), 0.f, 5.f);
@@ -141,13 +149,14 @@ uint64_t host_driving_options_revision() { return driving_revision; }
 
 void host_game_options_load(Jvm& jvm) {
   loaded=false;dirty=false;
+  // Read the host file first: read_options takes the handbrake multiple from it.
+  load_host_options(jvm.game_root());
   // Engine-owned Config in stock. A VM static keeps it alive through GC.
   Object* options=jvm.new_object("java.util.Config");
   jvm.set_static("java.lang.System","_hostGameOptions",Value::make_obj(options));
   jvm.invoke_by_name(options->class_name,"<init>",
                      {Value::make_obj(options),Value::make_int(0)},false);
   current = read_options(jvm);
-  load_host_options(jvm.game_root());
   ++driving_revision;
   next_sample = Clock::now();
   loaded=true;
@@ -230,12 +239,18 @@ void host_game_options_set_converter_stall(Jvm& jvm, float fraction) {
   host_game_options_apply(jvm);
 }
 
-void host_game_options_set_handbrake_strength(Jvm& jvm, float strength) {
-  if (!loaded || !std::isfinite(strength)) return;
-  // The panel moves in 0.1 steps; rounding here keeps the saved value on them.
+void host_set_handbrake_strength(float strength) {
+  if (!std::isfinite(strength)) return;
+  // The panel and the menu both move in 0.1 steps; rounding keeps them on them.
   const float value = std::round(std::clamp(strength, 0.f, 5.f) * 10.f) / 10.f;
-  jvm.set_static("java.util.Config", "player_handbrake", Value::make_float(value));
-  host_game_options_apply(jvm);
+  if (value == handbrake_strength) return;
+  handbrake_strength = value;
+  current.driving.handbrake_strength = value;
+  save_host_options();
+}
+
+void host_game_options_set_handbrake_strength(Jvm&, float strength) {
+  host_set_handbrake_strength(strength);
 }
 
 void host_game_options_set_drive_hud(Jvm& jvm, bool show) {

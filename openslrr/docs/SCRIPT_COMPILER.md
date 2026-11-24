@@ -50,6 +50,11 @@ validation; successful compilation does not establish runtime equivalence.
   Restart the game to use regenerated code already loaded by the current VM.
 - This implements explicit compileAll. Automatic recompilation on every
   missing/stale class lookup is not implemented by this change.
+- The host exposes the same compiler without a game window:
+  `slrr_host --root DIR --compile-scripts DIR [DIR...]` prints
+  `attempted/succeeded/failed/classes` and exits non-zero when a unit fails.
+  Point it at a directory holding only the edited source so sibling units are
+  not rebuilt.
 
 Compilation does not pretend to enqueue resource loading work in isLoading.
 

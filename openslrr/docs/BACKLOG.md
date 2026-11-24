@@ -81,11 +81,14 @@ Move fixed items to the bottom with the fixing commit.
       (66 -> 43 km/h in 1 s, rears 0.00 rad/s, fronts 38.8).
       Under throttle the law is a torque balance, not a mode: the engine can
       out-pull the brake above ~1010 N m in first gear on an MC, which is what
-      the original does too. Ctrl+F12 -> Tuning -> Driving -> `Handbrake
-      strength` (0..5 step 0.1, **default 1.4**, saved as `player_handbrake` in
-      Game Options) scales the moment so the feel and a future hydraulic mod can
-      be judged without touching the data; 1 is the recovered law, 0 disables the
-      handbrake including the parked hold. `the_handbrake_strength_scales_the_
+      the original does too. Two places set it -- Ctrl+F12 -> Tuning -> Driving
+      and the `HANDBRAKE STRENGTH` row on the GAME OPTIONS page (the patch class
+      in `patch/` calls `getHandbrakeStrength`/`setHandbrakeStrength`) -- 0..5 in
+      0.1 steps, **default 1.4**, saved as `handbrake=` in
+      `save/game/openslrr_options` rather than in the fixed-layout Config, so it
+      survives a restart. It scales the moment, so feel and a future hydraulic
+      mod can be judged without touching the data; 1 is the recovered law, 0
+      disables the handbrake including the parked hold. `the_handbrake_strength_scales_the_
       recovered_moment` pins 0/1/2 with the throttle held down (rears 51.8 /
       33.1 / 0.0 rad/s after 0.5 s). Only the rear wheels get the moment; the
       smaller effect on acceleration is their locked-tyre drag, measured at

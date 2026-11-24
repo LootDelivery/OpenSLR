@@ -30,6 +30,16 @@ int main() {
   SLRR_REQUIRE(graphics.msaa==previous);
   call("java.game.OptionsDialog","setRendererOption","(II)V",{F(0),F(2)});
   SLRR_REQUIRE(graphics.msaa==2);graphics.msaa=previous;
+  // The GAME OPTIONS handbrake row: the shipped dialog class asks these two.
+  const float handbrake = call("java.game.OptionsDialog","getHandbrakeStrength","()F",{}).v.f;
+  SLRR_REQUIRE(handbrake > 0.f);
+  call("java.game.OptionsDialog","setHandbrakeStrength","(F)V",{F(2.5f)});
+  SLRR_REQUIRE(call("java.game.OptionsDialog","getHandbrakeStrength","()F",{}).v.f==2.5f);
+  call("java.game.OptionsDialog","setHandbrakeStrength","(F)V",{F(handbrake)});
+  SLRR_REQUIRE(call("java.game.OptionsDialog","getHandbrakeStrength","()F",{}).v.f==handbrake);
+  call("java.game.OptionsDialog","setHandbrakeStrength","(F)V",{F(99.f)});
+  SLRR_REQUIRE(call("java.game.OptionsDialog","getHandbrakeStrength","()F",{}).v.f==5.f);
+  call("java.game.OptionsDialog","setHandbrakeStrength","(F)V",{F(handbrake)});
   for (auto args : {std::vector<Value>{},std::vector<Value>{I(1)},std::vector<Value>{Value::make_obj(&object),nan,I(32)}})
     call("java.render.GfxEngine","changeVideoMode","(III)V",args);
   call("java.game.OptionsDialog","setRendererOption","(II)V",{I(0),Value::make_obj(&object)});

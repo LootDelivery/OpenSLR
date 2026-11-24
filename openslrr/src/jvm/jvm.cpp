@@ -138,6 +138,23 @@ bool Jvm::bootstrap_classpath() {
   return true;
 }
 
+void Jvm::prefer_patch_root(const std::string& root) {
+  if (!classpath_ready_ || root.empty()) return;
+  size_t preferred = 0;
+  for (const auto& entry : std::vector<std::pair<std::string, std::string>>(classpath_)) {
+    const std::string directory = (std::filesystem::path(root) / entry.first).string();
+    std::error_code error;
+    if (!std::filesystem::is_directory(directory, error)) continue;
+    const std::pair<std::string, std::string> candidate{directory, entry.second};
+    classpath_.erase(std::remove(classpath_.begin(), classpath_.end(), candidate),
+                     classpath_.end());
+    classpath_.insert(classpath_.begin() + static_cast<std::ptrdiff_t>(preferred++),
+                      candidate);
+  }
+  std::printf("[jvm] %zu patch class roots preferred from %s\n", preferred,
+              root.c_str());
+}
+
 std::string Jvm::resolve_class_path(const std::string& fqn) const {
   const auto slash = fqn.find_last_of('.');
   const std::string simple =

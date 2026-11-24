@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "slrr/game_root.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
@@ -202,6 +203,8 @@ int boot_probe(Jvm& jvm, const BootOptions& opt) {
   slrr_loc_set_game_root(jvm);
   video_fmv_set_game_root(opt.game_root);
   if (!jvm.bootstrap_classpath()) return 2;
+  if (const auto patch = find_patch_root(opt.game_root); !patch.empty())
+    jvm.prefer_patch_root(patch);
 
   RpkIndex rpk;
   rpk.set_root(opt.game_root);
@@ -249,6 +252,10 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
   jvm.set_game_root(opt.game_root);
   slrr_loc_set_game_root(jvm);
   if (!jvm.bootstrap_classpath()) return 2;
+  // Scripts from the port's patch tree win over the install's copies, so the
+  // menu can carry port-only rows while the original game stays stock.
+  if (const auto patch = find_patch_root(opt.game_root); !patch.empty())
+    jvm.prefer_patch_root(patch);
 
   // Bench A/B switches without touching the options UI.
   if (const char* e = std::getenv("SLRR_NO_REFLECTIONS"); e && *e == '1')

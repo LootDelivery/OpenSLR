@@ -145,6 +145,22 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           default: return Value::make_int(0);
         }
       });
+  // The handbrake row of the GAME OPTIONS page: the shipped dialog class asks
+  // the host for the value so the setting lives where the driver looks for it.
+  jvm.natives().register_method("java.game.OptionsDialog", "getHandbrakeStrength", "()F",
+      [](Object*, const std::vector<Value>&) {
+        return Value::make_float(host_game_options().driving.handbrake_strength);
+      });
+  jvm.natives().register_method("java.game.OptionsDialog", "setHandbrakeStrength", "(F)V",
+      [](Object*, const std::vector<Value>& args) {
+        if (args.empty()) return Value::make_void();
+        if (args[0].tag == ValueTag::Float)
+          host_set_handbrake_strength(args[0].v.f);
+        else if (args[0].tag == ValueTag::Int)
+          host_set_handbrake_strength(static_cast<float>(args[0].v.i));
+        return Value::make_void();
+      });
+
   jvm.natives().register_method("java.game.OptionsDialog", "setRendererOption", "(II)V",
       [](Object*, const std::vector<Value>& args) {
         auto& graphics = host_enhanced_graphics();

@@ -10,6 +10,8 @@ The **Video Options** menu applies the resolution and the Enhanced settings in g
 | --- | --- |
 | `java.game.OptionsDialog.getRendererOption(I)I` | Reads the active value for the requested identifier. An unknown identifier returns 0. |
 | `java.game.OptionsDialog.setRendererOption(II)V` | Applies the value to the session. Unknown identifiers are ignored. |
+| `java.game.OptionsDialog.getHandbrakeStrength()F` | Reads the handbrake moment as a multiple of the recovered law (0…5, 1 = original). |
+| `java.game.OptionsDialog.setHandbrakeStrength(F)V` | Applies it, rounded to 0.1 steps and saved in `save/game/openslrr_options`. |
 
 | ID | Option | Values |
 | --- | --- | --- |
@@ -21,6 +23,10 @@ The **Video Options** menu applies the resolution and the Enhanced settings in g
 | 5 | Framerate adaptive behaviour | 0 Classic (60 Hz), any non-zero value Adaptive |
 
 The menu and ImGui share options 0–4. They reset on the next launch. Resolution, the global shadow toggle, and flares use the game's existing configuration.
+
+## Running from OpenSLRR without touching the install
+
+`slrr_host` looks for a patch tree (`sl/Scripts/game/OptionsDialog.class`) through `SLRR_PATCH_DIR`, next to the executable, or in `../patch` of the build folder, and puts it ahead of the game's own class roots. Copying `sl` into the game root is only needed when the original `StreetLegal_Redline.exe` should use the patch. `--compile-scripts DIR` rebuilds the class from the shipped `.java` with the same TUFA compiler the game exposes as `System.compileAll`.
 
 ## Framerate adaptive behaviour
 

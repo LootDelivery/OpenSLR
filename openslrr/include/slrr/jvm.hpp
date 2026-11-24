@@ -38,6 +38,10 @@ class Jvm : public TreeHost {
   const NativeRegistry& natives() const { return *natives_; }
 
   bool bootstrap_classpath();
+
+  // Try a script overlay (a patch tree shaped like the game root) before the
+  // install's own classes, so a mod's scripts win without replacing them.
+  void prefer_patch_root(const std::string& root);
   bool load_class(const std::string& fqn_or_path);
   bool load_class_file(const std::string& path);
   const TufaClass* find_class(const std::string& fqn) const;
