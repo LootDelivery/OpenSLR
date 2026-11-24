@@ -127,6 +127,9 @@ struct VehicleHudState {
   float condition = 1, nitro = 0, turbo = 0;
   int gear = 0;
   bool handbrake = false;
+  // Lamp state of the two brake/traction aids: the original lights them while
+  // the aid is intervening (the law's service factor fell below 0.9).
+  bool abs = false, asr = false;
 };
 void part_set_hud_preview(const std::string &path);
 bool part_vehicle_hud(VehicleHudState &state);

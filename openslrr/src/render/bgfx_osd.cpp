@@ -631,6 +631,11 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       {true, cars_resource(0x57), {.646f, .631f, 0}},
       {true, cars_resource(0x5c), {-.126f, .843f, 0}, {}, 0xff000000},
       {true, cars_resource(0x5c), {-.126f, .948f, 0}, {}, 0xff000000},
+      // The four lamps sit in one row of the panel and their meshes carry the
+      // row pitch themselves (led_ABS -499.19, led_ASR -471.85, led_HB -444.89,
+      // led_ER -416.80, all y 17.42): one shared anchor is what place them.
+      {true, cars_resource(0x5e), {-.227f, .925f, 0}},
+      {true, cars_resource(0x60), {-.227f, .925f, 0}},
   }};
   const float pixel_aspect = static_cast<float>(height_) / width_;
   // Size the stock strip from the viewport width while preserving its aspect.
@@ -646,7 +651,20 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     const HudSlot slot = static_cast<HudSlot>(i);
     const auto &override = (*hud.layout)[i];
     const HudElement& item = override.defined ? override : stock[i];
-    if (!item.resource || (slot == HudSlot::Handbrake && !hud.handbrake)) continue;
+    // The lamp commands ship 0xFFFFFFFF as their render id (see the shipped
+    // cfg: `osd_abs 0xFFFFFFFF 0.000 0.000 0.000`): there is no car specific
+    // mesh, so the engine substitutes its own LED from cars.rpk (led_ABS 0x5E,
+    // led_ASR 0x60, led_HB 0x63) and draws it only while the lamp is lit.
+    uint32_t render = item.resource;
+    bool lit = true;
+    if (slot == HudSlot::Handbrake || slot == HudSlot::Abs || slot == HudSlot::Asr) {
+      lit = slot == HudSlot::Handbrake ? hud.handbrake
+          : slot == HudSlot::Abs ? hud.abs : hud.asr;
+      if (!render)
+        render = cars_resource(slot == HudSlot::Abs ? 0x5e
+            : slot == HudSlot::Asr ? 0x60 : 0x63);
+    }
+    if (!render || !lit) continue;
 
     std::shared_ptr<const ScxGeometry> resource;
     const ScxGeometry *mesh = nullptr;
@@ -654,8 +672,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     if (hud.preview_directory && override.defined) {
       // The loose OSDPACK fixture has no RPK entries for its two custom
       // render IDs. Resolve those from the SCX and PNG beside cfg.txt.
-      const bool font = item.resource == 0x0002baa4 && slot == HudSlot::Rpm;
-      const bool pin = item.resource == 0x0002baa5 && slot == HudSlot::RpmPin;
+      const bool font = render == 0x0002baa4 && slot == HudSlot::Rpm;
+      const bool pin = render == 0x0002baa5 && slot == HudSlot::RpmPin;
       if (font || pin) {
         opaque = pin; // The loose fixture's fff.PNG has zero alpha everywhere.
         const std::filesystem::path dir(*hud.preview_directory);
@@ -666,11 +684,11 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
           entry->second.textures = {(dir / "textures" / (font ? "font.png" : "fff.PNG")).string()};
         }
         mesh = &entry->second;
-      } else if ((item.resource >> 16) == 2) {
-        resource = scene_instances_geometry(cars_resource(item.resource & 0xffff));
+      } else if ((render >> 16) == 2) {
+        resource = scene_instances_geometry(cars_resource(render & 0xffff));
       }
     } else {
-      resource = scene_instances_geometry(item.resource);
+      resource = scene_instances_geometry(render);
     }
     if (!mesh) mesh = resource.get();
     if (!mesh || !mesh->info.ok) continue;

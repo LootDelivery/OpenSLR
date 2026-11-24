@@ -4977,6 +4977,8 @@ bool part_vehicle_hud(VehicleHudState &state) {
   }
   state.gear = rec->physics_released ? rec->dynamics.gear : 0;
   state.handbrake = rec->dynamics.drive.handbrake > 0;
+  state.abs = rec->dynamics.drive.abs_active;
+  state.asr = rec->dynamics.drive.asr_active;
   return true;
 }
 

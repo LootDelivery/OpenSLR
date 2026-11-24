@@ -96,7 +96,11 @@ struct PartRender {
 };
 enum class HudSlot : size_t {
   Gauge, RpmPin, SpeedPin, Rpm, Speed, Gear, Mileage, Handbrake,
-  Damage, Nitro, Turbo, Count
+  Damage, Nitro, Turbo,
+  // The two brake/traction lamps (config commands `osd_abs` / `osd_asr`). Their
+  // line carries 0xFFFFFFFF as the render id: the engine substitutes the stock
+  // LED (cars.rpk `led_ABS` 0x5E, `led_ASR` 0x60).
+  Abs, Asr, Count
 };
 struct HudElement {
   bool defined = false;

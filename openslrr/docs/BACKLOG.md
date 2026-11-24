@@ -240,29 +240,39 @@ look at, so the check takes a minute rather than a session.
 
 ## Driving
 
-### DRV-10 The OSD indicator icons (abs/asr) must be published as osd_abs/osd_asr
-- **CORRECTED 2026-11-25 (the premise above was wrong in two ways).** The
-  original does not read the indicator bits through `GameRef.getFlags`: that
-  returns `object+0x54`, a different word, and no shipped script calls it
-  (`findstr /S /M /C:"getFlags" *.class` matches only GameRef.class itself).
-  The real reader is `FUN_00451730`: every frame it tests `car+0x70 & 0x1000000`
-  (at `0x452746`) and `& 0x2000000` (at `0x452779`) and publishes 1.0/0.0 through
-  `FUN_0043C0A0` under the names `osd_abs` / `osd_asr` (name table `0x60E3D0`,
-  next to `osd_turbo`, `osd_mileage`, `osd_hbrake`, `osd_emergency`,
-  `osd_damage_slot`). So BOTH lamps are wired in the original; the reason one
-  never sees the ABS lamp is the default `abs 0` that car init writes
-  (`0x00431990`, string `0x60DAD8`; ASR likewise `asr 0` at `0x60DAE0`), so the
-  law is never called and the bit never sets. With `abs > 0` on the car the lamp
-  does light; the same applies to ASR.
-- **What the port lacks:** we compute `drive.abs_active`/`drive.asr_active` but
-  publish nothing, so no lamp can light regardless of the option. Porting means
-  exposing `osd_abs`/`osd_asr` (1.0/0.0) from those two states the same way.
-- **Acceptance gate:** in the port, with the option enabled and the law cutting,
-  the published `osd_abs`/`osd_asr` must read 1.0; with the option off, 0.0.
-  Side-by-side with the original is still required before closing.
-- **Status:** open.
-
-### DRV-11 ASR: closed -- law, clutch press and launch behaviour verified (2026-11-25)
+### DRV-10 The OSD indicator icons (abs/asr): closed -- lamps found, drawn, fed (2026-11-25)
+- **The premise of the old title was wrong.** `osd_abs`/`osd_asr` are not names
+  published into a value table: they are the car config commands that declare two
+  HUD lamps. The parser table is at `0x60E3D0` and pairs each command with its
+  handler: `osd_abs` -> `FUN_00445520`, `osd_asr` -> `FUN_004455b0`, `osd_hbrake`
+  -> `FUN_00445640`, `osd_emergency` -> `FUN_004456d0`, `osd_damage_slot` ->
+  `FUN_004450e0`; all four lamp handlers parse the same `%d %f %f %f` prefix
+  (format string at `0x60F874`/`0x60F894`/`0x60F8B4`) and then build the element
+  with `FUN_00544590` + `FUN_00546070(handle, 0xE, 0)`.
+- **`0xFFFFFFFF` means "no car specific render": the engine substitutes its own
+  LED.** `cars.rpk` lists exactly four of them next to the other OSD resources
+  (`cars/osd/`): `led_ABS` 0x5E, `led_ER` 0x5F, `led_ASR` 0x60, `led_HB` 0x63,
+  with loose copies in `cars/meshes/{ABS,ASR,ER,HB}_led.scx`. Their vertices
+  carry the row placement itself: x = -499.19 / -471.85 / -444.89 / -416.80, all
+  y = 17.42 -- i.e. ABS, ASR, HB, ER left to right, the four icons the driver
+  sees. The shipped cfg declares all four with `0xFFFFFFFF 0.000 0.000 0.000`.
+- **The value side was never missing.** The original sets bit `0x1000000` (ABS)
+  or `0x2000000` (ASR) on `car+0x70` while the law's service factor is below
+  0.9; the port computes the same thing as `drive.abs_active` / `drive.asr_active`
+  (`vehicle_dynamics.cpp:918`, `:945`). So the two lamps must be lit exactly
+  while the aid intervenes -- the ASR one on every hard launch, the ABS one
+  almost never (stock cars ship `abs 0`, and the law needs a locking wheel).
+- **What was really missing was the parse and the draw:** the port's name table
+  knew only `osd_hbrake` of the four lamps, and a `0xFFFFFFFF` id was reduced to
+  resource 0, which `draw_vehicle_hud` skipped on its first line. Added
+  `HudSlot::Abs`/`HudSlot::Asr`, the two config names, the built-in LED
+  substitution and the lit gate, and fed `VehicleHudState::abs/asr` from the
+  dynamics.
+- **Status:** closed for the parse, the value and the draw. Placement of the
+  four lamps in the port's HUD is inherited from the HB slot that was measured
+  earlier, because all four meshes share one coordinate space and one anchor
+  positions the whole row -- one in-game look is enough to confirm it.
+### DRV-11 ASR: closed -- law, clutch press and launch behaviour verified (2026-11-25)
 - **The law and its writer are fully recovered:** `FUN_0044e120` reads the mean
   `|wheel+0x14C|` over enabled, driven, contacting wheels (`piVar5[0x27]` is
   wheel+0xCC, the drive share), computes `x0 = mean - 0.2*inv`, `x = (x0 -
