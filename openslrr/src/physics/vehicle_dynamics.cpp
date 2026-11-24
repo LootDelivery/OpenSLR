@@ -902,8 +902,14 @@ void VehicleDynamics::step_drive() {
       if (x > 0) {
         const double pedal = std::max(0.0, 1.0 - x / (inv * .3));
         drive.throttle = pedal * drive.throttle;
-        drive.clutch = drive.clutch * pedal;
         drive.asr_active = pedal < .9;
+        // The listing also writes car+0x1DBC (the ASR opens the clutch), but
+        // that slot's net effect depends on its per-frame writer (the
+        // auto-clutch/gearbox code, the open DRV-7 question). Ported, it
+        // collapsed the driveline: the driver measured "the ASR eats almost
+        // all the throttle, the car barely accelerates" against the
+        // original's working max-ASR. Held back until the 0x1DBC writer is
+        // recovered, not tuned.
       }
       drive.asr_prev = mean - inv * .2;
     } else {
