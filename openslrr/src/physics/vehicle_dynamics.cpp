@@ -705,6 +705,11 @@ double wheel_slip_denominator(double share, double share_sum, double clutch_open
          e8;
 }
 
+DriveTuning &drive_tuning() {
+  static DriveTuning tuning;
+  return tuning;
+}
+
 double wheel_inverse_inertia(double share, double share_sum, double clutch_open,
                              double total_ratio, double engine_inertia,
                              double brake_inertia) {
@@ -1295,7 +1300,10 @@ void VehicleDynamics::step_drive() {
     // wheel[0xFC] is not recovered. wheel[0xF0] stays out as well, because the port
     // applies rolling resistance through rolling_torque below.
     apply_brake(brake_step * service_brake_ * drive.brake * cfg.brake);
-    apply_brake(brake_step * drive.handbrake * cfg.handbrake);
+    // The F12 strength scales the moment, not the pedal: 1 leaves the recovered
+    // law untouched and the pedal still reads as the original's button.
+    apply_brake(brake_step * drive.handbrake * cfg.handbrake *
+                std::max(0.0, static_cast<double>(drive_tuning().handbrake)));
 
     if (!s.contact || s.force <= 0) {
       // Recovered 0x00454500: without contact the slip memory is cleared
@@ -1548,8 +1556,11 @@ void VehicleDynamics::step(const Terrain &terrain) {
     const auto& s = state[i];
     const auto& cfg = drive.wheels[i];
     if (!wheels[i].enabled || !s.contact || !(s.force > 0)) continue;
+    // The F12 strength counts here too: at 0 the handbrake is genuinely absent,
+    // so a parked car must roll instead of being held by a disabled brake.
     const bool braked = (drive.brake > .05 && cfg.brake > 0) ||
-                        (drive.handbrake > .05 && cfg.handbrake > 0) ||
+                        (drive.handbrake > .05 && cfg.handbrake > 0 &&
+                         drive_tuning().handbrake > 0) ||
                         (drive.native_traffic && drive.brake > .5);
     const Vec3 v = body.point_velocity(s.patch);
     const double speed = (v - s.normal * v.dot(s.normal)).length();

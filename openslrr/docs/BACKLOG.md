@@ -79,6 +79,13 @@ Move fixed items to the bottom with the fixing commit.
       6540.775 against 0xD8 3270.387 -- exactly 2x) with the button pedal at 1.0.
       Guarded by `the_handbrake_locks_the_rears_and_holds_far_beyond_the_pedal_hack`
       (66 -> 43 km/h in 1 s, rears 0.00 rad/s, fronts 38.8).
+      Under throttle the law is a torque balance, not a mode: the engine can
+      out-pull the brake above ~1010 N m in first gear on an MC, which is what
+      the original does too. Ctrl+F12 -> Tuning -> Driving -> `Handbrake
+      strength` (0..5, default 1, runtime only) scales the moment so the feel and
+      a future hydraulic mod can be judged without touching the data;
+      `the_handbrake_strength_scales_the_recovered_moment` pins 0/1/2 with the
+      throttle held down (rears 51.8 / 33.1 / 0.0 rad/s after 0.5 s).
 
 ## Awaiting driver verification
 

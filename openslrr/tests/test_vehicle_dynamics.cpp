@@ -394,6 +394,45 @@ SLRR_TEST(the_handbrake_locks_the_rears_and_holds_far_beyond_the_pedal_hack) {
   SLRR_REQUIRE(front > 10);      // and only the rears: the fronts keep rolling
   SLRR_REQUIRE(after < entry - 3);
 }
+
+SLRR_TEST(the_handbrake_strength_scales_the_recovered_moment) {
+  // The F12 panel's slider multiplies the wheel's handbrake moment, so 1 has to
+  // reproduce the law the test above pins, 0 has to leave the handbrake out, and
+  // 2 has to stop the car harder. The pedal stays the original's button at every
+  // setting, which is why the slider reaches the moment and not the input.
+  // Half a second in, before the rears have fully locked, is where the strength
+  // is visible as a difference: once they are locked the tyre is already sliding
+  // and a bigger brake moment has nothing left to stop, so the final speed barely
+  // moves between 1 and 2.
+  const auto measure = [](float strength) {
+    struct Restore {
+      float old = drive_tuning().handbrake;
+      ~Restore() { drive_tuning().handbrake = old; }
+    } restore;
+    drive_tuning().handbrake = strength;
+    Car car;
+    for (int i = 2; i < 4; ++i) car.dynamics.drive.wheels[i].handbrake = 4000;
+    // A real MC engine and the throttle held down: this is the case the slider
+    // exists for, because a weak engine loses to the handbrake at any setting.
+    car.dynamics.drive.torque = [](double rpm) {
+      return std::clamp(300 + rpm * .04, 0., 470.);
+    };
+    car.run(1, 0, 0, 0);
+    car.run(2, 1, 0, 0);
+    car.dynamics.drive.handbrake = 1;  // the button, as the binding gives it
+    car.run(.5, 1, 0, 0);
+    const double half = std::abs(car.dynamics.state[2].spin);
+    car.run(1.5, 1, 0, 0);
+    return std::pair{half, car.speed()};
+  };
+  const auto off = measure(0), normal = measure(1), hard = measure(2);
+  std::printf("[handbrake] strength 0/1/2: rear %.1f / %.1f / %.1f rad/s after .5 s,"
+              " %.0f / %.0f / %.0f km/h after 1 s\n", off.first, normal.first,
+              hard.first, off.second * 3.6, normal.second * 3.6, hard.second * 3.6);
+  SLRR_REQUIRE(off.first > normal.first + 5);  // 0 leaves the handbrake out
+  SLRR_REQUIRE(hard.first < normal.first);     // and more strength bites sooner
+  SLRR_REQUIRE(normal.second < off.second - 3);// 1 still locks and slows the car
+}
 SLRR_TEST(a_car_without_an_engine_coasts_and_still_brakes) {
   // The drive configure_drive gives a car whose engine was torn off: a
   // zero-torque engine that never starts and no gears.
@@ -994,6 +1033,7 @@ int main() {
       a_brake_stronger_than_the_drive_holds_its_wheels,
       the_engine_beating_weak_rear_brakes_spins_the_driven_wheels,
   the_handbrake_locks_the_rears_and_holds_far_beyond_the_pedal_hack,
+  the_handbrake_strength_scales_the_recovered_moment,
       a_car_without_an_engine_coasts_and_still_brakes,
       preapplied_brakes_hold_against_drive_in_both_directions,
       abs_releases_a_locked_wheel_while_the_road_moves,

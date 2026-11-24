@@ -254,6 +254,18 @@ double wheel_slip_denominator(double share, double share_sum, double clutch_open
 double wheel_inverse_inertia(double share, double share_sum, double clutch_open,
                              double total_ratio, double engine_inertia,
                              double brake_inertia);
+// Runtime strength for the handbrake, exposed as the F12 panel's slider (Tuning ->
+// Handbrake). 1 is the recovered law: the pedal is the original's button and a
+// rear wheel carries twice its service-brake moment (CAR_MODEL_RECOVERY 14.7c).
+// The slider scales only that moment -- the pedal stays a button -- which is the
+// same lever a hydraulic-handbrake mod pulls through the car's brakepower
+// handbrake field, except it needs no edit to the car data and no restart.
+// Runtime only, like the tyre sliders: 0 disables the handbrake, 5 is the
+// strongest the panel offers.
+struct DriveTuning {
+  float handbrake = 1.f;
+};
+DriveTuning& drive_tuning();
 double suspension_force(double length, double velocity, double rest,
                         double maximum, double spring, double bump,
                         double rebound);
