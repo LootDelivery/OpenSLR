@@ -10,40 +10,6 @@ double magic_formula(double slip, double b, double c, double d, double e) {
   const double bx = b * slip;
   return d * std::sin(c * std::atan(bx - e * (bx - std::atan(bx))));
 }
-
-double reference_grip(double aligned_load, const TireParameters& tire) {
-  constexpr TireParameters stock;
-  const double grip = std::clamp(tire.friction / stock.friction, 0.2, 2.5);
-  double load_efficiency = 1.0;
-  if (tire.maximum_load > 0.0) {
-    const double normalized_load = aligned_load / tire.maximum_load;
-    load_efficiency =
-        1.0 / (1.0 + 0.18 * std::max(0.0, normalized_load - 0.5));
-  }
-  return grip * load_efficiency;
-}
-
-TireForces force_peaks(double aligned_load, double effective_grip,
-                       const TireParameters& tire) {
-  constexpr TireParameters stock;
-  const auto& tuning = tire_tuning();
-  double lateral_load_factor = 1.0;
-  if (tire.maximum_load > 0.0) {
-    const double capped = std::min(aligned_load, tire.maximum_load);
-    constexpr double half_pi = std::numbers::pi / 2.0;
-    const double progressive =
-        std::atan(aligned_load * half_pi / tire.maximum_load) *
-        tire.maximum_load / half_pi;
-    lateral_load_factor =
-        std::lerp(1.0, progressive / std::max(1.0, capped),
-                  std::clamp(tire.load_smoothing * tuning.load_sensitivity,
-                             0.0, 1.0));
-  }
-  return {aligned_load * 0.85 * effective_grip * stock.friction *
-              std::max(0.0, tire.longitudinal_grip) * tuning.longitudinal_grip,
-          aligned_load * 1.42 * effective_grip * lateral_load_factor *
-              tuning.lateral_grip};
-}
 } // namespace
 
 // 0x0043BBD0. The EXE does not cap the force by the slip velocity -- doing
@@ -104,14 +70,6 @@ TireTuning &tire_tuning() {
   return tuning;
 }
 
-TireForces tire_friction_limits(double load, double alignment,
-                                const TireParameters& tire) {
-  const double aligned_load = std::max(0.0, load * alignment);
-  if (aligned_load <= 0) return {};
-  const auto peaks = force_peaks(aligned_load, reference_grip(aligned_load, tire), tire);
-  return {std::max(0.0, peaks.longitudinal), std::max(0.0, peaks.lateral)};
-}
-
 namespace {
 // 0x0043BA80 (clamped at zero) and 0x0043BB30 (signed): the recovered force law, one
 // function with a switch, because the two differ only in that clamp. `argument` is the
@@ -154,6 +112,28 @@ double load_curve(double load, const TireParameters &tire) {
       (2 / std::numbers::pi);
   return (1 - smooth) * linear + smooth * progressive;
 }
+} // namespace
+
+TireForces tire_friction_limits(double load, double tangent,
+                                const TireParameters& tire) {
+  if (!(load > 0.0)) return {};
+  // The recovered cap is the force law's own peak. F = m*s*sin(C0*t2) with
+  // m = s*C1 + C2 and s = (tangent+1)*0.5*load_curve(load); sin(C0*t2) reaches
+  // 1 once C0 > 1 (the stock sliction 1.4), so the peak is exactly m*s -- the
+  // classic D. The (tangent+1)/2 floor is the recovered scale (0x00454500:
+  // even with the contact normal along the axle the scale is half the load),
+  // so tangent=0 holds at half, not zero -- the invented
+  // alignment = max(.25, tilt*tilt) load multiplier and the 0.85/1.42
+  // force_peaks curve it fed are gone. wheel+0x218 (longitudinal_grip)
+  // weights the slip's share of the composite; at exactly 0 the law produces
+  // no longitudinal force for any input, which is what the script field means.
+  const double s =
+      (std::clamp(tangent, 0.0, 1.0) + 1.0) * 0.5 * load_curve(load, tire);
+  const double d = (s * tire.pacejka[1] + tire.friction) * s;
+  return {tire.longitudinal_grip > 0.0 ? d : 0.0, d};
+}
+
+namespace {
 
 TireForces forces_from_inputs(double load, double tangent, double slip,
                               double angle, const TireParameters &tire) {

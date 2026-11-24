@@ -1399,10 +1399,18 @@ void VehicleDynamics::step(const Terrain &terrain) {
     const double mu = wheels[i].metal_contact ? .4 : .8;
     TireForces caps{mu * s.force, mu * s.force};
     if (!wheels[i].metal_contact && !drive.native_traffic) {
-      const double tilt = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0})).dot(s.normal);
-      const auto peaks = tire_friction_limits(s.force, std::max(.25, tilt * tilt), cfg.tyre);
-      caps.longitudinal = std::min(caps.longitudinal, peaks.longitudinal);
-      caps.lateral = std::min(caps.lateral, peaks.lateral);
+      // The recovered scale replaces both the invented mu=0.8 stand-in and the
+      // alignment = max(.25, tilt*tilt) load multiplier: the cap is the force
+      // law's own peak with s = (tangent+1)*0.5*load_curve, where tangent is
+      // the contact normal's tangential magnitude against the axle -- the same
+      // quantity the moving path computes.
+      Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
+      heading = (heading - s.normal * heading.dot(s.normal)).normalized();
+      const Vec3 side = heading.cross(s.normal);
+      const double along_axle = s.normal.dot(side);
+      const double tangent =
+          std::sqrt(std::max(0.0, 1.0 - along_axle * along_axle));
+      caps = tire_friction_limits(s.force, tangent, cfg.tyre);
     }
     const double used = std::hypot(
         caps.longitudinal > 0 ? s.tire_force.longitudinal / caps.longitudinal : 0,

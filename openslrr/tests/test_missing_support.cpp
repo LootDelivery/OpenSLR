@@ -329,7 +329,12 @@ SLRR_TEST(static_tyre_limits_keep_longitudinal_and_lateral_script_inputs_separat
   const auto low = tire_friction_limits(4000, 1, tyre);
   SLRR_REQUIRE(std::abs(low.longitudinal / reference.longitudinal - .2) < 1e-12);
   SLRR_REQUIRE(std::abs(low.lateral / reference.lateral - .2) < 1e-12);
-  SLRR_REQUIRE(tire_friction_limits(4000, 0, tyre).lateral == 0);
+  // The recovered scale has a floor, not a zero: with the contact normal along
+  // the axle the (tangent+1)/2 scale is half the load, so the cap is exactly
+  // half the square-standing one (0x00454500: the 1 inside (x+1)/2 exists so
+  // the tyre holds even there; a lean only adds up to doubling).
+  const auto lying = tire_friction_limits(4000, 0, TireParameters{});
+  SLRR_REQUIRE(std::abs(lying.lateral - reference.lateral * .5) < 1e-9);
 }
 
 int main() {

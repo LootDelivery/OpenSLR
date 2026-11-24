@@ -65,7 +65,7 @@ TireTuning& tire_tuning();
 
 // Force-ellipse axes with zero-slip grip scaling (N). Static holding can use
 // these bounds without requiring motion; this is not a finite-speed force.
-TireForces tire_friction_limits(double load, double alignment,
+TireForces tire_friction_limits(double load, double tangent,
                                 const TireParameters& tire);
 
 // The recovered force law (0x0043BA80 clamped, 0x0043BB30 signed) on the 17 script
