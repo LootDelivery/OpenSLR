@@ -276,13 +276,18 @@ look at, so the check takes a minute rather than a session.
   when it lifts". The exchange is pushing both up (+3.7/step at engine 1846
   rpm), the tyre is spinning both up, so the holder is the brake path
   balanced against them.
-- **Suspect:** our ABS path is not recovered. `abs_strength` is the game
-  option, but the logic itself (minimum = |road|/radius*0.85, allowed =
-  |spin| - minimum, service = lerp(service, min(service, allowed),
-  abs_strength)) has no section in PHYSICS_MODEL_PROVENANCE.md and no known
-  exe source. With abs_strength < 1 the brake never fully releases below the
-  minimum and the wheel parks at the lerp equilibrium instead of climbing to
-  rolling.
+- **CORRECTED 2026-11-25: the ABS suspect below is stale and wrong.** The ABS was
+  recovered on 2026-11-24 and ported (`b37a98e7`): `FUN_0044df70`, whole-car pedal
+  modulation (mean of the braked loaded wheels' accumulated slip, thresholds
+  0.2/0.4 on `1/abs`, blend `(x-prev)*4+x`, memory `car+0x1F54`, icon 0x1000000 under
+  service < 0.9) -- CAR_MODEL_RECOVERY 5.3b', pinned by
+  `abs_releases_a_locked_wheel_while_the_road_moves`. ASR (`FUN_0044e120`) is ported
+  too (`ef5e2206`), only its clutch write is deferred (`c53f5d26`) and that does not
+  act on braking. Our invented per-wheel `|road|/r*0.85` branch is gone. So the hover
+  is NOT a missing ABS branch: it survives the whole recovered brake chain (brake/tyre
+  drag steps on `EC`, bearing, rolling force, static hold), and it is not reproduced by
+  the bench (8 frames of 480 below 1 rad/s). What would settle it is a live trace of
+  the original.
 - **Bench, 2026-11-25:** the 105-degree slide fixture does NOT reproduce the hover --
   its light driven wheel falls below 1 rad/s for 8 frames out of 480 and climbs back.
   So the 10+ frame hover is a live-only observation, and the bench cannot settle it.
