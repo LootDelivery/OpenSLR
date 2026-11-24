@@ -221,6 +221,24 @@ look at, so the check takes a minute rather than a session.
 
 ## Driving
 
+### DRV-7 A driven wheel pinned at zero in a long slide (open diff)
+- **Symptom:** in the 105-degree slide fixture (62 km/h, throttle 1.0, engine
+  6908 rpm) the loaded driven wheel hovers at ~0 rad/s — the driveline
+  exchange's share (+4.4 rad/s per step at 7000 rpm) and the sliding tyre's
+  longitudinal force eat each other — while its unloaded twin runs away to
+  twice case speed (95-105 rad/s), the classic open-diff one-wheel spin. The
+  driver sees the same pair in game: one wheel stopped, the other burning.
+- **What is known:** the airborne branch that used to finish the lifted wheel
+  off is fixed (e8b589d7 — no spin decay off contact). The pinned wheel is
+  grounded; its balance is between the exchange and the tyre's slip-limit
+  clamp. The original's wheel step is `dt·50·wheel[0xEC]·F_long·wheel[0x60]·2.8`
+  plus a slip-sign-change clamp on the step itself; we use our own force
+  clamp (`|slip|/(dt·(inv_mass+inv_spin))`) and a plain `F·r/I` step, so the
+  balance constants are not the original's.
+- **Next step:** read wheel+0xEC's writer and the step's constants from the
+  exe, port the wheel step as recovered, re-measure the fixture.
+- **Status:** open.
+
 ### DRV-1 Poor steering at speed
 - **Symptom:** the car barely turns at high speed ("поворачиваемость говно").
 - **Suspect (user hypothesis):** steering help blends the steering angle and
