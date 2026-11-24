@@ -48,13 +48,32 @@ validation; successful compilation does not establish runtime equivalence.
   and initial declaration indexing remain synchronous C++ work.
 - Existing VM classes are not replaced or reinitialized while executing.
   Restart the game to use regenerated code already loaded by the current VM.
-- This implements explicit compileAll. Automatic recompilation on every
-  missing/stale class lookup is not implemented by this change.
+- This implements explicit compileAll. Class loading never compiles: only the
+  start-up pass below and an explicit `System.compileAll` call do.
 - The host exposes the same compiler without a game window:
   `slrr_host --root DIR --compile-scripts DIR [DIR...]` prints
   `attempted/succeeded/failed/classes` and exits non-zero when a unit fails.
   Point it at a directory holding only the edited source so sibling units are
   not rebuilt.
+
+### Start-up pass
+
+The original runtime rebuilds script sources when it starts, before any class is
+loaded, so an edited `.java` takes effect on the next launch. The port does the
+same in `boot_game` (`script_compile_stale`), with the same tree walk as an
+explicit compile:
+
+- Only sources whose container is missing or older than the source are rebuilt;
+  an untouched tree compiles nothing and adds no start-up cost.
+- Only the runtime's own script trees count: `system/`, `sl/`, `parts/scripts`,
+  `maps/*/Scripts`. A car or map mod's private `parts/<name>/scripts` folder is
+  left alone, as the original leaves it.
+- A directory is compiled as a unit (one provider load, one declaration index),
+  so a changed source may rebuild its siblings; that is what compileAll does for
+  the whole tree.
+- One line is printed when anything was rebuilt:
+  `[compile] start-up: N source(s), M ok, F failed`. Failures keep the previous
+  container and never stop the launch.
 
 Compilation does not pretend to enqueue resource loading work in isLoading.
 

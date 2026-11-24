@@ -13,6 +13,7 @@
 #include "slrr/host_game_options.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/race_runtime.hpp"
+#include "slrr/script_compiler.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/mainloop.hpp"
 #include "slrr/natives_boot.hpp"
@@ -256,6 +257,11 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
   // menu can carry port-only rows while the original game stays stock.
   if (const auto patch = find_patch_root(opt.game_root); !patch.empty())
     jvm.prefer_patch_root(patch);
+  // The original runtime rebuilds edited script sources at start-up; a .java
+  // edit takes effect on the next launch without any manual compile step.
+  if (const auto compiled = script_compile_stale(opt.game_root); compiled.attempted)
+    std::printf("[compile] start-up: %d source(s), %d ok, %d failed\n",
+                compiled.attempted, compiled.succeeded, compiled.failed);
 
   // Bench A/B switches without touching the options UI.
   if (const char* e = std::getenv("SLRR_NO_REFLECTIONS"); e && *e == '1')

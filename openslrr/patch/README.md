@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl` folder from this patch into the game root and accept the replacement of `OptionsDialog.class`. The Java source is shipped with the compiled class. Use the Enhanced v3 Release.
+Copy the `sl` folder from this patch into the game root. It ships the Java source next to the stock class; `slrr_host` rebuilds a source that is newer than its class when it starts, so the menu row appears on the next launch without a manual build. The original `StreetLegal_Redline.exe` does the same for edited sources.
 
 The **Video Options** menu applies the resolution and the Enhanced settings in game. Exterior scenery range is 5 km. The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -26,7 +26,7 @@ The menu and ImGui share options 0–4. They reset on the next launch. Resolutio
 
 ## Running from OpenSLRR without touching the install
 
-`slrr_host` looks for a patch tree (`sl/Scripts/game/OptionsDialog.class`) through `SLRR_PATCH_DIR`, next to the executable, or in `../patch` of the build folder, and puts it ahead of the game's own class roots. Copying `sl` into the game root is only needed when the original `StreetLegal_Redline.exe` should use the patch. `--compile-scripts DIR` rebuilds the class from the shipped `.java` with the same TUFA compiler the game exposes as `System.compileAll`.
+`slrr_host` looks for a patch tree (`sl/Scripts/game/src/OptionsDialog.java`, or a compiled class) through `SLRR_PATCH_DIR`, next to the executable, or in `../patch` of the build folder, and puts it ahead of the game's own class roots. Copying `sl` into the game root is only needed when the original `StreetLegal_Redline.exe` should use the patch. `--compile-scripts DIR` rebuilds a class from a shipped `.java` on demand with the same TUFA compiler the game exposes as `System.compileAll`.
 
 ## Framerate adaptive behaviour
 

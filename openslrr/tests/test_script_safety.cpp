@@ -6,6 +6,7 @@
 #include <limits>
 using namespace slrr;
 int main() {
+  std::setvbuf(stdout,nullptr,_IONBF,0);
   Fixture f;
   auto I=[](int32_t n){return Value::make_int(n);};
   auto F=[](float n){return Value::make_float(n);};
@@ -93,5 +94,24 @@ public class Safety {
   }
   store("store",(1<<20)-1,7);
   SLRR_REQUIRE(array.slots.size()==(1<<20) && array.slots.back().v.i==7);
+  // The start-up pass: engine script trees only, and only what is older than its
+  // container, so an edited source is rebuilt once and an untouched tree is not.
+  {
+    fs::create_directories(f.root/"sl/Scripts/probe/src");
+    const auto source=f.root/"sl/Scripts/probe/src/Stale.java";
+    std::ofstream(source)<<"package java.probe;\npublic class Stale { public static int value(){return 7;} }\n";
+    const auto container=f.root/"sl/Scripts/probe/Stale.class";
+    auto first=script_compile_stale(f.root.string());
+    SLRR_REQUIRE(first.attempted==1 && first.succeeded==1 && fs::exists(container));
+    auto unchanged=script_compile_stale(f.root.string());
+    SLRR_REQUIRE(unchanged.attempted==0 && unchanged.failed==0);
+    fs::last_write_time(container,fs::last_write_time(source)-std::chrono::seconds(5));
+    auto edited=script_compile_stale(f.root.string());
+    SLRR_REQUIRE(edited.attempted==1 && edited.succeeded==1);
+    fs::create_directories(f.root/"parts/Mod/scripts/src");
+    std::ofstream(f.root/"parts/Mod/scripts/src/Private.java")<<"public class Private {}\n";
+    auto mods=script_compile_stale(f.root.string());
+    SLRR_REQUIRE(mods.attempted==0);
+  }
   std::puts("PASS native short/mistagged/boxed arguments; bounded direct and compound array stores");
 }

@@ -48,7 +48,9 @@ std::string find_patch_root(const std::string& game_root) {
     candidates.push_back(exe / ".." / ".." / "patch");
   }
   for (const auto& candidate : candidates) {
-    if (fs::is_regular_file(candidate / "sl" / "Scripts" / "game" / "OptionsDialog.class", ec))
+    // Source-only patch trees count: the start-up pass compiles them.
+  if (fs::is_regular_file(candidate / "sl" / "Scripts" / "game" / "src" / "OptionsDialog.java", ec) ||
+      fs::is_regular_file(candidate / "sl" / "Scripts" / "game" / "OptionsDialog.class", ec))
       return absolute_root(candidate);
   }
   return {};

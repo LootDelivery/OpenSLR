@@ -13,6 +13,7 @@
 
 namespace slrr {
 namespace {
+namespace fs = std::filesystem;
 std::filesystem::path utf8_path(const std::string& value) {
   return std::filesystem::path(std::u8string(value.begin(), value.end()));
 }
@@ -46,6 +47,26 @@ std::string source_text(const slrrc::install::Install& tree,
     text.insert(0, "package " + package + "; ");
   }
   return text;
+}
+// Directories the runtime compiles from: its classpath script trees. A car or
+// map mod keeps private sources under parts/<name>/scripts, which the original
+// does not touch at start-up and neither do we.
+bool engine_script_root(std::string directory) {
+  for (auto& c : directory) c = char(std::tolower(static_cast<unsigned char>(c)));
+  if (directory == "parts/scripts" || directory.compare(0, 15, "parts/scripts/") == 0)
+    return true;
+  if (directory.compare(0, 7, "system/") == 0 || directory.compare(0, 3, "sl/") == 0)
+    return true;
+  return directory.compare(0, 5, "maps/") == 0 &&
+         directory.find("/scripts") != std::string::npos;
+}
+bool is_stale(const slrrc::install::Install& tree,
+              const slrrc::install::SourceFile& source) {
+  std::error_code error;
+  const auto produced = fs::last_write_time(utf8_path(tree.path(source.output_rel())), error);
+  if (error) return true;  // No container beside it: build it.
+  const auto written = fs::last_write_time(utf8_path(source.path), error);
+  return error || produced < written;
 }
 bool publish(const std::filesystem::path& path, const std::vector<uint8_t>& bytes) {
   auto staging = path; staging += L".openslrr.tmp";
@@ -112,6 +133,33 @@ ScriptCompileReport script_compile_all(const std::string& root,
   }
   std::printf("[compiler] attempted=%d succeeded=%d failed=%d classes=%d (restart for loaded classes)\n",
               report.attempted, report.succeeded, report.failed, report.classes);
+  return report;
+}
+
+ScriptCompileReport script_compile_stale(const std::string& root) {
+  ScriptCompileReport report;
+  std::vector<std::string> directories;
+  try {
+    slrrc::install::Install tree(root);
+    tree.scan();
+    for (const auto& source : tree.sources) {
+      if (!engine_script_root(source.class_dir) || !is_stale(tree, source)) continue;
+      if (std::find(directories.begin(), directories.end(), source.class_dir) ==
+          directories.end())
+        directories.push_back(source.class_dir);
+    }
+    // A directory compiles as a unit: one provider load and one declaration
+    // index serve all of its sources.
+    for (const auto& directory : directories) {
+      const auto one = script_compile_all(root, directory, {});
+      report.attempted += one.attempted;
+      report.succeeded += one.succeeded;
+      report.failed += one.failed;
+      report.classes += one.classes;
+    }
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "[compiler] start-up scan: %s\n", error.what());
+  }
   return report;
 }
 }
