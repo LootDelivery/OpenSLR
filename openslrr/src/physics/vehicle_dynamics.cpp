@@ -841,6 +841,76 @@ void VehicleDynamics::step_drive() {
   const bool starting = !engine_running && drive.starter > 0 &&
                         (accelerator || starter_remaining_ > 0);
   starter_remaining_ = std::max(0.0, starter_remaining_ - timestep);
+  // The recovered ABS (FUN_0044df70) and ASR (FUN_0044e120), whole-car pedal
+  // modulation. ABS: with the brake pressed, the mean of the braked loaded
+  // wheels' accumulated slip (wheel[0x14C], the same filter state the force
+  // law consumes) reduces the brake pedal; thresholds 0.2/0.4 on 1/abs
+  // (gearbox+0xA28), rate blend (x - prev)*4 + x, memory car+0x1F54, the
+  // indicator flag 0x1000000 under service < 0.9. ASR: same skeleton on the
+  // throttle over the DRIVEN loaded wheels, thresholds 0.2/0.3 on 1/asr
+  // (gearbox+0xA2C), rate blend *2, memory car+0x1F50, indicator 0x2000000
+  // (the icon that does light in the original); it also opens the clutch:
+  // car+0x1DBC (the openness the exchange consumes as 1-openness) becomes
+  // 1 - openness*service, i.e. our engagement is simply scaled by service.
+  // Both replace our invented per-wheel |road|/r*0.85 branch. abs/asr <=
+  // 0.01 leave the memories untouched, no qualifying wheels zeroes them --
+  // both as in the listings. The modulations sit before the pedal smoothing
+  // so the smoothed pedal follows the modulated one.
+  drive.abs_active = drive.asr_active = false;
+  if (drive.abs_strength > 0 && drive.brake > .01) {
+    double sum = 0;
+    int loaded = 0;
+    for (size_t i = 0; i < wheels.size(); ++i) {
+      const auto &s = state[i];
+      if (!wheels[i].enabled || drive.wheels[i].brake <= 0 || !s.contact ||
+          s.force <= 0)
+        continue;
+      sum += std::abs(s.slip_state.slip);
+      ++loaded;
+    }
+    if (loaded > 0) {
+      const double inv = 1 / std::max(1e-6, (double)drive.abs_strength);
+      const double mean = sum / loaded;
+      double x = mean - inv * .2;
+      x = (x - drive.abs_prev) * 4.0 + x;
+      if (x > 0) {
+        const double pedal = std::max(0.0, 1.0 - x / (inv * .4));
+        drive.brake = std::min(pedal * drive.brake, drive.brake);
+        drive.abs_active = pedal < .9;
+      }
+      drive.abs_prev = mean - inv * .2;
+    } else {
+      drive.abs_prev = 0;
+    }
+  }
+  if (drive.launch_help > 0 && drive.throttle > .01) {
+    double sum = 0;
+    int driven = 0;
+    for (size_t i = 0; i < wheels.size(); ++i) {
+      const auto &s = state[i];
+      if (!wheels[i].enabled || drive.wheels[i].weight == 0 || !s.contact ||
+          s.force <= 0)
+        continue;
+      sum += std::abs(s.slip_state.slip);
+      ++driven;
+    }
+    if (driven > 0) {
+      const double inv = 1 / std::max(1e-6, (double)drive.launch_help);
+      const double mean = sum / driven;
+      double x = mean - inv * .2;
+      x = (x - drive.asr_prev) * 2.0 + x;
+      if (x > 0) {
+        const double pedal = std::max(0.0, 1.0 - x / (inv * .3));
+        drive.throttle = pedal * drive.throttle;
+        drive.clutch = drive.clutch * pedal;
+        drive.asr_active = pedal < .9;
+      }
+      drive.asr_prev = mean - inv * .2;
+    } else {
+      drive.asr_prev = 0;
+    }
+  }
+
   service_brake_ =
       std::lerp(service_brake_, drive.brake, -std::expm1(-timestep / .08));
   const double friction = engine_friction_torque(rpm);
@@ -1005,10 +1075,12 @@ void VehicleDynamics::step_drive() {
     if (slide_trace())
       std::fprintf(stderr,
                    "[drive] eng=%.0f gas=%.2f brk=%.2f erpm=%5.0f shrpm=%5.0f "
-                   "ratio=%5.2f shift=%.2f clutch=%.2f k=%.3f gap=%6.1f\n",
+                   "ratio=%5.2f shift=%.2f clutch=%.2f k=%.3f gap=%6.1f "
+                   "abs=%d asr=%d\n",
                    engage, gas, drive.brake, engine_omega * rpm_per_rad,
                    std::abs(shaft_omega) * rpm_per_rad, ratio, shift_time_,
-                   drive.clutch, coupling_k, gap);
+                   drive.clutch, coupling_k, gap, (int)drive.abs_active,
+                   (int)drive.asr_active);
     if (wh_abs > 1e-9)
       for (size_t i = 0; i < wheels.size(); ++i) {
         const double d = drive.wheels[i].weight;
@@ -1124,41 +1196,8 @@ void VehicleDynamics::step_drive() {
     starter_remaining_ = 0;
   }
 
-  // The recovered ABS (FUN_0044df70), whole-car pedal modulation: with the
-  // pedal pressed, the mean of the braked loaded wheels' accumulated slip
-  // (wheel[0x14C], the same filter state the force law consumes) reduces the
-  // pedal. The strength store is 1/abs (gearbox+0xA28, the car script's `abs`
-  // handler also raises flags bit 0x80), the thresholds are 0.2/0.4 scaled by
-  // it, the rate blend is (x - prev) * 4 + x, the memory is car+0x1F54, and
-  // the original raises flags bit 0x1000000 under service < 0.9 (the ABS
-  // indicator; we have no light, so it is not carried). Replaces our invented
-  // per-wheel |road|/r*0.85 branch. abs <= 0.01 leaves the memory untouched,
-  // no loaded wheels zeroes it -- both as in the listing.
-  if (drive.abs_strength > 0 && drive.brake > .01) {
-    double sum = 0;
-    int loaded = 0;
-    for (size_t i = 0; i < wheels.size(); ++i) {
-      const auto &s = state[i];
-      if (!wheels[i].enabled || drive.wheels[i].brake <= 0 || !s.contact ||
-          s.force <= 0)
-        continue;
-      sum += std::abs(s.slip_state.slip);
-      ++loaded;
-    }
-    if (loaded > 0) {
-      const double inv = 1 / std::max(1e-6, (double)drive.abs_strength);
-      const double mean = sum / loaded;
-      double x = mean - inv * .2;
-      x = (x - drive.abs_prev) * 4.0 + x;
-      if (x > 0) {
-        const double pedal = std::max(0.0, 1.0 - x / (inv * .4));
-        drive.brake = std::min(pedal * drive.brake, drive.brake);
-      }
-      drive.abs_prev = mean - inv * .2;
-    } else {
-      drive.abs_prev = 0;
-    }
-  }
+  // The ABS/ASR pedal modulations run above, before the pedal smoothing --
+  // see FUN_0044df70 / FUN_0044e120 there.
 
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &wheel = wheels[i];

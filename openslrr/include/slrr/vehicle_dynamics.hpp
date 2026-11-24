@@ -176,6 +176,13 @@ struct DriveInput {
   double abs_strength = 0;
   // car+0x1F54: the ABS's memory of the previous frame's slip measure.
   double abs_prev = 0;
+  // car+0x1F50: the ASR's memory of the previous frame's slip measure.
+  double asr_prev = 0;
+  // Flags 0x1000000 / 0x2000000: the ABS / ASR indicators (raised under
+  // service < 0.9). The original's OSD icon reads the flags word through
+  // GameRef.getFlags; the ASR icon lights in the original, the ABS icon does
+  // not get wired there either.
+  bool abs_active = false, asr_active = false;
   double launch_help = 0;
   double differential_lock = 0;
   // Automatic clutch slip revs, used by the host model only (see `faithful`):
