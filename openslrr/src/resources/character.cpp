@@ -583,22 +583,17 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
   // with a matrix the pose did not intend. Name the offender: which vertex,
   // how far, and which bone carries the largest weight for it. Without this
   // the only evidence is a picture, and the bone cannot be picked from a
-  // picture. Reported at most four times per process; the check itself costs
-  // one pass over the vertices and runs only with SLRR_SKIN_TRACE set.
+  // picture. Reported at most twelve times per process; the check costs one
+  // pass over the vertices and runs only with SLRR_SKIN_TRACE set.
   if (std::getenv("SLRR_SKIN_TRACE")) {
     static int reported = 0;
-    if (reported < 4) {
+    if (reported < 12) {
       const size_t vertex_count = character->posed->positions.size() / 3;
-      for (size_t v = 0; v < vertex_count; ++v) {
+      for (size_t v = 0; v < vertex_count && reported < 12; ++v) {
         const float x = character->posed->positions[v * 3];
         const float y = character->posed->positions[v * 3 + 1];
         const float z = character->posed->positions[v * 3 + 2];
         const bool bad = !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z);
-        const float dx = x - bind->positions[v * 3];
-        const float dy = y - bind->positions[v * 3 + 1];
-        const float dz = z - bind->positions[v * 3 + 2];
-        const float moved = dx * dx + dy * dy + dz * dz;
-        if (!bad && moved < 80.f * 80.f) continue;
         int best = 0;
         float best_weight = -1.f;
         for (int k = 0; k < 4; ++k) {
@@ -608,15 +603,53 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
             best = bind->skin_bones[v * 4 + static_cast<size_t>(k)];
           }
         }
-        const char* name = best < static_cast<int>(character->bind->bones.size())
-                               ? character->bind->bones[static_cast<size_t>(best)].name.c_str()
-                               : "(out of range)";
+        if (bad) {
+          const char* name = best < static_cast<int>(character->bind->bones.size())
+                                 ? character->bind->bones[static_cast<size_t>(best)].name.c_str()
+                                 : "(out of range)";
+          std::fprintf(stderr,
+                       "[skin] key=%p type=%d vertex=%zu NONFINITE "
+                       "pos=%.1f %.1f %.1f bone=%d (%s) weight=%.2f\n",
+                       key, type_id, v, x, y, z, best, name, best_weight);
+          ++reported;
+          continue;
+        }
+        // A stretched vertex is one that does not travel with its own bone:
+        // its displacement from bind is far larger than the displacement of
+        // the bone that carries most of its weight. Hands and feet move with
+        // their bones, so the intended IK prints nothing; only a vertex
+        // skinned by a matrix the pose did not intend stands out.
+        const float dx = x - bind->positions[v * 3];
+        const float dy = y - bind->positions[v * 3 + 1];
+        const float dz = z - bind->positions[v * 3 + 2];
+        const float moved = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (moved < 30.f || best >= static_cast<int>(character->bind->bones.size()))
+          continue;
+        const float* w = character->worlds.data() + static_cast<size_t>(best) * 16;
+        const float* ib = character->bind->inverse_bind.data() +
+                          static_cast<size_t>(best) * 16;
+        const float* src = bind->positions.data() + v * 3;
+        const auto xf = [](const float* m, const float* p, float* out) {
+          out[0] = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
+          out[1] = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+          out[2] = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14];
+        };
+        float bone_now[3], bone_bind[3];
+        xf(w, src, bone_now);
+        xf(ib, src, bone_bind);
+        const float with_bone = std::sqrt(
+            (bone_now[0] - bone_bind[0]) * (bone_now[0] - bone_bind[0]) +
+            (bone_now[1] - bone_bind[1]) * (bone_now[1] - bone_bind[1]) +
+            (bone_now[2] - bone_bind[2]) * (bone_now[2] - bone_bind[2]));
+        if (moved < with_bone * 1.5f + 10.f) continue;
+        const char* name = character->bind->bones[static_cast<size_t>(best)].name.c_str();
         std::fprintf(stderr,
-                     "[skin] key=%p type=%d vertex=%zu pos=%.1f %.1f %.1f "
-                     "bone=%d (%s) weight=%.2f\n",
-                     key, type_id, v, x, y, z, best, name, best_weight);
+                     "[skin] key=%p type=%d vertex=%zu moved=%.1f with_bone=%.1f "
+                     "pos=%.1f %.1f %.1f bind=%.1f %.1f %.1f bone=%d (%s) w=%.2f\n",
+                     key, type_id, v, moved, with_bone, x, y, z,
+                     bind->positions[v * 3], bind->positions[v * 3 + 1],
+                     bind->positions[v * 3 + 2], best, name, best_weight);
         ++reported;
-        if (reported >= 4) break;
       }
     }
   }
