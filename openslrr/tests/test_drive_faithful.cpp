@@ -389,7 +389,10 @@ SLRR_TEST(reverse_and_handbrake_at_speed_do_not_strangle_the_engine) {
   car.drive.handbrake = 1;
   car.gear = 7;                       // reverse, while still rolling forward
   double lowest = 1e9;
-  for (double t = 0; t < 4; t += dt) {
+  // Five seconds, not four: the handbrake brakes only the rear axle, so from 78 km/h
+  // the stop is grip-limited at about 4.2 s once the wheel step lost its invented
+  // spin damper (it ended at 1.94 km/h in four seconds with the damper, 2.19 without).
+  for (double t = 0; t < 5; t += dt) {
     car.advance(dt, flat);
     lowest = std::min(lowest, car.engine_omega * 9.5493);
   }
@@ -500,16 +503,22 @@ SLRR_TEST(a_slide_at_speed_does_not_stall_the_driveline) {
   car.body.velocity = yaw.rotate(car.body.velocity);
   car.body.momentum = yaw.rotate(car.body.momentum);
   double lowest = 1e9, slowest_wheel = 1e9;
+  // The minimum alone cannot say whether a wheel is pinned or just passing through:
+  // count the longest run below 1 rad/s, per driven wheel, in frames.
+  int held[2] = {0, 0}, longest[2] = {0, 0};
   for (double t = 0; t < 2; t += dt) {
     car.advance(dt, flat);
     lowest = std::min(lowest, car.engine_omega * 9.5493);
-    for (int i = 2; i < 4; ++i)
+    for (int i = 2; i < 4; ++i) {
       slowest_wheel = std::min(slowest_wheel, std::abs(car.state[i].spin));
+      held[i - 2] = std::abs(car.state[i].spin) < 1 ? held[i - 2] + 1 : 0;
+      longest[i - 2] = std::max(longest[i - 2], held[i - 2]);
+    }
   }
   std::fprintf(stderr,
                "[drive_faithful] slide at %.0f km/h: lowest %.0f rpm, slowest driven "
-               "wheel %.1f rad/s\n",
-               speed * 3.6, lowest, slowest_wheel);
+               "wheel %.1f rad/s, below 1 rad/s for %d/%d frames\n",
+               speed * 3.6, lowest, slowest_wheel, longest[0], longest[1]);
 
   // The same slide on the host path, which applies the clutch's impulse to the wheels
   // instead of exchanging speeds. If the wheel survives there and not here, the missing

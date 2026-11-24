@@ -283,10 +283,14 @@ look at, so the check takes a minute rather than a session.
   exe source. With abs_strength < 1 the brake never fully releases below the
   minimum and the wheel parks at the lerp equilibrium instead of climbing to
   rolling.
+- **Bench, 2026-11-25:** the 105-degree slide fixture does NOT reproduce the hover --
+  its light driven wheel falls below 1 rad/s for 8 frames out of 480 and climbs back.
+  So the 10+ frame hover is a live-only observation, and the bench cannot settle it.
 - **Next step:** recover the original's ABS branch (search 0x0044xxxx/
   0x00454500 callers for the brake path) or, if the original has none for
   these cars, establish what its braked-slide wheel actually does from a live
-  trace before touching ours.
+  trace before touching ours -- that trace needs the original driven by hand, so it
+  is the driver's call when to run it (`diag_car.ps1` reads the live wheel block).
 - **Status:** open.
 
 ### DRV-7 A driven wheel pinned at zero in a long slide (open diff)
@@ -368,6 +372,14 @@ look at, so the check takes a minute rather than a session.
   its cause -- it scales the response, it does not set the moment balance. So the
   next suspect is the balance itself: the exchange's share versus the tyre, and
   what holds a driven wheel at ~0 while its twin runs.
+- **The invented wheel drag is gone (2026-11-25):** the tyre step also carried a
+  `copysign` rolling torque and a `spin*0.15` damper, neither in the listing. The step
+  is now exactly `dw = dt*50*EC*F_long*r*[0x0060E020]`; rolling resistance stays where
+  the listing puts it, as the body force `roll_drag`. Rows: 0-100 4.22 -> 4.15 s, top
+  227.7 -> 228.0 km/h, neutral coast 0.07 -> -0.03 m/s2; the handbrake stop from 78 km/h
+  now takes 4.2 s (rear-axle grip), so that fixture's window grew from 4 to 5 s.
+  Slide fixture: 1709 rpm floor, slowest driven wheel 0.0 rad/s, and the light rear is
+  below 1 rad/s for **8 frames of 480** -- a transient, not the driver's hover.
 - **Driver check 2026-11-15:** in a live slide the revs do NOT fall, and the
   behaviour is close to the original. That retires the engine-drag concern (the
   fixture's 1687 rpm is a pessimistic fixture, not the car), and leaves DRV-7 as

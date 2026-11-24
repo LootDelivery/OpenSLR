@@ -288,27 +288,58 @@ SLRR_TEST(stored_instant_centres_do_not_change_the_intended_solver) {
 // and the product came out lower. Braking distance is the same question with
 // nothing else in it.
 SLRR_TEST(more_grip_stops_shorter) {
-  double distance[2];
+  double distance[2], force[2], locked[2], decel[2];
   for (int i = 0; i < 2; ++i) {
     Car car(true, i ? 1.25 : 1);
+    // The helper's 2000 Nm per wheel is below the front tyre's peak moment (2246 Nm
+    // at grip 1.00), so the fronts never lock and the stop is set by the brake, not by
+    // the compound. A brake that can beat the tyre makes the tyre the limit, which is
+    // what this fixture is about.
+    for (int w = 0; w < 4; ++w) car.dynamics.drive.wheels[w].brake = 8000;
     car.run(1, 0, 0, 0);
     car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -20});
     for (auto& wheel : car.dynamics.state) wheel.spin = 20 / .31;
     const auto from = car.dynamics.body.position;
-    car.run(3, 0, 0, .2);
+    const double entry = car.dynamics.body.velocity.length();
+    double sum_force = 0, frames = 0, lock_frames = 0;
+    for (int step = 0; step < 200; ++step) {
+      car.run(1. / 60, 0, 1, 0);
+      if (car.dynamics.body.velocity.length() < .5) break;
+      double f = 0;
+      int near_zero = 0;
+      for (const auto& wheel : car.dynamics.state) {
+        f += std::abs(wheel.tire_force.longitudinal);
+        if (std::abs(wheel.spin) < .5) ++near_zero;
+      }
+      sum_force += f;
+      if (near_zero >= 3) ++lock_frames;
+      ++frames;
+    }
     const auto to = car.dynamics.body.position;
     distance[i] = std::hypot(to.x - from.x, to.z - from.z);
+    decel[i] = entry * entry / (2 * distance[i]);
+    force[i] = frames > 0 ? sum_force / frames : 0;
+    locked[i] = frames > 0 ? lock_frames / frames : 0;
+    std::fprintf(stderr,
+                 "[grip] %.2fx: %.2f m, decel %.2f m/s2 (%.2f g), mean |Flong| "
+                 "%.0f N over 4 wheels, 3+ wheels near zero in %.0f%% of frames\n",
+                 i ? 1.25 : 1.0, distance[i], decel[i], decel[i] / 9.81, force[i],
+                 locked[i] * 100);
   }
-  std::fprintf(stderr,
-               "[grip] stopping distance %.2f m at grip 1.00 vs %.2f m at 1.25\n",
-               distance[0], distance[1]);
-  // More grip must not use more road. The effect in this fixture is only about half a
-  // percent because the wheels lock within a few frames and the whole stop is spent on
-  // the saturated branch; the force law's own scaling is pinned in
-  // tyre_grip_follows_the_tyre_script. Why the car-level distance barely follows is an
-  // open measurement, recorded in CAR_MODEL_RECOVERY.md 5.3c -- not something to paper
-  // over by loosening this threshold silently.
-  SLRR_REQUIRE(distance[1] < distance[0]);
+  // The old fixture braked with the fourth argument, which is the STEER angle: it
+  // ran a 3 s turn at 0.2 rad with no brake at all, so the stop was made by
+  // cornering scrub and the distance was the length of the arc. That is why the
+  // grip ratio came out at half a percent, and why the entry stayed open as a
+  // mystery: the pedal was never pressed.
+  //
+  // And the pedal alone is not enough either: the helper's 2000 Nm per wheel is
+  // below the front tyre's peak moment (2246 Nm at grip 1.00), so the fronts sit at
+  // the brake's equilibrium and never reach the law's peak -- the stop then barely
+  // follows the compound (measured 16.74 against 15.87 m, 5%). With a brake that
+  // beats the tyre the wheels lock and the tyre is the limit: 14.07 against 11.83 m,
+  // a 16% shorter stop, and 1.45 against 1.72 g of deceleration.
+  SLRR_REQUIRE(distance[1] < distance[0] * .88);
+  SLRR_REQUIRE(decel[1] > decel[0] * 1.15);
 }
 SLRR_TEST(high_grip_braking_remains_finite_with_legacy_centre_fields) {
   // Legacy centre fields remain inert even with extreme values. Hard

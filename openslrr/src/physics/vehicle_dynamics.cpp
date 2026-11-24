@@ -1298,7 +1298,7 @@ void VehicleDynamics::step_drive() {
     // wheel+0xDC) -- measuring 2284/3270/6540 on the MC settled that the cfg-level
     // brake_power must NOT scale them (14.8). The bearing term keeps its old form:
     // wheel[0xFC] is not recovered. wheel[0xF0] stays out as well, because the port
-    // applies rolling resistance through rolling_torque below.
+    // applies its own rolling resistance as the body force roll_drag below.
     apply_brake(brake_step * service_brake_ * drive.brake * cfg.brake);
     // The F12 strength scales the moment, not the pedal: 1 leaves the recovered
     // law untouched and the pedal still reads as the original's button.
@@ -1380,18 +1380,13 @@ void VehicleDynamics::step_drive() {
       body.add_force(forward * (force.longitudinal - roll_drag) +
                          side * force.lateral,
                      s.patch);
-      const double rolling_torque =
-          s.spin == 0 ? 0
-                      : std::copysign(
-                            s.force * wheel.radius * cfg.rolling_resistance,
-                            s.spin);
       // The recovered tyre response (0x4563B6..0x4563CB):
       //   dw = dt*50*EC*F_long*wheel[0x60]*[0x0060E020]
-      // which is what `tyre_step` is; the spin damping and the rolling torque ride
-      // on the same inertia so the wheel does not stop being a wheel.
-      s.spin -=
-          (force.longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
-          tyre_step;
+      // and nothing else. The invented spin damper (spin*0.15) and the wheel-side
+      // rolling torque that used to ride here are gone: the listing's only rolling
+      // term is the body force above, and the wheel is dragged by the tyre, the
+      // brakes and the bearing, never by a damping of its own.
+      s.spin -= force.longitudinal * wheel.radius * tyre_step;
       if (slide_trace() && std::abs(cfg.weight) > 1e-3)
         std::fprintf(stderr,
                      "[slide] w%zu spin=%7.2f road=%7.2f slip=%7.2f lat=%7.2f "
