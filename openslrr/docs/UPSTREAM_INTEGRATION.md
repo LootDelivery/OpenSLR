@@ -28,6 +28,9 @@ was never examined.
   revision this tree was taken from (`17115433`, 2026-11-14) up to `d661d250`,
   with a verdict for each: integrated, needs a look, superseded, deferred, a taste
   call, or rejected.
+- `UPSTREAM_GAP.md` -- the same window as a single registry, one line per merge
+  (112 of them, up to `d13e7102`), each with what it did, whether we need it and
+  if not, why. The audit argues; this one is the list to work from.
 
 ## U1-A. Player constructor (#228)
 
