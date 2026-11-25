@@ -142,6 +142,8 @@ current gaps to SLRR_rev code are in
   `SLRR_GLOW=0` turns the traffic-light glow pass off in the same build (for A/B
   screenshots of one frame), and `SLRR_GLOW_DEBUG=1` prints the head, signal and
   quad counts once a second (`signal_glow.cpp`).
+  `SLRR_SUN_TIME=<seconds>` pins the time of day, which is how a bench gets
+  daylight on a route whose save sits at dusk (`mainloop.cpp`).
 - There is no test target on `main`. `main` had a CTest suite (added in
   `8637eae` with PR #3's `System.arraycopy`, PTX and dyno regressions) until
   `b907b6b` deleted it. A Windows CI workflow only ever existed on the PR #3

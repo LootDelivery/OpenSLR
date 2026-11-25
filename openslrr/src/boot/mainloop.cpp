@@ -383,6 +383,13 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     }
     const float rate = factor.tag == ValueTag::Float ? factor.v.f : 4.f;
     scene_sun_set_time(seconds + clock_elapsed * rate);
+    // `SLRR_SUN_TIME` pins the clock to a second of the day, so a bench can
+    // run in daylight instead of the hour the save happens to hold.
+    static const float sun_time = [] {
+      const char* e = std::getenv("SLRR_SUN_TIME");
+      return e ? std::strtof(e, nullptr) : -1.f;
+    }();
+    if (sun_time >= 0.f) scene_sun_set_time(sun_time);
   }
   {
     perf::Scope scope(perf::Zone::Scripts);
