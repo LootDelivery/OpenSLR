@@ -42,6 +42,9 @@ struct TireForces {
 // being converted to force through a velocity-proportional cap.
 struct TireSlipState {
   double slip = 0, angle = 0;
+  // The values the last call actually evaluated the law at (geometric or
+  // blended). Diagnostic only: nothing reads them back.
+  double last_slip = 0, last_angle = 0;
 };
 
 // The normalised slip and slip angle the force law is evaluated at, as

@@ -2578,7 +2578,7 @@ void update_steering_help(Record &rec, bool controls) {
       return static_cast<unsigned long>(n >= 1 && n <= 1000 ? n : 20);
     }();
     static unsigned long ticks = 0;
-    if (++ticks % every == 0)
+    if (++ticks % every == 0) {
       std::fprintf(stderr,
                    "[steer] v=%.1f req=%.3f axis=%.3f tgt=%.3f a=%.2f sp=%.2f "
                    "ld=%.2f mu=%.2f use=%.2f "
@@ -2605,6 +2605,33 @@ void update_steering_help(Record &rec, bool controls) {
                    rec.dynamics.drive.wheels[2].steer * 57.29578,
                    rec.dynamics.drive.wheels[3].steer * 57.29578, body.omega().y,
                    body.position.y, body.velocity.y);
+      // Per-wheel probe for the tyre comparison: the force the model actually
+      // put on the car against what the recovered law gives for the same
+      // load, road speed and lateral speed. A gap is a pipeline fault, not a
+      // law question; equality means the tyre delivers what 0x0043BA80 says.
+      for (size_t i = 0; i < 4 && i < rec.dynamics.drive.wheels.size(); ++i) {
+        const auto &w = rec.dynamics.drive.wheels[i];
+        const auto &s = st(i);
+        if (!s.contact || s.force <= 0) {
+          std::fprintf(stderr, "[tyre] w%zu airborne l=%.0f\n", i, s.force);
+          continue;
+        }
+        const double radius = i < fw.size() ? fw[i].radius : .3;
+        const double road = s.spin * radius - s.slip_speed;
+        const double angle =
+            std::atan2(s.lateral_speed, std::max(1e-6, std::abs(road)));
+        const double law_s = physics::tire_scale(s.force, 1., w.tyre);
+        const auto law = physics::tire_forces(s.force, 1., s.spin * radius,
+                                              road, s.lateral_speed, w.tyre);
+        std::fprintf(stderr,
+                     "[tyre] w%zu l=%.0f road=%.2f lat=%.3f slip=%.4f "
+                     "ang=%.4f s=%.0f F=%.0f/%.0f law=%.0f/%.0f\n",
+                     i, s.force, road, s.lateral_speed,
+                     s.slip_state.last_slip, s.slip_state.last_angle, law_s,
+                     s.tire_force.longitudinal, s.tire_force.lateral,
+                     law.longitudinal, law.lateral);
+      }
+    }
   }
 }
 

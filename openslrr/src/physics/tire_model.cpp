@@ -45,8 +45,11 @@ TireSlipInputs tire_slip_inputs(double wheel_speed, double road_speed,
       speed <= threshold ? 0.0 : (wheel_speed - road_speed) / speed;
   const double geometric_angle =
       speed <= threshold ? 0.0 : std::atan2(lateral_speed, speed);
-  if (weight >= 1.0)
+  if (weight >= 1.0) {
+    state.last_slip = geometric_slip;
+    state.last_angle = geometric_angle;
     return {geometric_slip, geometric_angle};
+  }
 
   // Accumulated solution: the slip that has actually gone unspent over time,
   // not the instantaneous ratio that diverges as the speed falls.
@@ -61,8 +64,9 @@ TireSlipInputs tire_slip_inputs(double wheel_speed, double road_speed,
 
   state.slip = accumulated_slip;
   state.angle = accumulated_angle;
-  return {geometric_slip * weight + (1 - weight) * accumulated_slip,
-          geometric_angle * weight + (1 - weight) * accumulated_angle};
+  state.last_slip = geometric_slip * weight + (1 - weight) * accumulated_slip;
+  state.last_angle = geometric_angle * weight + (1 - weight) * accumulated_angle;
+  return {state.last_slip, state.last_angle};
 }
 
 TireTuning &tire_tuning() {
