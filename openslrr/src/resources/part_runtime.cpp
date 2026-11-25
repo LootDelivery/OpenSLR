@@ -2464,7 +2464,7 @@ void update_steering_help(Record &rec, bool controls) {
   // acceleration of the turn in hundredths of a g -- the grip the car is using,
   // which is the quantity the exe's blend is built from (`car+0x2128` is a
   // weighted mean of sign(slip angle) * lateral grip over the loaded wheels).
-  double weight = 0, angle = 0;
+  double weight = 0, angle = 0, load_sum = 0, cap_lat = 0, used_lat = 0;
   for (size_t i = 0; i < rec.dynamics.state.size(); ++i) {
     const auto &s = rec.dynamics.state[i];
     if (!s.contact || s.force <= 0 || i >= rec.dynamics.drive.wheels.size())
@@ -2474,6 +2474,11 @@ void update_steering_help(Record &rec, bool controls) {
     const double w = std::clamp(s.force / reference, 0., 1.);
     if (w <= 0.) continue;
     const double slip_angle = s.slip_state.angle;
+    load_sum += s.force;
+    cap_lat += physics::tire_friction_limits(
+                   s.force, 1., rec.dynamics.drive.wheels[i].tyre)
+                   .lateral;
+    used_lat += std::abs(s.tire_force.lateral);
     // |angle| > pi/2 zeroes the term (0x44ED2C); otherwise the +-clamp.
     weight += w;
     angle += (std::abs(slip_angle) <= 1.5707963
@@ -2481,6 +2486,7 @@ void update_steering_help(Record &rec, bool controls) {
                                static_cast<double>(cfg[4]))
                   : 0.) * w;
   }
+  const double mass = std::max(1., rec.dynamics.body.mass);
   const double lateral_g =
       std::abs(forward_speed) * std::abs(body.omega().y) / 9.81 * 100.;
 
@@ -2488,8 +2494,8 @@ void update_steering_help(Record &rec, bool controls) {
   //
   //  * as speed in m/s, it is the sharpness control -- the `min` fraction is all
   //    the lock left at full help, so a powerful rear-drive car stops answering
-  //    1:1 at 150 km/h. This is the term the driver asked for ("=0 A:>@>AB8
-  //    <0H8=0 >G5=L @57:0O"), and it is open loop, so it cannot oscillate.
+  //    1:1 at 150 km/h. This is the term the driver asked for ("the car is
+  //    still sharp at speed"), and it is open loop, so it cannot oscillate.
   //  * as grip in hundredths of a g, it decides when a slide gets caught.
   //
   // They are combined with max(): the sharpness cut at speed, and the catch only
@@ -2530,20 +2536,34 @@ void update_steering_help(Record &rec, bool controls) {
     axis *= std::min(1.f, std::abs(before) * .5f / std::max(1e-6f, std::abs(axis)));
   }
   rec.steering_input = axis;
+  // Height of the centre of gravity over the contact patch, and the lateral
+  // acceleration at which the car tips over (track / 2h). A tyre whose mu
+  // exceeds that threshold rolls the car before it can slide: the Baiern
+  // measures mu 1.66 against a 1.04 g threshold, which is why a sticky
+  // compound puts it on its roof.
+  const auto &fw = rec.dynamics.wheels;
+  const double cg_height =
+      body.center.y - (fw[0].center.y - fw[0].radius);
+  const double track = std::abs(double(fw[0].center.x) - double(fw[1].center.x));
+  const double roll_threshold = track / (2. * std::max(.05, cg_height));
   if (std::getenv("SLRR_STEER_TRACE")) {
     static unsigned long ticks = 0;
     if (++ticks % 20 == 0)
       std::fprintf(stderr,
                    "[steer] v=%.1f req=%.3f axis=%.3f tgt=%.3f a=%.2f sp=%.2f "
+                   "ld=%.2f mu=%.2f use=%.2f "
                    "slide=%.3f slip=%.3f lat_g=%.2f help=%.3f cfg=%.2f %.2f %.2f %.2f %.2f "
-                   "%.2f\n",
+                   "%.2f h=%.2f tr=%.2f thr=%.2f\n",
                    forward_speed * 3.6, static_cast<double>(steer),
                    static_cast<double>(axis), static_cast<double>(target), blend,
-                   blend_speed,
+                   blend_speed, load_sum / (mass * 9.81),
+                   load_sum > 0 ? cap_lat / load_sum : 0.,
+                   cap_lat > 0 ? used_lat / cap_lat : 0.,
                    slide, slip_angle, lateral_g, static_cast<double>(help),
                    static_cast<double>(cfg[0]), static_cast<double>(cfg[1]),
                    static_cast<double>(cfg[2]), static_cast<double>(cfg[3]),
-                   static_cast<double>(cfg[4]), static_cast<double>(cfg[5]));
+                   static_cast<double>(cfg[4]), static_cast<double>(cfg[5]), cg_height,
+                   track, roll_threshold);
   }
 }
 

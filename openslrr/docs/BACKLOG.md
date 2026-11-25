@@ -654,6 +654,42 @@ look at, so the check takes a minute rather than a session.
   (`rea/live_read.ps1`) with `gearbox+0xA20`, `car+0x12BC..+0x12D0`, `+0x2128`
   and `+0x1F58` sampled while driving.
 
+#### 2026-11-25 -- why it feels like bald tyres and why it rolls over
+
+The driver's next report: "В оригинале машина намного лучше держит дорогу, даже
+если её жопу носит. А здесь я как будто на лысой резине, какую бы резину я не
+взял. При этом если я беру резину с хорошим зацепом и мягким компаундом, машина
+на заносе переворачивается, потому что боковым она цепляется за асфальт." Two
+measurements on the bench (ValoCity, Baiern `0x6`, `SLRR_STEER_TRACE=1`) explain
+both halves without touching the assistance:
+
+* **Grip is not missing -- it is excessive and shapeless.** The trace's new `mu`
+  field (peak lateral force per unit load, `tire_friction_limits`) reads 1.62-1.68
+  at every speed, with the load sum (`ld`) holding the car's weight (0.98-1.02).
+  1.66 is above a racing slick. The curve itself, from the recovered law with the
+  slots `Wheel.java` ships (`C8 = -1`), still rises at 45 degrees of slip:
+  1 deg 0.28 mu, 4 deg 0.91, 8 deg 1.25, 20 deg 1.47, 45 deg 1.54. There is no
+  falloff after the peak, so the tyre never gives the driver a warning band and a
+  big slide is punished with *more* grip than the entry had.
+* **The chassis tips at 1.00 g.** The same trace prints the centre of gravity over
+  the contact patch (`h`) and the track (`tr`): 0.71 m and 1.42 m, so the rollover
+  threshold `tr / 2h` is 1.00 g. A tyre that holds 1.66 mu therefore lays the car
+  on its roof long before it can slide -- "боковым она цепляется за асфальт" is
+  literally what the numbers say. Soft, wide, sticky compounds make it worse
+  because they raise `mu`, not because anything in the assistance misbehaves.
+
+`h` comes from `assembly_mass_center`, i.e. from the parts' authored masses, so it
+is as faithful as the part data; the *ratio* `mu / (tr/2h)` is what decides whether
+a car slides or trips. The open question is the retail game's own roll: the port
+lets the chassis roll as a free rigid body on four springs, and no anti-roll is
+configured for stock cars (`solve_anti_roll` is a host approximation and stays at
+zero). A live read of a cornering car in the retail game (roll angle and `h`) is
+what would settle whether the original limits that roll.
+
+Trace fields, in order: `v req axis tgt a sp ld mu use slide slip lat_g help cfg`
+-- `a` and `sp` are the two blends (grip, speed), `ld` the load sum over
+`mass*g`, `mu` the peak lateral per unit load, `use` the share of it in use, and
+`h tr thr` the tip geometry above.
 ### DRV-2 Bench drive has no route
 - **Symptom:** `--bench-drive` holds full throttle straight; the car crashes
   into a tree minutes into the run, so long runs are not reproducible.
