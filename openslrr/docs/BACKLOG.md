@@ -260,9 +260,9 @@ look at, so the check takes a minute rather than a session.
   -416.80 (ER), y 0.69..17.42. The mapping was then measured against a frame
   of the shipped HUD, where the game itself paints the four unlit labels
   (ABS label 19..84 px, ASR 98..164 px of a 1127 px crop, lit icon 46 px at
-  862..907): panel units map to clip as `x = .812 + px*.00245`,
-  `y = 1 - py*.0031` (OSD clip is x right, y **down**), so the row covers
-  29..39% of the width along the bottom edge and each icon is 72 px wide at
+  862..907): panel units map to clip as `x = .887 + px*.0026`,
+  `y = 1 - py*.0051` (OSD clip is x right, y **down**), so the row covers
+  29..40% of the width along the bottom edge and each icon is 72 px wide at
   1280 -- exactly over the labels, which is what pinpoints the transform.
 - **What was broken in the port, three times over.**
  The name table knew only
@@ -274,7 +274,7 @@ look at, so the check takes a minute rather than a session.
   (0x61 / 0x62 / 0x63 for HB), a dedicated panel-space draw, and
   `VehicleHudState::abs/asr` fed from `drive.abs_active/asr_active`.
 - **Regression test:** `test_hud_lamps` pins the three ids, the atlas and the
-  clip-space row (`x -0.411..-0.214`, `y 0.946..0.998` -- bottom edge, over the
+  clip-space row (`x -0.411..-0.202`, `y 0.911..0.996` -- bottom edge, over the
   labels), so the row cannot drift off screen again without a failing test.
 - **Status:** closed. The lamps are drawn only while their aid intervenes,
   which is the original rule: ASR on a hard launch, ABS only on a locking

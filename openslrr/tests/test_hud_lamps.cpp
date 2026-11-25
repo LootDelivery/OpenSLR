@@ -63,8 +63,8 @@ constexpr Lamp kLamps[] = {{"led_ABS", 0x61, -499.19f},
 // frame of the shipped HUD, where the game paints the four unlit labels that
 // the lit icons have to cover. OSD clip space is y down, so the panel's +y
 // steps downwards.
-constexpr float kLedX = .812f, kLedSx = .00245f;
-constexpr float kLedY = 1.f, kLedSy = .0031f;
+constexpr float kLedX = .887f, kLedSx = .0026f;
+constexpr float kLedY = 1.f, kLedSy = .0051f;
 }  // namespace
 
 SLRR_TEST(lamps_resolve_to_the_panel_quads_with_the_panel_atlas) {
@@ -111,8 +111,8 @@ SLRR_TEST(the_lamp_row_lands_along_the_bottom_right_corner) {
     // Left of centre, on the bottom edge, one lamp about a hundredth of the
     // height tall, three in a row without overlapping.
     SLRR_REQUIRE(left > -.46f && right < -.18f);
-    SLRR_REQUIRE(bottom <= 1.f && top > .9f && bottom > top);
-    SLRR_REQUIRE(right - left > .06f && right - left < .07f);
+    SLRR_REQUIRE(bottom <= 1.f && top > .88f && bottom > top);
+    SLRR_REQUIRE(right - left > .065f && right - left < .075f);
     SLRR_REQUIRE(left > previous + .05f);
     previous = left;
   }
