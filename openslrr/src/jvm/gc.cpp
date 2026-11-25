@@ -39,6 +39,16 @@ void Jvm::gc_safe_point() {
       Object* object = gc_finalize_queue_.front();
       gc_finalize_queue_.erase(gc_finalize_queue_.begin());
       ++done;
+      // The root above should make this impossible; a pointer that is no longer
+      // heap memory is skipped rather than called, and says so once, because a
+      // silent skip would hide the very thing that used to be a crash.
+      if (!gc_managed_.count(object)) {
+        static int stale = 0;
+        if (++stale <= 8)
+          std::fprintf(stderr, "[gc-finalize] skipped a queued object that is "
+                       "no longer heap memory (%d)\n", stale);
+        continue;
+      }
       // The object is unreachable: had it become reachable again this would
       // need a new mark. Let the next sweep collect it.
       object->gc_marked = false;
@@ -123,6 +133,12 @@ int Jvm::collect_garbage() {
     for (const auto& o : heap_) if (o->gc_disabled) mark(o.get());
     for (const auto& provider : gc_roots_) provider(mark);
     for (const auto& frame : gc_frames_) frame.second(mark);
+    // A finalizer queued by an earlier collection has not run yet: the flag that
+    // kept it alive belonged to that cycle only. Without this the next mark
+    // clears it, the sweep destroys the object, and the queue later calls
+    // finalize on freed memory -- which is how a script finalizer turned into an
+    // unhandled exception while a city was loading.
+    for (Object* queued : gc_finalize_queue_) mark(queued);
   };
   auto trace = [&] {
     for (size_t cursor = 0; cursor < work.size(); ++cursor) {

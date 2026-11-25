@@ -37,10 +37,29 @@ Move fixed items to the bottom with the fixing commit.
   say the faulting code is reached through Java calls, not through a transition
   hook -- which fits a use-after-GC or a stale object rather than a dangling
   scene pointer.
-- **Next:** drive until it crashes, then read the report. The scene unload hook
-  comes after a signed report, not before: a new clean-up would hide the cause
-  it is supposed to fix.
-- **Status:** open; the crash log is in place, the cause is not.
+- **The signed report (2026-11-25 16:06, entering ValoCity):** the stack names
+  the fault, and it is the used-after-GC shape this entry predicted:
+  `tree_eval.cpp:460` -- `recv->fields.find()` inside a `getfield` -- with
+  `Jvm::gc_safe_point` (`gc.cpp:45`) below it, which is the line that runs
+  `finalize` on a queued dead object. The fault address is `0x18`, a
+  `unordered_map` read from a null base: the receiver was not object memory any
+  more.
+- **The window:** a finalizer queued by one collection was kept alive only for
+  that cycle (`o->gc_marked = true`, `gc.cpp:176`). The queue is drained with a
+  1.5 ms budget, so 96 finalizers took three safe points to run, and a
+  collection in between clears every mark and sweeps the queued object and its
+  field graph, leaving the queue holding freed pointers. Measured during a city
+  load: one collection queued 96, the next safe points ran 58 then 38 -- a
+  single frame in between is enough.
+- **Fix:** queued objects are marked as roots at every collection
+  (`mark_roots`, `gc.cpp`), so their graphs outlive the queue, and a queued
+  pointer that is no longer heap memory is skipped with a `[gc-finalize]` line
+  instead of being called. A 180 s city drive runs without the line ever
+  printing.
+- **Next:** a long live session across map changes, then read the report. The
+  scene unload hook still comes after a signed report, not before.
+- **Status:** cause identified and closed (`gc.cpp`); awaiting a session long
+  enough to call it gone.
 
 ### STB-2 Second spawn lands at a different point
 - **Symptom:** in ValoCity the player can spawn twice in a row; the first
