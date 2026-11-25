@@ -2625,9 +2625,10 @@ void update_steering_help(Record &rec, bool controls) {
                                               road, s.lateral_speed, w.tyre);
         std::fprintf(stderr,
                      "[tyre] w%zu l=%.0f road=%.2f lat=%.3f slip=%.4f "
-                     "ang=%.4f s=%.0f F=%.0f/%.0f law=%.0f/%.0f\n",
+                     "ang=%.4f tan=%.4f s=%.0f F=%.0f/%.0f law=%.0f/%.0f\n",
                      i, s.force, road, s.lateral_speed,
-                     s.slip_state.last_slip, s.slip_state.last_angle, law_s,
+                     s.slip_state.last_slip, s.slip_state.last_angle, s.tangent,
+                     law_s,
                      s.tire_force.longitudinal, s.tire_force.lateral,
                      law.longitudinal, law.lateral);
       }

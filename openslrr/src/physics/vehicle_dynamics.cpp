@@ -656,6 +656,16 @@ Vec3 wheel_forward(const RigidBody &body, double steer, Quaternion hub = {}) {
       (hub * wheel_steering(steer)).rotate({0, 0, -1}));
 }
 
+// The wheel's own axle (its local +X) in world axes. The recovered grip scale
+// measures the contact normal in the WHEEL's frame -- 0x00454500 takes
+// sqrt(s[1]^2 + s[2]^2) with component 0 on the axle -- so the axle has to come
+// from the hub's own orientation, not from a vector built out of the normal:
+// anything derived from the normal is perpendicular to it by construction and
+// measures exactly zero.
+Vec3 wheel_axle(const RigidBody &body, double steer, Quaternion hub = {}) {
+  return body.orientation.rotate((hub * wheel_steering(steer)).rotate({1, 0, 0}));
+}
+
 // Recovered engine friction (3.5), in the units it is written in: the rpm terms
 // are rev/min, the viscous bound is rad/s, and the original takes the two as a
 // MINIMUM -- a bound on how much friction the engine can make, not a sum. Read as
@@ -1337,15 +1347,19 @@ void VehicleDynamics::step_drive() {
           body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0}))
               .dot(s.normal);
       // The recovered force scale is sqrt of the contact normal's components other
-      // than the first one (0x00454500: sqrt(s[1]^2 + s[2]^2)). Which axis is first
-      // follows from the same listing: component 2 of the patch velocity is the
-      // rolling axis, so the frame is (X = axle, Y = up, Z = rolling) and the
-      // excluded component is the axle. The normal is unit, so everything but its
-      // axle part is the cosine of the camber -- 1.0 for a square wheel, which is
-      // where the recovered grip lands; a leaning wheel loses it down to 0.5.
-      // This replaces the invented alignment = max(.25, tilt*tilt) load multiplier.
-      const double along_axle = s.normal.dot(side);
+      // than the first one (0x00454500: sqrt(s[1]^2 + s[2]^2)) in the WHEEL's
+      // frame, component 0 being the axle -- the force vector is assembled as
+      // (lateral, 0, rolling), so axis 1 is up and the excluded axis is the axle.
+      // The normal is unit, so everything but its axle part is the cosine of the
+      // camber: 1.0 for a square wheel, falling to 0.5 when the wheel lies on its
+      // side. This replaces the invented alignment = max(.25, tilt*tilt) factor.
+      //
+      // Measured 2026-11-29: this used to read normal.dot(side) with
+      // side = forward x normal, which is perpendicular to the normal by
+      // construction -- along_axle was identically 0 and the camber term was dead.
+      const double along_axle = s.normal.dot(wheel_axle(body, cfg.steer, s.hub_rotation));
       const double tangent = std::sqrt(std::max(0.0, 1.0 - along_axle * along_axle));
+      s.tangent = tangent;
       TireForces force{};
       if (wheel.metal_contact) {
         // Hub/disc contact is sliding metal, never the removed tyre's curve.
@@ -1586,10 +1600,10 @@ void VehicleDynamics::step(const Terrain &terrain) {
       // law's own peak with s = (tangent+1)*0.5*load_curve, where tangent is
       // the contact normal's tangential magnitude against the axle -- the same
       // quantity the moving path computes.
-      Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
-      heading = (heading - s.normal * heading.dot(s.normal)).normalized();
-      const Vec3 side = heading.cross(s.normal);
-      const double along_axle = s.normal.dot(side);
+      // The same axle the moving path uses: the normal's component along the
+      // wheel's own axle, not a vector derived from the normal itself.
+      const double along_axle =
+          s.normal.dot(wheel_axle(body, cfg.steer, s.hub_rotation));
       const double tangent =
           std::sqrt(std::max(0.0, 1.0 - along_axle * along_axle));
       caps = tire_friction_limits(s.force, tangent, cfg.tyre);

@@ -122,9 +122,11 @@ TireForces tire_friction_limits(double load, double tangent,
                                 const TireParameters& tire) {
   if (!(load > 0.0)) return {};
   // The recovered cap is the force law's own peak. F = m*s*sin(C0*t2) with
-  // m = s*C1 + C2 and s = (tangent+1)*0.5*load_curve(load); sin(C0*t2) reaches
-  // 1 once C0 > 1 (the stock sliction 1.4), so the peak is exactly m*s -- the
-  // classic D. The (tangent+1)/2 floor is the recovered scale (0x00454500:
+  // m = s*C1 + C2 and s = (tangent+1)*0.5*load_curve(load). t2 = atan(...) never
+  // leaves (-pi/2, pi/2), so sin(C0*t2) tops out at sin(C0*pi/2) when C0 < 1 and at
+  // 1 when C0 >= 1 (its argument passes the peak). The stock slick sliction 0.814 is
+  // below 1, so the peak is 0.957*m*s, not m*s. The (tangent+1)/2 floor is the
+  // recovered scale (0x00454500:
   // even with the contact normal along the axle the scale is half the load),
   // so tangent=0 holds at half, not zero -- the invented
   // alignment = max(.25, tilt*tilt) load multiplier and the 0.85/1.42
@@ -133,7 +135,10 @@ TireForces tire_friction_limits(double load, double tangent,
   // no longitudinal force for any input, which is what the script field means.
   const double s =
       (std::clamp(tangent, 0.0, 1.0) + 1.0) * 0.5 * load_curve(load, tire);
-  const double d = (s * tire.pacejka[1] + tire.friction) * s;
+  const double c0 = tire.sliction;
+  const double peak_share =
+      c0 >= 1.0 ? 1.0 : std::sin(c0 * std::numbers::pi / 2);
+  const double d = (s * tire.pacejka[1] + tire.friction) * s * peak_share;
   return {tire.longitudinal_grip > 0.0 ? d : 0.0, d};
 }
 
@@ -184,9 +189,10 @@ TireForces tire_forces(double load, double tangent, double wheel_speed,
   if (!(load > 0.0))
     return {0.0, 0.0};
   // Stateless view: the geometric inputs, with the 1.5 m/s reference floor only to keep
-  // the ratio finite. Production uses the stateful overload.
-  const double reference =
-      std::max({1.5, std::abs(road_speed), std::abs(wheel_speed)});
+  // the ratio finite. Production uses the stateful overload, which divides the slip by
+  // the ROAD speed alone (0x0043BBD0); the wheel speed in the denominator here made the
+  // two disagree on a spinning wheel (measured: 7248 against 7799 N on one rear tyre).
+  const double reference = std::max(1.5, std::abs(road_speed));
   const double slip = (wheel_speed - road_speed) / reference;
   const double angle =
       std::atan2(lateral_speed, std::max(1.5, std::abs(road_speed)));

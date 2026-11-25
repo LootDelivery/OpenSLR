@@ -148,6 +148,9 @@ struct WheelState {
   Quaternion hub_rotation;
   double spin = 0, rotation = 0;
   double slip_speed = 0, lateral_speed = 0;
+  // Diagnostic mirror of the grip scale's tangent for this wheel: the contact
+  // normal measured against the wheel's own axle (1.0 square to the road).
+  double tangent = 1;
   // Unspent slip carried between steps for the low-speed path (0x0043BBD0).
   TireSlipState slip_state;
   // Unspent brake/bearing budget at the patch (N s), not free tyre grip.
