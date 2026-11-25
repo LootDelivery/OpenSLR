@@ -2405,19 +2405,17 @@ void update_steering_legacy(Record &rec, bool controls) {
   rec.steering_correction = std::lerp(rec.steering_correction, correction, alpha);
 }
 
-// The original stores a steering-help value and never reads it: the script's
-// `steerhelp <f>` command (`Vehicle.setSteeringHelp`) and the car's own
-// `steerhelp 1.0 ...` resource line both land in `gearbox+0xA20`, and the only
-// two references to that field in the whole executable are the writer and its
-// `> 0` guard (FUN_00458c00). The one real yaw aid in the exe, ESP
-// (FUN_0044e2d0, brakes `wheel+0xFC` and cuts the throttle by `esp_power_level`),
-// is gated on `0.001 < gearbox+0xA30` = `1/esp`, and no shipped car sets `esp`,
-// so it never runs either. The input axis therefore passes straight to the
-// wheels with no speed cap; only the time a digital key needs to reach lock is
-// bounded, which costs nothing in a steady turn. `SLRR_STEER_LEGACY=1` restores
-// the invented 0.85 g curvature cap and slide alignment for A/B runs.
+// `steerhelp <f>` (`Vehicle.setSteeringHelp`) and the car's own
+// `steerhelp 1.0 ...` resource line both write `gearbox+0xA20` (`FUN_00458c00`).
+// That field IS read: 0x44EDEE/0x44EE72/0x44EEB3 divide the wheel's lateral slip
+// by it, in a block that Ghidra's listing shows as orphaned code (no function),
+// so this law still has to be recovered by hand. Until it is ported, the old
+// behaviour stays the default; `SLRR_STEER_FAITHFUL=1` runs the unrestricted
+// axis, which is what the driver reports as "assistant off".
 void update_steering(Record &rec, bool controls) {
-  static const bool legacy = std::getenv("SLRR_STEER_LEGACY") != nullptr;
+  // Temporary: the faithful path is behind a switch until the recovered law below
+  // is ported; the old behaviour stays the default so the car is drivable.
+  static const bool legacy = std::getenv("SLRR_STEER_FAITHFUL") == nullptr;
   if (legacy) {
     update_steering_legacy(rec, controls);
     return;
