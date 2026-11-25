@@ -304,6 +304,23 @@ look at, so the check takes a minute rather than a session.
   the shader.
 - **Status:** geometry fixed; alpha case open (low priority).
 
+### GFX-4 The garage keeps the street's reflection map
+- **Symptom (driver, 2026-11-26):** "В гараже карта отражений остаётся от улицы,
+  не переключается" -- in the garage the paint and chrome still reflect the city
+  around the car instead of the shop.
+- **Suspect:** the environment capture is bound once and never rebuilt on a scene
+  change. The irradiance probe became default-on in `90ff7dcf` (reflection
+  roughness default `ded44b59`), so the probe that is bound comes from the last
+  scene that produced one (the street); if the garage scene ships no probe of its
+  own, nothing re-captures and the old one stays bound.
+- **Check:** log the bound probe / cubemap handle and its position at the
+  transition into the garage and back out, and compare it with the garage scene's
+  own environment data -- the retail garage sets its own sky and lighting, so a
+  probe exists to be used.
+- **Status:** open, no measurement yet. Related: DRV-4 (the sky shifts on part
+  attach/detach in the garage) may share the cause -- both read as "the garage
+  keeps the street's environment".
+
 ## Driving
 
 ### DRV-10 The OSD indicator icons (abs/asr): closed -- lamps drawn in panel space (2026-11-25)
