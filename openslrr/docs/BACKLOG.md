@@ -692,6 +692,19 @@ look at, so the check takes a minute rather than a session.
   help cfg du...` every 20 frames; `SLRR_CONFIG_DUMP=1` prints the Config keys
   the physics reads. `--bench-drive` without `--bench-route` accepts
   `SLRR_BENCH_STEER=<axis>` with `SLRR_BENCH_STEER_FROM=<s>` / `_TO=<s>`.
+- **Keyboard is already an integrator, measured (`SLRR_INPUT_DUMP=1`, manual bench,
+  `PostMessage` WM_KEYDOWN scan `0xCD` held 0.4 s):** `raw1` reads -1.000 while
+  `val1` climbs to -0.253 and the car gets -0.169 afterwards. Axis 1 carries the
+  retail `VirtualAxisSmoothProperties` (center 0.1, 0.0025/0.0035/0.0025 per ms,
+  power 1.75) and its bindings are the two arrow keys (`dev 0 phys 203/205`), so
+  a key press is a rate, not a step -- roughly 0.4 s to full lock. The jerk the
+  driver reports is therefore downstream of the ramp: the assist turns that
+  half-pressed axis into more than full lock (see the doubling above), so the
+  gradation the ramp creates is destroyed by the gain, not by a missing filter.
+- **Switches (input):** `SLRR_INPUT_DUMP=1` prints the registered smoothing, the
+  axis-1 bindings and a per-30-frame `raw1/val1/steer` line;
+  `SLRR_INPUT_NOFOCUS=1` keeps posted key messages alive while the window is not
+  foreground (the poll otherwise clears every key, `host_input.cpp:167`).
 - **Tests:** vehicle_dynamics 39/39, physics_recovery 8/8, missing_support 16/16.
 - **Status:** awaiting driver verification. Still unidentified: which of the two
   hull velocity vectors `dir` comes from (the one read is at

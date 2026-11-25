@@ -8,6 +8,8 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <unordered_map>
 
@@ -26,6 +28,8 @@ namespace slrr {
 namespace {
 
 HostInput g_input;
+// Stable empty stand-in for the smoothing dump when no controller is bound.
+const std::unordered_map<int, InputSmoothing> empty_smoothing;
 std::array<bool, 256> keys{};
 std::array<bool, 256> pressed{}, frame_pressed{};
 std::deque<int> key_presses;
@@ -165,7 +169,9 @@ void host_input_poll_keys() {
   auto& in = g_input;
   DWORD owner = 0;
   GetWindowThreadProcessId(GetForegroundWindow(), &owner);
-  const bool focused = owner == GetCurrentProcessId();
+  // SLRR_INPUT_NOFOCUS keeps posted key messages alive for scripted input tests.
+  const bool focused = owner == GetCurrentProcessId() ||
+                       std::getenv("SLRR_INPUT_NOFOCUS") != nullptr;
   if (!focused) host_input_clear_keys();
   frame_pressed = pressed;
   pressed.fill(false);
@@ -296,6 +302,39 @@ void host_input_update_controller(Object* controller, float dt) {
       const float alpha = 1.f - std::pow(
           1.f - std::clamp(factor, 0.f, 1.f), dt * 1000.f * smooth.speed);
       smooth.value = std::lerp(smooth.value, target, alpha);
+    }
+  }
+  // Diagnosis: what the retail ControlSet registered and what the driving axis
+  // actually reads while a key is held.
+  if (std::getenv("SLRR_INPUT_DUMP")) {
+    static int frames = 0;
+    ++frames;
+    const auto &state = controller && controller->input
+                            ? controller->input->smoothing
+                            : empty_smoothing;
+    if (frames == 90) {
+      std::fprintf(stderr, "[input] smoothing axes=%zu\n", state.size());
+      for (const auto &kv : state)
+        std::fprintf(stderr,
+                     "[input] axis=%d v=%.4f center=%.4f to_center=%.4f opp=%.4f same=%.4f pow=%.2f speed=%.4f\n",
+                     kv.first, kv.second.value, kv.second.center,
+                     kv.second.toward_center, kv.second.opposite, kv.second.same,
+                     kv.second.power, kv.second.speed);
+      if (controller && controller->input)
+        for (const auto &b : controller->input->bindings)
+          if (b.axis == 1)
+            std::fprintf(stderr,
+                         "[input] binding axis=1 dev=%d phys=%d from=%.2f to=%.2f low=%.2f high=%.2f\n",
+                         b.device, b.physical, b.from, b.to, b.low, b.high);
+    }
+    if (frames > 90 && frames % 30 == 0) {
+      const auto it = state.find(1);
+      std::fprintf(stderr,
+                   "[input] f=%d ctrl=%p smooth=%zu has1=%d raw1=%.3f val1=%.3f steer=%.3f\n",
+                   frames, static_cast<const void *>(controller), state.size(),
+                   it != state.end() ? 1 : 0,
+                   controller && controller->input ? mapped_axis(*controller->input, 1) : 0.f,
+                   it != state.end() ? it->second.value : 0.f, g_input.drive_steer);
     }
   }
   auto& in = g_input;

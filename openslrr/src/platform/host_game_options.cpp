@@ -91,7 +91,10 @@ GameOptions read_options(Jvm& jvm) {
     // actually carries instead of assuming the class default.
     for (const char *key : {"steerhelp_turn", "esp_steer_scale",
                              "esp_angvel_scale", "esp_yaw_allowed",
-                             "player_steeringhelp", "player_converterstall"}) {
+                             "player_steeringhelp", "player_converterstall",
+                             "steerSpeed", "steeringPower",
+                             "deadZoneSteering", "throttleSpeed",
+                             "throttlePower", "deadZoneAccelerate"}) {
       const auto value = jvm.get_static("java.util.Config", key);
       std::fprintf(stderr, "[config] %-22s tag=%d float=%.6g int=%d\n", key,
                    static_cast<int>(value.tag),
