@@ -804,10 +804,16 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       // x moves right, y moves up, both in clip units (.01 is half a percent of
       // the width), and scale multiplies the icon. Zero means "as measured".
       const slrr::HudLampTuning& tune = hud_lamp_tuning();
-      const float dx = (override.defined ? item.position[0] : 0.f) + tune.dx;
-      const float dy = (override.defined ? item.position[1] : 0.f) + tune.dy;
+      const slrr::HudLampOffset& own = slot == HudSlot::Abs ? tune.abs
+                                     : slot == HudSlot::Asr ? tune.asr
+                                                            : tune.handbrake;
+      const float dx =
+          (override.defined ? item.position[0] : 0.f) + tune.all.dx + own.dx;
+      const float dy =
+          (override.defined ? item.position[1] : 0.f) + tune.all.dy + own.dy;
       const float scale = (override.defined && item.position[2] > 0.f
-                               ? item.position[2] : 1.f) * tune.scale;
+                               ? item.position[2] : 1.f) *
+                          tune.all.scale * own.scale;
       draw(*mesh, 0, count, indices.data(), indices.size(), kLedX + dx,
            kLedY - dy, kLedSx * scale, -kLedSy * scale, 0, 0, 0, 0xffffffffu);
       continue;

@@ -123,26 +123,48 @@ SLRR_TEST(the_lamp_row_lands_along_the_bottom_right_corner) {
 SLRR_TEST(hud_lamps_file_moves_the_row_without_a_rebuild) {
   // The shipped line is the measured row, so it must change nothing.
   const slrr::HudLampTuning base = slrr::parse_hud_lamp_tuning("0 0 1\n");
-  SLRR_REQUIRE(base.dx == 0.f && base.dy == 0.f && base.scale == 1.f);
+  SLRR_REQUIRE(base.all.dx == 0.f && base.all.dy == 0.f &&
+               base.all.scale == 1.f);
+  SLRR_REQUIRE(base.abs.dx == 0.f && base.asr.dx == 0.f &&
+               base.handbrake.dx == 0.f);
 
   // Comments are skipped, and the three numbers are dx, dy, scale.
   const slrr::HudLampTuning moved = slrr::parse_hud_lamp_tuning(
       "# move the row\r\n0.02 -0.03 1.25\r\n# trailing\r\n");
-  std::printf("[lamps] tuning dx %.3f dy %.3f scale %.3f\n", double(moved.dx),
-              double(moved.dy), double(moved.scale));
-  SLRR_REQUIRE(moved.dx > .019f && moved.dx < .021f);
-  SLRR_REQUIRE(moved.dy < -.029f && moved.dy > -.031f);
-  SLRR_REQUIRE(moved.scale > 1.24f && moved.scale < 1.26f);
+  std::printf("[lamps] base dx %.3f dy %.3f scale %.3f\n",
+              double(moved.all.dx), double(moved.all.dy),
+              double(moved.all.scale));
+  SLRR_REQUIRE(moved.all.dx > .019f && moved.all.dx < .021f);
+  SLRR_REQUIRE(moved.all.dy < -.029f && moved.all.dy > -.031f);
+  SLRR_REQUIRE(moved.all.scale > 1.24f && moved.all.scale < 1.26f);
+
+  // A named line moves one lamp on top of the base line, so all three can be
+  // placed separately when the row does not line up with the labels.
+  const slrr::HudLampTuning named = slrr::parse_hud_lamp_tuning(
+      "0.01 0 1\nabs -0.004 0 1\nasr 0.006 0.002 1.1\n"
+      "hbrake 0.01 -0.003 0.95\n");
+  std::printf("[lamps] named base %.3f abs %.3f asr %.3f/%.3f hb %.3f/%.3f\n",
+              double(named.all.dx), double(named.abs.dx),
+              double(named.asr.dx), double(named.asr.dy),
+              double(named.handbrake.dx), double(named.handbrake.scale));
+  SLRR_REQUIRE(named.all.dx > .009f && named.all.dx < .011f);
+  SLRR_REQUIRE(named.abs.dx < -.003f && named.abs.dx > -.005f);
+  SLRR_REQUIRE(named.asr.dx > .005f && named.asr.dy > .001f);
+  SLRR_REQUIRE(named.asr.scale > 1.09f && named.asr.scale < 1.11f);
+  SLRR_REQUIRE(named.handbrake.dx > .009f && named.handbrake.scale < .96f);
+  SLRR_REQUIRE(named.abs.dy == 0.f && named.abs.scale == 1.f);
 
   // A half written or nonsense file keeps the measured row: a zero scale would
   // collapse the icons and two numbers are not a placement.
   const slrr::HudLampTuning partial =
-      slrr::parse_hud_lamp_tuning("0.02 0.03\n");
-  SLRR_REQUIRE(partial.dx == 0.f && partial.dy == 0.f && partial.scale == 1.f);
+      slrr::parse_hud_lamp_tuning("0.02 0.03\nabs 0.01\n");
+  SLRR_REQUIRE(partial.all.dx == 0.f && partial.all.dy == 0.f);
+  SLRR_REQUIRE(partial.abs.dx == 0.f);
   const slrr::HudLampTuning zero =
       slrr::parse_hud_lamp_tuning("0.02 0.03 0\n");
-  SLRR_REQUIRE(zero.dx > .019f && zero.dy > .029f && zero.scale == 1.f);
-  SLRR_REQUIRE(!slrr::load_hud_lamp_tuning("Z:/no/such/dir").dx);
+  SLRR_REQUIRE(zero.all.dx > .019f && zero.all.dy > .029f &&
+               zero.all.scale == 1.f);
+  SLRR_REQUIRE(!slrr::load_hud_lamp_tuning("Z:/no/such/dir").all.dx);
 }
 
 SLRR_TEST(the_shipped_lamp_file_is_the_one_the_game_reads) {
@@ -150,9 +172,13 @@ SLRR_TEST(the_shipped_lamp_file_is_the_one_the_game_reads) {
   SLRR_REQUIRE(!root.empty());
   const slrr::HudLampTuning shipped = slrr::load_hud_lamp_tuning(root);
   std::printf("[lamps] root %s -> dx %.3f dy %.3f scale %.3f\n", root.c_str(),
-              double(shipped.dx), double(shipped.dy), double(shipped.scale));
+              double(shipped.all.dx), double(shipped.all.dy),
+              double(shipped.all.scale));
   // The file in the install is the measured row, so it must read as a no-op.
-  SLRR_REQUIRE(shipped.dx == 0.f && shipped.dy == 0.f && shipped.scale == 1.f);
+  SLRR_REQUIRE(shipped.all.dx == 0.f && shipped.all.dy == 0.f &&
+               shipped.all.scale == 1.f);
+  SLRR_REQUIRE(shipped.abs.dx == 0.f && shipped.asr.dx == 0.f &&
+               shipped.handbrake.dx == 0.f);
 }
 
 int main() {
