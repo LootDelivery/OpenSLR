@@ -2426,17 +2426,29 @@ void update_steering_legacy(Record &rec, bool controls) {
 //
 // The gate (`help > 0 && +0x12C0 > 0`) is used as written. Two quantities do
 // not map one-to-one, so they are mapped here and marked as such:
-//  * the measure is the car's speed, so the cfg band 1..30 reads in m/s with
-//    the slider scaling it (`help 0.666` -> full help at 45 m/s). The listing
-//    builds it from a weighted lateral grip; that value is not recoverable to
-//    units without the running game, and a force band of 1..30 N would pin the
-//    blend to 1 in every corner (the first port attempt did exactly that and
-//    held full lock, 0x44ED40).
-//  * `dir` is the body slip angle in radians, extrapolated (2b - b_prev), and
-//    the counter-steer is applied in radians before the axis clamp; the exe
-//    takes `v` off a wheel rigid body, whose frame we do not reproduce.
-// The blend therefore reduces the held lock and adds counter-steer, never more
-// than the axis it was asked for -- the sign the driver reported missing.
+//  * the measure is the lateral acceleration in hundredths of a g, which is
+//    what `car+0x2128` holds (a weighted mean of sign(slip angle) times the
+//    loaded wheels' lateral grip). The cfg band 1..30 then reads 0.01..0.30 g,
+//    the range where a road car goes from pointing straight to holding a
+//    corner, so the blend saturates exactly when the car is loaded up.
+//  * `dir` is the lateral share of the body velocity, sin(slip angle),
+//    extrapolated as `2v - v_prev` and in axis units, not radians: the exe
+//    takes `v` off a wheel rigid body and adds `-dir` to the axis, so a
+//    radian-valued slide pinned the wheel at full counter-lock from 25-40
+//    degrees whatever the driver asked for (measured: as=-0.48, axis=0.45 at
+//    a 71 degree slide after the fix).
+//
+// What the blend does NOT do is scale the driver's own input. The recovered
+// `(1 - (1-min)*a)` factor was applied to the held axis, and the port tried it
+// two ways: with `a` from the speed band (a quarter of the lock gone at
+// 67 km/h, 35% at 100 km/h, and the car answered late -- the viscous feel of
+// 2026-11-25) and with `a` from the grip band (a held 0.15 ask at 67 km/h
+// delivered axis 0.077, which caps cornering near 0.5 g: the car understeered
+// and stopped taking lock mid-corner). Neither survives measurement, and the
+// E690 listing only ever writes `axis` from the two terms above, so the input
+// reaches the wheels 1:1 and the aid is the counter-steer term alone: at most
+// half a lock, applied over the axis it was asked for, and the slider is what
+// changes how much of it arrives.
 void update_steering_help(Record &rec, bool controls) {
   auto &in = host_input();
   const float steer = controls ? std::clamp(in.drive_steer, -1.f, 1.f) : 0.f;
@@ -2494,22 +2506,22 @@ void update_steering_help(Record &rec, bool controls) {
                                static_cast<double>(cfg[4]))
                   : 0.) * w;
   }
+  const auto &st = [&](size_t i) -> const physics::WheelState & {
+    static const physics::WheelState none{};
+    return i < rec.dynamics.state.size() ? rec.dynamics.state[i] : none;
+  };
   const double mass = std::max(1., rec.dynamics.body.mass);
   const double lateral_g =
       std::abs(forward_speed) * std::abs(body.omega().y) / 9.81 * 100.;
 
-  // Two readings of the one cfg band (`lo 1` .. `hi 30`, scaled by the slider):
-  //
-  //  * as speed in m/s, it is the sharpness control -- the `min` fraction is all
-  //    the lock left at full help, so a powerful rear-drive car stops answering
-  //    1:1 at 150 km/h. This is the term the driver asked for ("the car is
-  //    still sharp at speed"), and it is open loop, so it cannot oscillate.
-  //  * as grip in hundredths of a g, it decides when a slide gets caught.
-  //
-  // They are combined with max(): the sharpness cut at speed, and the catch only
-  // when the car is actually using its grip. Feeding either measure alone into a
-  // 1:1 counter-steer fights the driver -- measured: a held 0.30 axis at 60 km/h
-  // with a speed-only blend drove the axis to -0.11 and the slide to -0.42 rad.
+  // One reading of the cfg band (`lo 1` .. `hi 30`), scaled by the slider, and
+  // the only one the recovered law has: the car's lateral acceleration in
+  // hundredths of a g (`car+0x2128`), so the band runs from one percent of a g
+  // to a third of one. An earlier build also read the same numbers as speed in
+  // m/s and cut the lock with it; measured at 67 km/h that took a quarter of the
+  // driver's input before it reached the wheels (axis 0.11 against a 0.117 ask)
+  // and 35% at 100 km/h, which is the viscous, must-correct-it-all-the-time feel
+  // the driver reported. Nothing in the exe scales the lock with speed.
   auto band = [&](double measure) {
     double value = 0;
     if (help > 0 && cfg[1] > 0) {
@@ -2520,15 +2532,16 @@ void update_steering_help(Record &rec, bool controls) {
     }
     return value;
   };
-  const double blend_speed = band(speed);
-  const double blend_grip = band(lateral_g);
-  const double blend = std::max(blend_speed, blend_grip);
-  const double min_lock = std::clamp(static_cast<double>(cfg[2]), 0., 1.);
+  const double blend = band(lateral_g);
   const double slip_angle = weight > 0 ? angle / weight : 0.;
-  // Everything below is in axis units, i.e. a fraction of the lock: the driver's
-  // own input, with the speed band cutting it towards `min`.
-  const double requested =
-      static_cast<double>(steer) * (1. - (1. - min_lock) * blend_speed);
+  // The driver's input reaches the wheels 1:1. Nothing in the exe scales the
+  // lock with speed, and the recovered `(1 - (1 - min) * a)` cap on the axis
+  // cannot be applied here: with the player's `min 0.5` and an `a` that reaches 1
+  // at a third of a g, a held corner settles near 0.5 g -- measured: a 0.15 ask
+  // at 67 km/h delivered axis 0.077 and the car could not corner any harder.
+  // So the aid is the counter-steer term alone (below), and it is the slider that
+  // changes it: help down, the car turns in and spins; help up, it fades.
+  const double requested = static_cast<double>(steer);
   // Counter-steer: at most half a lock at 90 degrees of slide, blended twice over
   // so a firm corner adds almost nothing and proportional in between. The 0.5 is
   // a mapping, not a recovery (the exe's `dir` units do not survive the port) and
@@ -2559,16 +2572,22 @@ void update_steering_help(Record &rec, bool controls) {
   const double track = std::abs(double(fw[0].center.x) - double(fw[1].center.x));
   const double roll_threshold = track / (2. * std::max(.05, cg_height));
   if (std::getenv("SLRR_STEER_TRACE")) {
+    static const unsigned long every = [] {
+      const char *e = std::getenv("SLRR_STEER_TRACE_EVERY");
+      const double n = e ? std::atof(e) : 0.;
+      return static_cast<unsigned long>(n >= 1 && n <= 1000 ? n : 20);
+    }();
     static unsigned long ticks = 0;
-    if (++ticks % 20 == 0)
+    if (++ticks % every == 0)
       std::fprintf(stderr,
                    "[steer] v=%.1f req=%.3f axis=%.3f tgt=%.3f a=%.2f sp=%.2f "
                    "ld=%.2f mu=%.2f use=%.2f "
                    "slide=%.3f slip=%.3f as=%.2f du=%.2f lat_g=%.2f help=%.3f cfg=%.2f %.2f %.2f %.2f %.2f "
-                   "%.2f h=%.2f tr=%.2f thr=%.2f bx=%.2f bz=%.2f iy=%.0f\n",
+                   "%.2f h=%.2f tr=%.2f thr=%.2f wb=%.2f iy=%.0f "
+                   "l=%.0f/%.0f/%.0f/%.0f st=%.1f/%.1f/%.1f/%.1f wy=%.3f y=%.3f vy=%.2f\n",
                    forward_speed * 3.6, static_cast<double>(steer),
                    static_cast<double>(axis), static_cast<double>(target), blend,
-                   blend_speed, load_sum / (mass * 9.81),
+                   speed, load_sum / (mass * 9.81),
                    load_sum > 0 ? cap_lat / load_sum : 0.,
                    cap_lat > 0 ? used_lat / cap_lat : 0.,
                    slide, slip_angle, assist, dir, lateral_g,
@@ -2576,8 +2595,16 @@ void update_steering_help(Record &rec, bool controls) {
                    static_cast<double>(cfg[0]), static_cast<double>(cfg[1]),
                    static_cast<double>(cfg[2]), static_cast<double>(cfg[3]),
                    static_cast<double>(cfg[4]), static_cast<double>(cfg[5]), cg_height,
-                   track, roll_threshold, body.maximum.x - body.minimum.x,
-                   body.maximum.z - body.minimum.z, body.inertia().y);
+                   track, roll_threshold,
+                   std::abs(double(fw[2].center.z) - double(fw[0].center.z)),
+                   body.inertia().y, st(0).force, st(1).force, st(2).force,
+                   st(3).force,
+
+                   rec.dynamics.drive.wheels[0].steer * 57.29578,
+                   rec.dynamics.drive.wheels[1].steer * 57.29578,
+                   rec.dynamics.drive.wheels[2].steer * 57.29578,
+                   rec.dynamics.drive.wheels[3].steer * 57.29578, body.omega().y,
+                   body.position.y, body.velocity.y);
   }
 }
 

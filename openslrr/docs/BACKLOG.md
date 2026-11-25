@@ -734,6 +734,58 @@ tyre law or the recovered constants; both were mappings the port had guessed.
 and 9). It is not these changes: the same three fail on the same peaks (7049 rpm)
 with the old inertia restored, and they date from `adc6e518` (DRV-7, the recovered
 EC). vehicle_dynamics 39/39, drive_faithful 18/18.
+
+#### 2026-11-25 -- "как кисель": the lock was being cut with speed
+
+The driver: "Всё равно машина ощущается вязкой, неуверенной на дороге. Да, по дрифту
+поведение стало лучше, но само ощущение машины... как будто она не держит дорогу, её
+постоянно приходится отлавливать. В оригинале же машина держит дорогу. Даже если ABS
+- 0."
+
+The port was scaling the driver's own steering. The recovered E690 law builds `a`
+from one measure -- the car's lateral acceleration in hundredths of a g
+(`car+0x2128`) -- but an earlier build read the same cfg band (`lo 1`, `hi 30`) a
+second time as *speed in m/s* and cut the lock with it:
+
+    requested = steer * (1 - (1 - min) * a_speed)
+
+At 60 km/h that is 20% of the input gone before it reaches the wheels, at 100 km/h
+35%. The car still answers, just less and later than the wheel says, so the driver
+adds more, the assist then pulls the axis back, and the correction has to be made
+again -- the viscous, always-catching feel. It is also open loop: nothing in the exe
+scales the lock with speed.
+
+Measured at 67 km/h, a held 0.15 ask (trace `axis` against `req`):
+
+| | axis delivered | lat_g |
+| --- | --- | --- |
+| speed cut on | 0.11 of 0.15 (73%) | 0.47 g |
+| speed cut off | 0.143 of 0.15 (95%) | 0.58 g |
+
+The obvious repair -- drive the same cut from the grip blend instead -- was tried
+and rejected: with the player's `min 0.5` and `a` reaching 1 at a third of a g, a
+held 0.15 ask at 67 km/h settles at axis 0.077, and the car then cannot corner past
+~0.5 g at all. The recovered `(1 - (1 - min)*a)` factor multiplies the *held* axis in
+the listing; applied to the request it throttles cornering itself, which is not what
+a car does. So the input now reaches the wheels 1:1 and the aid is the counter-steer
+term alone (at most half a lock, blended by the grip band, scaled by the slider).
+
+On the ground, same bench, 0.15 held from 1.3 s: axis 0.143 against a 0.144 target,
+lat_g 0.70-0.71 g at 58 km/h, wheel loads 0.96-1.12 of the weight, no wheel lifts.
+The counter-steer is unchanged during a slide (the grip blend is already 1 there):
+a 0.5 lock flick at ~50 km/h still shows `as=-0.40` of a lock against a held axis.
+
+**Two measurement traps found on the way, both worth remembering:**
+
+- The trace's `bx bz iy` fields had shifted: `bx` printed the wheelbase (2.74),
+  `bz` the yaw inertia (2632 kg m2) and `iy` stack junk. So the Baiern's yaw
+  inertia after the box fix is 2632, not the 1481 quoted in the section above --
+  that number is the old 0.75-box value (2632 x 0.5625).
+- Above ~64 km/h the bench drive car *takes off*: `l=0/0/...` on one axle, `y`
+  climbing, `vy` negative, `ld` swinging 0.58..1.48 on a straight, no steering.
+  Every load, lat_g or assist number measured at 66-72 km/h on that stretch is
+  airborne and invalid; the cornering numbers above were re-taken below 64 km/h.
+
 ### DRV-2 Bench drive has no route
 - **Symptom:** `--bench-drive` holds full throttle straight; the car crashes
   into a tree minutes into the run, so long runs are not reproducible.
