@@ -258,12 +258,11 @@ look at, so the check takes a minute rather than a session.
   corner of the screen.** `newosd` (0x55) spans x -502..0, y 0..99.2; the LED
   quads are 26x17 px at x -499.19 (ABS) / -471.85 (ASR) / -444.89 (HB) /
   -416.80 (ER), y 0.69..17.42. The mapping was then measured against a frame
-  of the shipped HUD, where the game itself paints the four unlit labels
-  (ABS label 19..84 px, ASR 98..164 px of a 1127 px crop, lit icon 46 px at
-  862..907): panel units map to clip as `x = .887 + px*.0026`,
-  `y = 1 - py*.0051` (OSD clip is x right, y **down**), so the row covers
-  29..40% of the width along the bottom edge and each icon is 72 px wide at
-  1280 -- exactly over the labels, which is what pinpoints the transform.
+  of the shipped HUD, where the game itself paints the four unlit labels. Panel
+  units map to clip as `x = .649 + px*.00209`, `y = .993 - py*.003915` (OSD
+  clip is x right, y **down**), so the row covers 30..39% of the width along
+  the bottom edge, one icon 0.055 wide and 0.065 tall, which is the label's
+  own box -- the labels are what pinpoints the transform.
 - **What was broken in the port, three times over.**
  The name table knew only
   `osd_hbrake` of the four lamps; a `0xFFFFFFFF` id became resource 0, which
@@ -274,22 +273,18 @@ look at, so the check takes a minute rather than a session.
   (0x61 / 0x62 / 0x63 for HB), a dedicated panel-space draw, and
   `VehicleHudState::abs/asr` fed from `drive.abs_active/asr_active`.
 - **Regression test:** `test_hud_lamps` pins the three ids, the atlas and the
-  clip-space row (`x -0.396..-0.228`, `y 0.919..0.997` -- bottom edge, over the
-  labels), so the row cannot drift off screen again without a failing test.
-- **Tuning without a rebuild:** the stock meshes are positioned by the engine, so
-  the cfg ships `osd_abs/asr/hbrake 0xFFFFFFFF 0 0 0` and there is nothing in the
-  car files to nudge. `<game root>/hud_lamps.txt` carries `dx dy scale` instead
-  (clip units: `dx` right, `dy` up, 0.01 is half a percent of the screen;
-  `scale` multiplies the icon). One named line per lamp -- `ABS`, `ASR`,
-  `HBRAKE` -- with `right up size` columns and an optional fourth that squashes
-  the height only, so each icon can be lined up with its own label and with the
-  label's aspect; a lamp without a line keeps the measured spot. Read once at
-  start-up by
-  `slrr::load_hud_lamp_tuning` (`include/slrr/hud_lamp_tuning.hpp`), so the row
-  can be moved by editing one text file and restarting the game.
-  `rebuild_openslrr.bat` at the repo root closes the game, rebuilds
-  `slrr_host` and stops -- the game locks the exe, so a rebuild cannot happen
-  while it runs.
+  clip-space row (`x -0.394..-0.216`, `y 0.925..0.990` -- the bottom edge, over
+  the labels, at the label's aspect), so the row cannot drift off screen again
+  without a failing test.
+- **Final placement is baked into the renderer, not read from a file.** The row
+  was lined up on screen against the game's own labels (the label pitch is a
+  touch wider than the mesh pitch) and those numbers now live in
+  `draw_vehicle_hud` as `kLampX[] = {.649, .652, .659}`, `kLedY = .993`,
+  `kLedSx = .00209`, `kLedSy = .003915` (0.9 of the measured height, the label's
+  aspect): no start-up file, nothing to keep in sync with the install.
+  `osd_abs/asr/hbrake` still honour a non-zero cfg offset if a car ever sets one.
+  `rebuild_openslrr.bat` at the repo root just closes the game (it locks the
+  exe), rebuilds `slrr_host` and waits, so a code change needs one double click.
 - **Status:** closed. The lamps are drawn only while their aid intervenes,
   which is the original rule: ASR on a hard launch, ABS only on a locking
   wheel (stock cars also ship `abs 0`).
