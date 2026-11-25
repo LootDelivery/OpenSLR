@@ -2408,103 +2408,120 @@ void update_steering_legacy(Record &rec, bool controls) {
   rec.steering_correction = std::lerp(rec.steering_correction, correction, alpha);
 }
 
-// The steering help of FUN_0044E690 (retail 606) -- the function Ghidra never
-// defined; it was found by scanning .text for car+0x12BC and gearbox+0xA20.
-// The car's own `steerhelp` line is the whole parameter block:
+// The steering help of FUN_0044E690 (retail 606) -- one function Ghidra never
+// cut out; MakeFunc.java decoded it at 0x0044E690 (0x0E41 bytes). The car's
+// own `steerhelp` line is the whole parameter block:
 //   +0x12BC lo   +0x12C0 hi   +0x12C4 min
 //   +0x12C8 gain_angle       +0x12CC clamp   +0x12D0 gain_dir
-// and gearbox+0xA20 (`steerhelp <f>`, the driving-options slider) scales the
-// measure the blend is built from. In the listing's order:
+// and gearbox+0xA20 is the slider (`steerhelp <f>`), the value the blend is
+// built from. In the listing's order (0x44EE70..0x44EFEB):
 //
-//   a   = clamp((measure*help - lo) / (hi - lo), 0, 1)   0x44ECxx
-//   dir = 2*v - v_prev; car+0x1F58 keeps v               0x44ED06..0x44ED1A
-//   tgt = (angle*gain_angle + (axis - dir)*gain_dir)*a
-//         + (1 - (1-min)*a)*axis                          0x44ED1C..0x44ED40
-//   axis = clamp(tgt, -1, 1)                             0x44ED44..0x44ED5A
-//   axis += (clamped - axis) * min(1, dt*10)             0x44ED5C..0x44ED70
-//   if (axis*old < 0) axis *= min(1, |old|*0.5/|axis|)   0x44ED72..0x44ED94
+//   fwd  = V.col2 of the hull velocity, the forward one           0x44EE56
+//   a    = 1 while |help*fwd| >= hi/help, otherwise
+//          (|help*fwd| - lo) / (hi - lo) -- no clamp in the exe    0x44EE70
+//   slip = atan2(-V.col0, -V.col2), zero beyond +-pi/2,
+//          clamped to +-clamp                                     0x44EEEC
+//   dir  = 2*(V2.up) - prev; car+0x1F58 keeps the previous V2.up   0x44EF49
+//   tgt  = (slip*gain_angle + (axis/lock*steerhelp_turn - dir)*gain_dir)*a
+//          + (1 - (1-min)*a)*axis                                  0x44EF5F
+//   axis = clamp(tgt, -1, 1)                                       0x44EFBD
+//   axis += (clamped - axis) * min(1, dt*10)                       0x44EFB3
+//   if (axis*old < 0) axis *= min(1, |old|*0.5/|axis|)             0x44EFE7
 //
-// The gate (`help > 0 && +0x12C0 > 0`) is used as written. Two quantities do
-// not map one-to-one, so they are mapped here and marked as such:
-//  * the measure is the lateral acceleration in hundredths of a g, which is
-//    what `car+0x2128` holds (a weighted mean of sign(slip angle) times the
-//    loaded wheels' lateral grip). The cfg band 1..30 then reads 0.01..0.30 g,
-//    the range where a road car goes from pointing straight to holding a
-//    corner, so the blend saturates exactly when the car is loaded up.
-//  * `dir` is the lateral share of the body velocity, sin(slip angle),
-//    extrapolated as `2v - v_prev` and in axis units, not radians: the exe
-//    takes `v` off a wheel rigid body and adds `-dir` to the axis, so a
-//    radian-valued slide pinned the wheel at full counter-lock from 25-40
-//    degrees whatever the driver asked for (measured: as=-0.48, axis=0.45 at
-//    a 71 degree slide after the fix).
-//
-// What the blend does NOT do is scale the driver's own input. The recovered
-// `(1 - (1-min)*a)` factor was applied to the held axis, and the port tried it
-// two ways: with `a` from the speed band (a quarter of the lock gone at
-// 67 km/h, 35% at 100 km/h, and the car answered late -- the viscous feel of
-// 2026-11-25) and with `a` from the grip band (a held 0.15 ask at 67 km/h
-// delivered axis 0.077, which caps cornering near 0.5 g: the car understeered
-// and stopped taking lock mid-corner). Neither survives measurement, and the
-// E690 listing only ever writes `axis` from the two terms above, so the input
-// reaches the wheels 1:1 and the aid is the counter-steer term alone: at most
-// half a lock, applied over the axis it was asked for, and the slider is what
-// changes how much of it arrives.
+// Three readings this replaced, all of them wrong:
+//  * the blend is the forward SPEED times the slider against the cfg band, not
+//    the lateral acceleration. The listing squares `help*fwd` and compares it
+//    with `lo*lo` and with `(hi/help)^2`; no grip quantity enters the law. The
+//    previous build called the band hundredths of a g and declared the exe's
+//    `(1-(1-min)*a)` cap unusable. For the Baiern (lo 1, hi 30, help 0.666)
+//    the blend is 0.09 at 20 km/h, 0.41 at 67, 0.61 at 100 and 1 from 162.
+//  * `dir` is the car's own vertical velocity, extrapolated one frame, not the
+//    slide angle: it is the dot product of the hull's world velocity with the
+//    body's up axis. On tarmac it stays within a few cm/s, so the request
+//    dominates and it only bites on bumps and jumps.
+//  * the aid ADDS to the driver's axis instead of replacing it. With the
+//    player's min 0.5, gain_dir 1 and the shipped steerhelp_turn 1, a 0.65 lock
+//    makes the target axis*(1 + 1.038*a) - a*dir: at full blend the car turns
+//    about twice what was asked, not less. The old absolute term
+//    (`a^2 * sin(slide) * 0.5`, always subtracted, no reference to the request)
+//    took 30-70% of the driver's input at speed -- the viscous report -- and
+//    steered against a counter-steer instead of with it.
+// `part+0xA0C` is the lock in radians (0x00454500 steers the wheels with
+// `axis * part[0xA0C]`), so `axis/lock` is the lock-normalised request.
 void update_steering_help(Record &rec, bool controls) {
   auto &in = host_input();
   const float steer = controls ? std::clamp(in.drive_steer, -1.f, 1.f) : 0.f;
   rec.steering_request = steer;
   rec.steering_correction = 0.f;
   const auto &cfg = rec.config->steerhelp;
-  // The original has one field here (gearbox+0xA20): the car's `steerhelp` line
+  // One field in the original (gearbox+0xA20): the car's `steerhelp` line
   // writes it at part load and the player's `steerhelp <f>` command (the
   // options slider) writes it when the car is handed over, so the slider wins.
   // In this port the cfg load runs after the options are applied, which would
   // make the slider inert, so the options value is read directly -- it is the
   // same number the script's setDefaultSteeringHelp passes.
   const float help = std::clamp(host_game_options().driving.steering_help, 0.f, 1.f);
+  // 0x0044EF6B: the aid's own gain, the Config key `steerhelp_turn`.
+  const float turn = std::max(0.f, host_game_options().driving.steerhelp_turn);
   const float max_steer = std::max(.01f, rec.config->max_steer);
   const auto &body = rec.dynamics.body;
   const auto local = body.orientation.inverse_rotate(body.velocity);
   const double forward_speed = -local.z;
   const double speed = std::max(0., forward_speed);
+
+  // 0x44EE70..0x44EEEC: the blend, from the forward speed alone.
+  double blend = 0;
+  if (help > 0 && cfg[1] > 0) {
+    const double measure = help * std::abs(forward_speed);
+    const double split = double(cfg[1]) / help;
+    if (split * split <= measure * measure)
+      blend = 1.;
+    else if (measure > cfg[0])
+      blend = std::clamp((measure - cfg[0]) /
+                             std::max(1e-6, double(cfg[1] - cfg[0])),
+                         0., 1.);
+  }
+
+  // 0x44EEEC: the body slip angle. The exe zeroes it beyond a right angle and
+  // clamps it to `clamp`; `slide` is the same atan2 as above by construction.
   const double slide =
       forward_speed > .5 ? -std::atan2(local.x, forward_speed) : 0.;
-  // `dir` is a fraction of the lock, not an angle. The recovered form adds it to
-  // the axis (`tgt = (axis - dir)*gain_dir + ...`) and a player car's `gain_dir`
-  // is 1.0, so a radian-valued slide pins the wheel at full counter-lock: with
-  // the old radian measure a 40-degree slide already clamped the axis to -1
-  // regardless of what the driver asked for. sin(slide) is the lateral share of
-  // the body velocity, which is what a wheel body's projection measures, and it
-  // saturates at 90 degrees -- the exe's own memory is `2*v - v_prev`.
-  const double slip_unit = std::sin(std::clamp(slide, -1.5707963, 1.5707963));
-  const double dir = std::clamp(2 * slip_unit - rec.steering_dir_prev, -1., 1.);
-  rec.steering_dir_prev = static_cast<float>(slip_unit);
+  const double slip_angle =
+      std::abs(slide) <= 1.5707963
+          ? std::clamp(slide, -static_cast<double>(cfg[4]),
+                       static_cast<double>(cfg[4]))
+          : 0.;
 
-  // Mean tyre slip angle over the loaded wheels (`angle` term), and the lateral
-  // acceleration of the turn in hundredths of a g -- the grip the car is using,
-  // which is the quantity the exe's blend is built from (`car+0x2128` is a
-  // weighted mean of sign(slip angle) * lateral grip over the loaded wheels).
-  double weight = 0, angle = 0, load_sum = 0, cap_lat = 0, used_lat = 0;
+  // 0x44EF49..0x44EF81: the body's vertical velocity, and the one-frame
+  // extrapolation the exe keeps in car+0x1F58.
+  const double vertical = body.velocity.dot(
+      body.orientation.rotate(physics::Vec3{0., 1., 0.}));
+  const double dir = 2. * vertical - rec.steering_dir_prev;
+  rec.steering_dir_prev = static_cast<float>(vertical);
+
+  // 0x44EF5F..0x44EFEB: the aid's target, clamped, slewed at 10/s, and a
+  // reversal carrying half the travel.
+  const double reference = steer / max_steer * turn;
+  const double requested = static_cast<double>(steer);
+  const double target_value =
+      (slip_angle * cfg[3] + (reference - dir) * cfg[5]) * blend +
+      (1. - (1. - cfg[2]) * blend) * requested;
+  const float target =
+      static_cast<float>(std::clamp(target_value, -1., 1.));
+  const double assist = target_value - requested;
+
+  // Diagnostics the trace below prints: load, and the lateral share of it the
+  // tyres are using.
+  double load_sum = 0, cap_lat = 0, used_lat = 0;
   for (size_t i = 0; i < rec.dynamics.state.size(); ++i) {
     const auto &s = rec.dynamics.state[i];
     if (!s.contact || s.force <= 0 || i >= rec.dynamics.drive.wheels.size())
       continue;
-    const double reference =
-        std::max(1., rec.dynamics.drive.wheels[i].tyre.maximum_load);
-    const double w = std::clamp(s.force / reference, 0., 1.);
-    if (w <= 0.) continue;
-    const double slip_angle = s.slip_state.angle;
     load_sum += s.force;
     cap_lat += physics::tire_friction_limits(
                    s.force, 1., rec.dynamics.drive.wheels[i].tyre)
                    .lateral;
     used_lat += std::abs(s.tire_force.lateral);
-    // |angle| > pi/2 zeroes the term (0x44ED2C); otherwise the +-clamp.
-    weight += w;
-    angle += (std::abs(slip_angle) <= 1.5707963
-                  ? std::clamp(slip_angle, -static_cast<double>(cfg[4]),
-                               static_cast<double>(cfg[4]))
-                  : 0.) * w;
   }
   const auto &st = [&](size_t i) -> const physics::WheelState & {
     static const physics::WheelState none{};
@@ -2513,45 +2530,6 @@ void update_steering_help(Record &rec, bool controls) {
   const double mass = std::max(1., rec.dynamics.body.mass);
   const double lateral_g =
       std::abs(forward_speed) * std::abs(body.omega().y) / 9.81 * 100.;
-
-  // One reading of the cfg band (`lo 1` .. `hi 30`), scaled by the slider, and
-  // the only one the recovered law has: the car's lateral acceleration in
-  // hundredths of a g (`car+0x2128`), so the band runs from one percent of a g
-  // to a third of one. An earlier build also read the same numbers as speed in
-  // m/s and cut the lock with it; measured at 67 km/h that took a quarter of the
-  // driver's input before it reached the wheels (axis 0.11 against a 0.117 ask)
-  // and 35% at 100 km/h, which is the viscous, must-correct-it-all-the-time feel
-  // the driver reported. Nothing in the exe scales the lock with speed.
-  auto band = [&](double measure) {
-    double value = 0;
-    if (help > 0 && cfg[1] > 0) {
-      const double lo = cfg[0], hi = cfg[1];
-      measure *= help;
-      if (measure > lo)
-        value = std::clamp((measure - lo) / std::max(1e-6, hi - lo), 0., 1.);
-    }
-    return value;
-  };
-  const double blend = band(lateral_g);
-  const double slip_angle = weight > 0 ? angle / weight : 0.;
-  // The driver's input reaches the wheels 1:1. Nothing in the exe scales the
-  // lock with speed, and the recovered `(1 - (1 - min) * a)` cap on the axis
-  // cannot be applied here: with the player's `min 0.5` and an `a` that reaches 1
-  // at a third of a g, a held corner settles near 0.5 g -- measured: a 0.15 ask
-  // at 67 km/h delivered axis 0.077 and the car could not corner any harder.
-  // So the aid is the counter-steer term alone (below), and it is the slider that
-  // changes it: help down, the car turns in and spins; help up, it fades.
-  const double requested = static_cast<double>(steer);
-  // Counter-steer: at most half a lock at 90 degrees of slide, blended twice over
-  // so a firm corner adds almost nothing and proportional in between. The 0.5 is
-  // a mapping, not a recovery (the exe's `dir` units do not survive the port) and
-  // `gain_dir` scales it. The `angle` term is the mean wheel slip angle over the
-  // lock, so both terms share the axis's units.
-  const double angle_unit = std::clamp(slip_angle / max_steer, -1., 1.);
-  const double assist =
-      blend * angle_unit * cfg[3] + blend * blend * dir * cfg[5] * 0.5;
-  const float target =
-      static_cast<float>(std::clamp(requested + assist, -1., 1.));
 
   const float before = rec.steering_input;
   const float step = static_cast<float>(10. / physics::VehicleDynamics::update_frequency);

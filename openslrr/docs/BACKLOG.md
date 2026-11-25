@@ -414,7 +414,8 @@ look at, so the check takes a minute rather than a session.
 - **Status:** closed. The lamps are drawn only while their aid intervenes,
   which is the original rule: ASR on a hard launch, ABS only on a locking
   wheel (stock cars also ship `abs 0`).
-### DRV-11 ASR: closed -- law, clutch press and launch behaviour verified (2026-11-25)
+
+### DRV-11 ASR: closed -- law, clutch press and launch behaviour verified (2026-11-25)
 - **The law and its writer are fully recovered:** `FUN_0044e120` reads the mean
   `|wheel+0x14C|` over enabled, driven, contacting wheels (`piVar5[0x27]` is
   wheel+0xCC, the drive share), computes `x0 = mean - 0.2*inv`, `x = (x0 -
@@ -633,69 +634,69 @@ look at, so the check takes a minute rather than a session.
   readers at `0x44EDEE` (`d9 81 20 0a 00 00` = `fld [ecx+0xa20]`), `0x44EE72`
   (`d9 80 20 0a 00 00`) and `0x44EEB3` (`d8 b7 20 0a 00 00` = `fdiv
   [edi+0xa20]`). Absence from the decomp set is not evidence of absence.
-- **The law (`FUN_0044E690`):** the car's own `steerhelp` line is the whole
-  parameter block, not one number. The file parser's table entry `steerhelp`
-  (`0x0060FDE8` -> handler `0x004460A0`, format `%f %f %f %f %f %f`) fills
-  `car+0x12BC lo`, `+0x12C0 hi`, `+0x12C4 min`, `+0x12C8 gain_angle`,
-  `+0x12CC clamp`, `+0x12D0 gain_dir`; the script command
-  `steerhelp <f>` (the options slider, `Config.player_steeringhelp`) writes
-  `gearbox+0xA20` and *scales the measure the blend is built from*. The gate is
-  `help > 0 && car+0x12C0 > 0` (both zero in the EXE's constructor, so a car
-  without the line gets no help), and then:
-  `a = clamp((measure*help - lo)/(hi - lo), 0, 1)`;
-  `dir = 2*v - v_prev` (memory in `car+0x1F58`);
-  `tgt = (angle*gain_angle + (axis - dir)*gain_dir)*a + (1-(1-min)*a)*axis`;
+- **The law (`FUN_0044E690`, re-read on 2026-11-29 from the disassembly):** the
+  car's own `steerhelp` line is the whole parameter block, not one number. The
+  file parser's table entry `steerhelp` (`0x0060FDE8` -> handler `0x004460A0`,
+  format `%f %f %f %f %f %f`) fills `car+0x12BC lo`, `+0x12C0 hi`, `+0x12C4 min`,
+  `+0x12C8 gain_angle`, `+0x12CC clamp`, `+0x12D0 gain_dir`; the script command
+  `steerhelp <f>` (the options slider, `Config.player_steeringhelp` = 0.666 in
+  this install) writes `gearbox+0xA20` and weights the measure the blend is built
+  from. The gate is `help > 0 && car+0x12C0 > 0` (both zero in the EXE's
+  constructor, so a car without the line gets no help). In listing order
+  (`0x44EE70..0x44EFEB`):
+  `fwd = hull velocity . body z` (forward, the one the blend uses);
+  `a = 1 while |help*fwd| >= hi/help, else (|help*fwd| - lo)/(hi - lo)`;
+  `slip = atan2(-v.col0, -v.col2)` -- the body slip angle -- zero beyond
+  `+-pi/2`, clamped to `+-clamp`;
+  `dir = 2*(v2 . body up) - v_prev` (memory in `car+0x1F58`);
+  `tgt = X*a + (1-(1-min)*a)*axis`, where
+  `X = slip*gain_angle + (axis/lock*steerhelp_turn - dir)*gain_dir`;
   `axis = clamp(tgt,-1,1)`, then `axis += (axis - before)*min(1, dt*10)`, and a
-  sign reversal keeps only `|before|*0.5` of the travel. The `angle` term is the
-  mean wheel slip angle (zero outside +-pi/2, clamped to `+-clamp`); `dir` comes
-  from a wheel rigid body's velocity.
-- **Port (`update_steering_help`, default):** the gate, the band shape, `min`,
-  the gains, the clamps, the 10 Hz rate and the reversal rule are used as
-  written, with the six numbers read from the car's cfg (`part_config` parses the
-  line; AI cars ship five numbers, which leaves `gain_dir` at zero). The slider
-  is read every frame, so it stays live even though the cfg line loads after the
-  options.
-- **Two mapping choices, both marked in the code** (the listing's own units do not
-  survive the port):
-  * the cfg band `lo 1` .. `hi 30` is read twice and the two blends are combined
-    with `max()`. As speed in m/s it is the sharpness control -- the `min`
-    fraction is all the lock left at full help -- and as grip (hundredths of a g,
-    from `v * yaw rate`) it decides when a slide is caught. The speed term is open
-    loop, so it cannot oscillate; the counter-steer stays slide-triggered, which
-    is what stopped it fighting the driver.
-  * `dir` is the body slip angle in radians, extrapolated (`2b - b_prev`). The
-    counter-steer is half the slide, multiplied by the blend twice over, so a firm
-    corner adds almost nothing while a real slide is caught.
-- **What the driver feels** (cfg `1 30 0.5`, slider 100%): a quarter of the lock is
-  gone by 30 km/h, a third by 60, half by 120; at 150 km/h the front wheels answer
-  with 50% of the input, and the counter-steer catches a slide on top of that.
-  With the slider at 0.666 (the fallback) the full cut arrives at 162 km/h and
-  150 km/h keeps 54%.
-- **Two dead ends, kept here so they are not repeated:**
-  * measuring the blend by *speed alone* and feeding the counter-steer 1:1: a held
-    0.30 axis at 60 km/h drove the axis to -0.11 and the slide to -0.42 rad, i.e.
-    the assist steered the car into a spin;
-  * mapping the counter-steer 1:1 to the slip angle (`beta/max_steer`) made the
-    loop oscillate -- the axis swung to full lock one way and back, the driver's
-    "болтает из стороны в сторону, чем выше скорость - тем больше шансов на
-    разворот".
-- **Effect:** a straight line gets no help (blend 0 at rest), a firm corner blends
-  the grip term in, and a real slide gets counter-steer. The knob for feel is the
-  car's `steerhelp` line: the third number (`min`) is the lock left at full help
-  (lower = calmer, 1.0 disables the cut), the second (`hi`) how much speed or grip
-  is needed for full help, the sixth (`gain_dir`) scales the counter-steer.
+  sign reversal keeps only `|before|*0.5` of the travel.
+  `steerhelp_turn` is a Config key (`0x0063C7A8`, read through `0x004261F0`),
+  **1.0** in the shipped install (`SLRR_CONFIG_DUMP=1` prints it).
+- **Three readings of the same listing that were wrong, corrected here:**
+  * the blend is the forward **speed**, not the lateral acceleration: the
+    listing squares `help*fwd` and compares it with `lo*lo` and `(hi/help)^2`,
+    and no grip quantity enters. The earlier claim that "nothing in the exe
+    scales the lock with speed" was wrong, and so was reading the band as
+    hundredths of a g. For the Baiern (lo 1, hi 30, help 0.666) the blend is
+    0.09 at 20 km/h, 0.41 at 67, 0.61 at 100 and 1 from 162 km/h.
+  * `dir` is the body's **vertical velocity** (a hull velocity projected on the
+    body's up axis), not the slide angle; on tarmac it stays within a few cm/s.
+  * the aid **adds** to the driver's axis: with `min 0.5`, `gain_dir 1` and
+    `steerhelp_turn 1` a 0.65 lock makes the target `axis*(1 + 1.038*a) - a*dir`,
+    i.e. at full blend the car turns about twice what was asked -- the opposite
+    of the `(1-(1-min)*a)` cut this file described for a week.
+- **Port (`update_steering_help`, default):** every term as written above, the
+  six numbers from the car's cfg (`part_config` parses the line; AI cars ship
+  five, leaving `gain_dir` at zero), the slider and `steerhelp_turn` from Config,
+  the 10 Hz slew and the reversal rule unchanged. The previous absolute
+  counter-steer (`a^2 * sin(slide) * 0.5`, added to the request with no reference
+  to it) is gone: it took 30-70% of the driver's input at speed and steered
+  against a counter-steer.
+- **Measured (ValoCity, Baiern `0x6`, 55 km/h, `SLRR_BENCH_STEER=0.3`):** the
+  axis reaches 0.44 of a 0.30 request (`a` 0.32 -> `1 + 1.038*0.32` = 1.33) where
+  the old build delivered 0.10; the front wheels sit at 17 deg with the throttle
+  pinned at 79% of the lateral grip. With no input on the straight (a downgrade)
+  `dir` = -0.22 m/s and the aid holds +0.06 of lock, 2.2 deg of front steer at
+  55 km/h -- the term is real and terrain-driven, and the driver should test a
+  downhill with the wheel centred.
+- **ESP is inert in this build:** `esp_steer_scale`, `esp_angvel_scale` and
+  `esp_yaw_allowed` are absent from the install's Config (tag Void -> 0), and
+  `FUN_0044E2D0` divides `0.1` by `esp_yaw_allowed` for its threshold -- with 0
+  the limit is infinite and the law never intervenes. The old question about
+  ESP acting in the retail game is closed.
 - **Switches:** `SLRR_STEER_LEGACY=1` keeps the old invented curvature cap for an
   A/B; `SLRR_STEER_TRACE=1` prints `[steer] v req axis tgt a slide slip lat_g
-  help cfg...` every 20 frames. `--bench-drive` without `--bench-route` accepts
-  `SLRR_BENCH_STEER=<axis>` with `SLRR_BENCH_STEER_FROM=<s>` / `_TO=<s>` for a
-  reproducible step or pulse.
-- **Tests:** vehicle_dynamics 39/39, drive_faithful 18/18, physics_recovery 8/8,
-  road_routes 6/6; the ValoCity route reaches 57.9 km/h, holds 16 m/s to the end
-  and the trace's slide stays at 0.004 rad on the straights.
-- **Status:** awaiting driver verification. The remaining unknowns are the units of
-  the listing's measure and of `dir`; both need a live read of the retail game
-  (`rea/live_read.ps1`) with `gearbox+0xA20`, `car+0x12BC..+0x12D0`, `+0x2128`
-  and `+0x1F58` sampled while driving.
+  help cfg du...` every 20 frames; `SLRR_CONFIG_DUMP=1` prints the Config keys
+  the physics reads. `--bench-drive` without `--bench-route` accepts
+  `SLRR_BENCH_STEER=<axis>` with `SLRR_BENCH_STEER_FROM=<s>` / `_TO=<s>`.
+- **Tests:** vehicle_dynamics 39/39, physics_recovery 8/8, missing_support 16/16.
+- **Status:** awaiting driver verification. Still unidentified: which of the two
+  hull velocity vectors `dir` comes from (the one read is at
+  `car[0x13BC] + 0x70 + 0xD4*i + 0x70`), and the flag `car+0x70 & 0x200` in the
+  gate, which the port folds into its `controls` flag.
 
 #### 2026-11-25 -- why it feels like bald tyres and why it rolls over
 

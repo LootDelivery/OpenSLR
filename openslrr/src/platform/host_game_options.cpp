@@ -85,6 +85,20 @@ GameOptions read_options(Jvm& jvm) {
                  static_cast<int>(raw.tag),
                  raw.tag == ValueTag::Int ? raw.v.i : -999);
   }
+  if (std::getenv("SLRR_CONFIG_DUMP")) {
+    // The physics reads these through the game's own `Config` store
+    // (0x00426100/0x004261f0 -> java.util.Config), so print what this install
+    // actually carries instead of assuming the class default.
+    for (const char *key : {"steerhelp_turn", "esp_steer_scale",
+                             "esp_angvel_scale", "esp_yaw_allowed",
+                             "player_steeringhelp", "player_converterstall"}) {
+      const auto value = jvm.get_static("java.util.Config", key);
+      std::fprintf(stderr, "[config] %-22s tag=%d float=%.6g int=%d\n", key,
+                   static_cast<int>(value.tag),
+                   value.tag == ValueTag::Float ? double(value.v.f) : 0.,
+                   value.tag == ValueTag::Int ? value.v.i : 0);
+    }
+  }
   const int mode = integer("player_transmission", 1);
   options.driving.transmission = mode == 0 || mode == 2 || mode == 5 ? mode : 1;
   // The gearbox mode is a player setting in the original game, and the physics
@@ -96,6 +110,9 @@ GameOptions read_options(Jvm& jvm) {
       options.driving.transmission = value;
   }
   options.driving.steering_help = std::clamp(read("player_steeringhelp", .666f), 0.f, 1.f);
+  // The aid's own gain, the Config key the exe reads at 0x0044EF6B. It is not
+  // the slider and the game ships it at 1.
+  options.driving.steerhelp_turn = std::max(read("steerhelp_turn", 1.f), 0.f);
   options.driving.launch_rpm = std::clamp(read("player_launchrpm", .4f), .1f, 1.f);
   options.driving.original_drive = integer("player_originaldrive", 1) != 0;
   options.driving.drive_hud = integer("player_drivehud", 1) != 0;

@@ -91,6 +91,12 @@ struct VideoOptions {
 struct DrivingOptions {
   int transmission = 1;
   float steering_help = .666f, abs = 0.f, asr = 0.f;
+  // `steerhelp_turn` from the game's Config: the weight of the recovered
+  // steering aid's own term (`axis/lock * this`) against the driver's input.
+  // Retail carries 1.0; the physics reads it through the same store the exe
+  // uses (0x004261f0), so it is not a taste knob and nothing in this port
+  // writes it.
+  float steerhelp_turn = 1.f;
   // Launch aid, off by default: 0 disables it, otherwise the fraction of the rev
   // limit a slipping automatic clutch holds the engine at. It belongs next to
   // ABS and ASR as a player aid, so the default is off -- upstream applied 0.4 to
