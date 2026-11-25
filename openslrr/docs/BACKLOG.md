@@ -48,6 +48,17 @@ Move fixed items to the bottom with the fixing commit.
   (на 54 км/ч 11.9 кН = 180 кВт) — момент на колесе превышает то, что двигатель
   может дать; отсюда и +50…78 % slip в DRV-11.
 - **Статус:** открыто, воспроизводится на стенде без рук (только газ).
+
+### DRV-13 Машина отрывается/подпрыгивает на прямой выше ~64 км/ч (2026-11-29)
+- **Симптом:** на стенде (ValoCity, Baiern `0x6`, прямая на полном газу) выше
+  ~64-70 км/ч суммарная нагрузка колёс (`ld` в `[steer]`) гуляет 0.58-1.48
+  веса, кузов подскакивает (`y`/`vy` в трассе), машина теряет контакт.
+  Все замеры углов/сил выше 64 км/ч на этом участке недействительны.
+- **Дополнительно:** сама прямая упирается в препятствие на ~67 км/ч
+  (~2.7 с разгона), дальше -- разворот и второй разгон; длинные прямые
+  стенда как есть непригодны для скоростных сценариев.
+- **Статус:** открыто; до починки скоростные A/B только ниже 60 км/ч.
+
 ### STB-1 Crashes on scene transitions
 - **Symptom:** the game crashes on various scene transitions: garage -> map,
   -> shop, shop -> back, double-clicking the map chooser, and others.
@@ -648,7 +659,9 @@ look at, so the check takes a minute rather than a session.
   `a = 1 while |help*fwd| >= hi/help, else (|help*fwd| - lo)/(hi - lo)`;
   `slip = atan2(-v.col0, -v.col2)` -- the body slip angle -- zero beyond
   `+-pi/2`, clamped to `+-clamp`;
-  `dir = 2*(v2 . body up) - v_prev` (memory in `car+0x1F58`);
+  `dir = 2*(W . body up) - v_prev` (memory in `car+0x1F58`), where `W` is
+  the hull's angular velocity -- the triple at each 0xD4 body block's base
+  (`hull+0xD4` for the body the toggle picks, `0x44EF49`);
   `tgt = X*a + (1-(1-min)*a)*axis`, where
   `X = slip*gain_angle + (axis/lock*steerhelp_turn - dir)*gain_dir`;
   `axis = clamp(tgt,-1,1)`, then `axis += (axis - before)*min(1, dt*10)`, and a
@@ -662,8 +675,14 @@ look at, so the check takes a minute rather than a session.
     scales the lock with speed" was wrong, and so was reading the band as
     hundredths of a g. For the Baiern (lo 1, hi 30, help 0.666) the blend is
     0.09 at 20 km/h, 0.41 at 67, 0.61 at 100 and 1 from 162 km/h.
-  * `dir` is the body's **vertical velocity** (a hull velocity projected on the
-    body's up axis), not the slide angle; on tarmac it stays within a few cm/s.
+  * `dir` is the hull's **yaw rate** -- its angular velocity about the
+    body's up axis, projected on that same up axis -- not the vertical
+    velocity and not the slide angle. 0x44EE37 builds the pointers from
+    `hull+0x64+idx*0xD4`: the matrix columns sit at +0x40/+0x50/+0x60 from
+    it and the linear velocity at +0x0C (the slip uses it), but the `dir`
+    dot at 0x44EF49 multiplies the columns by +0x70/+0x74/+0x78 -- one
+    block over, at `hull+0xD4` for the body the toggle picks, which is
+    where the physics keeps the angular velocity.
   * the aid **adds** to the driver's axis: with `min 0.5`, `gain_dir 1` and
     `steerhelp_turn 1` a 0.65 lock makes the target `axis*(1 + 1.038*a) - a*dir`,
     i.e. at full blend the car turns about twice what was asked -- the opposite
@@ -681,7 +700,9 @@ look at, so the check takes a minute rather than a session.
   pinned at 79% of the lateral grip. With no input on the straight (a downgrade)
   `dir` = -0.22 m/s and the aid holds +0.06 of lock, 2.2 deg of front steer at
   55 km/h -- the term is real and terrain-driven, and the driver should test a
-  downhill with the wheel centred.
+  downhill with the wheel centred. That was the port feeding the aid the
+  vertical velocity; the live read below shows retail keeps 0.00-0.04 there
+  because its `dir` is the yaw rate, which is 0 on a straight.
 - **ESP is inert in this build:** `esp_steer_scale`, `esp_angvel_scale` and
   `esp_yaw_allowed` are absent from the install's Config (tag Void -> 0), and
   `FUN_0044E2D0` divides `0.1` by `esp_yaw_allowed` for its threshold -- with 0
@@ -706,10 +727,67 @@ look at, so the check takes a minute rather than a session.
   `SLRR_INPUT_NOFOCUS=1` keeps posted key messages alive while the window is not
   foreground (the poll otherwise clears every key, `host_input.cpp:167`).
 - **Tests:** vehicle_dynamics 39/39, physics_recovery 8/8, missing_support 16/16.
-- **Status:** awaiting driver verification. Still unidentified: which of the two
-  hull velocity vectors `dir` comes from (the one read is at
-  `car[0x13BC] + 0x70 + 0xD4*i + 0x70`), and the flag `car+0x70 & 0x200` in the
-  gate, which the port folds into its `controls` flag.
+- **Status:** the `dir` term is now measure-verified (live read below);
+  port feeds it the chassis yaw rate. Driver verification of the feel still
+  pending.
+- **A/B measured 2026-11-29 (ValoCity, Baiern 0x6, bench straight; logs in
+  `%TEMP%/steer_ab`, 4 combos x straight/held/flick):** all three driver
+  complaints isolated to one term each. (1) *Self-steer on the straight:*
+  with no input at 40-65 km/h the car holds axis +0.055 (front wheels 2.0 deg)
+  from `dir` alone -- `SLRR_STEER_NODIR=1` gives exactly 0.000. `du` is a
+  steady -0.20 (the bench road slopes down), so the pull is systematic, not
+  noise, and it changes the trajectory by metres before the kerb. (2) *Gain:*
+  held req=0.3 gives tgt/req = 1.27 at a=0.17 and 1.29 at a=0.24 (axis 0.37,
+  wheels 15 deg); `SLRR_STEER_NOTURN=1` drops it to 0.97-1.0 (the `min` cut
+  alone gives 0.89-0.91, `dir` adds back ~+0.03 on this slope). (3) *No
+  stabilisation in any variant:* a full-lock flick at 60 km/h slides in all
+  four combos (slide -0.5..-1.27 rad); `dir` removal only changes where the
+  car hits the kerb, it does not catch the slide. All combos also spin at
+  use~0.8 in the held run -- that is the tyre/roll side (DRV-11), not the
+  assist. Bench notes: the straight hits an obstacle at ~67 km/h (~2.7 s),
+  so held used FROM=0.5 and flick FROM=2; `SLRR_BENCH_STEER_TO` must always
+  be set -- without it `to_frame = (int)(1e9 * 60)` overflows `int` in
+  `boot.cpp` and the scripted steer never applies, and after `TO` the value
+  is never reset (a 0.8 s pulse is really a step). Both are host bench bugs,
+  not game behaviour.
+- **RE pass 2026-11-29 (static, `rea/ghidra_out/decomp/`):** the `dir` axis is
+  now confirmed as *up*, by two independent consumers: in `FUN_00454500` the
+  steered wheel forward is built as `cos(steer)*col2 + sin(steer)*col0`
+  (so col0/col2 span the ground plane), and the tyre grip uses components
+  1,2 with component 0 as the axle -- hence col1 is the wheel/body up, and
+  `dir = V . up` stands. What is still open is *which body* `V` is: the index
+  `hull + 0x20c` is a toggling selector (`idx ^ 1` in the sleep handler
+  `FUN_004a4ed0`, the only writer found), so at E690 entry it is whichever
+  body of the pair was toggled last -- not necessarily the chassis COM the
+  port uses. If it is a wheel/point body, `dir` carries rotational velocity
+  (roll/pitch rate x offset), i.e. roll feedback into the steering. Closing
+  this needs a live read of retail (`rea/live_read.ps1`: sample `hull+0x20c`,
+  `hull+0x70+idx*0xD4`, `car+0x1F58` while driving). Also decoded: the gate
+  flag `car+0x70 & 0x200` is *steerhelp disabled* -- the `steerhelp <f>`
+  script command sets it (and zeroes `gearbox+0xA20`) at value <= 0 and
+  clears it above (`FUN_00458c00`, `s_steerhelp` case). The port folds it
+  into `controls` (modal window), which is a different condition; and when
+  help is disabled the exe skips the block entirely (no slew, no reversal),
+  while the port still slews -- a small mismatch worth fixing with the gate.
+- **Live read 2026-11-29 (retail `StreetLegal_Redline.exe`, MC Limited Edition
+  on the test track, `rea/steer_sample.ps1` at ~7 Hz/car, player car
+  `0x0FD08030`, help 0.666):** the sampler writes `axis`/`dir_mem`/`idx`,
+  the per-body orientation (12 floats at `hull+0xA4+idx*0xD4`), the linear
+  velocity (`hull+0x70+idx*0xD4`) and the angular-velocity triple
+  (`hull+0xD4+idx*0xD4`). On the flat straight `W` is 0.00-0.04 and retail
+  holds `axis` at 0.001-0.008 up to 133 km/h -- no self-steer at all. In a
+  full-power turn `W.up` climbs 0.24 -> 0.53 -> 0.25 rad/s, `dir_mem`
+  correlates 0.997 with `W.up` in the same sample, and the steady-state
+  `axis` 0.944 is the law's `axis/lock - dir = 1.45 - 0.5 = 0.95`.
+  The hull's two body blocks are value-identical (matrices and velocities
+  match), so the `idx` toggle -- which alternates 0/1 during the drive --
+  does not change `dir`; the body question is moot. Considered and ruled
+  out: `V.up` (vertical velocity, corr -0.03), lateral `V.col0` (corr
+  0.69, confounded by the turn), yaw estimated from orientation change
+  (it under-reads at 7 Hz; `W` matches it at ~unity scale). The port now
+  uses `body.omega().dot(body.orientation.rotate(up))` for the term, with
+  the same one-frame extrapolation, and the generic code comment says
+  `car+0x1F58` remembers the previous yaw rate.
 
 #### 2026-11-25 -- why it feels like bald tyres and why it rolls over
 

@@ -86,8 +86,9 @@ struct Record {
   unsigned deformation_upload_ticks = 0;
   float steering_input = 0;
   float steering_request = 0, steering_correction = 0;
-  // car+0x1F58: the steering help's memory of the previous frame's direction
-  // term. FUN_0044E690 grows it into `dir = 2*v - v_prev` before the blend.
+  // car+0x1F58: the steering help's memory of the previous frame's yaw-rate
+  // term. FUN_0044E690 grows it into `dir = 2*w - w_prev` before the blend,
+  // where w is the hull's angular velocity about its own up axis.
   float steering_dir_prev = 0;
   float steering_help = 0, abs_strength = 0, launch_help = 0;
   int transmission = 1;
@@ -2421,7 +2422,7 @@ void update_steering_legacy(Record &rec, bool controls) {
 //          (|help*fwd| - lo) / (hi - lo) -- no clamp in the exe    0x44EE70
 //   slip = atan2(-V.col0, -V.col2), zero beyond +-pi/2,
 //          clamped to +-clamp                                     0x44EEEC
-//   dir  = 2*(V2.up) - prev; car+0x1F58 keeps the previous V2.up   0x44EF49
+//   dir  = 2*(W.up) - prev; car+0x1F58 keeps the previous W.up     0x44EF49
 //   tgt  = (slip*gain_angle + (axis/lock*steerhelp_turn - dir)*gain_dir)*a
 //          + (1 - (1-min)*a)*axis                                  0x44EF5F
 //   axis = clamp(tgt, -1, 1)                                       0x44EFBD
@@ -2435,10 +2436,21 @@ void update_steering_legacy(Record &rec, bool controls) {
 //    previous build called the band hundredths of a g and declared the exe's
 //    `(1-(1-min)*a)` cap unusable. For the Baiern (lo 1, hi 30, help 0.666)
 //    the blend is 0.09 at 20 km/h, 0.41 at 67, 0.61 at 100 and 1 from 162.
-//  * `dir` is the car's own vertical velocity, extrapolated one frame, not the
-//    slide angle: it is the dot product of the hull's world velocity with the
-//    body's up axis. On tarmac it stays within a few cm/s, so the request
-//    dominates and it only bites on bumps and jumps.
+//  * `dir` is the hull's YAW RATE, not its vertical velocity: W is the
+//    angular-velocity triple the physics keeps at the base of each 0xD4
+//    body block (hull+0xD4 for the body the selector picks, decoded from
+//    0x44EE37/0x44EF49: the selector adds 0x64, the matrix columns sit at
+//    +0x40/+0x50/+0x60 from it, the linear velocity at +0x0C, and W at
+//    +0x70 -- one block over, hull+0xD4). Verified against the live retail
+//    game (MC Limited Edition, test track, sampled at ~7 Hz through a
+//    full-power turn): dir_mem correlates 0.997 with W.up in the same
+//    sample, tracks it through the turn (0.24 -> 0.53 -> 0.25 rad/s),
+//    and the steady-state axis 0.944 matches axis/lock - dir = 1.45 - 0.5
+//    = 0.95. On the straight W is 0.00-0.04, so the aid adds nothing to a
+//    centred wheel -- nothing to explain away. Subtracted from the
+//    request, an extrapolated yaw rate is a counter-steer, which is the
+//    "holds the road" behaviour; a vertical velocity is small on tarmac
+//    and only ever fed bump noise into the request instead.
 //  * the aid ADDS to the driver's axis instead of replacing it. With the
 //    player's min 0.5, gain_dir 1 and the shipped steerhelp_turn 1, a 0.65 lock
 //    makes the target axis*(1 + 1.038*a) - a*dir: at full blend the car turns
@@ -2462,8 +2474,22 @@ void update_steering_help(Record &rec, bool controls) {
   // same number the script's setDefaultSteeringHelp passes.
   const float help = std::clamp(host_game_options().driving.steering_help, 0.f, 1.f);
   // 0x0044EF6B: the aid's own gain, the Config key `steerhelp_turn`.
-  const float turn = std::max(0.f, host_game_options().driving.steerhelp_turn);
+  // A/B switches: SLRR_STEER_NOTURN drops the lock amplification (axis/lock),
+  // SLRR_STEER_NODIR drops the dir term. The memory below still updates.
+  static const bool no_turn = std::getenv("SLRR_STEER_NOTURN") != nullptr;
+  static const bool no_dir = std::getenv("SLRR_STEER_NODIR") != nullptr;
+  const float turn = no_turn ? 0.f : std::max(0.f, host_game_options().driving.steerhelp_turn);
   const float max_steer = std::max(.01f, rec.config->max_steer);
+  // The exe's gate (`(car+0x70 & 0x200) == 0 && help > 0 && cfg_hi > 0`,
+  // 0x44EE03): with the help at zero -- the `steerhelp` script command sets
+  // the flag and zeroes gearbox+0xA20 at value <= 0 -- or with no cfg band
+  // at all, the block is skipped whole. The axis is then the raw request:
+  // no slew, no reversal carry, and the dir memory keeps its value. The
+  // port used to slew here anyway.
+  if (!(help > 0.f && cfg[1] > 0.f)) {
+    rec.steering_input = steer;
+    return;
+  }
   const auto &body = rec.dynamics.body;
   const auto local = body.orientation.inverse_rotate(body.velocity);
   const double forward_speed = -local.z;
@@ -2492,12 +2518,16 @@ void update_steering_help(Record &rec, bool controls) {
                        static_cast<double>(cfg[4]))
           : 0.;
 
-  // 0x44EF49..0x44EF81: the body's vertical velocity, and the one-frame
-  // extrapolation the exe keeps in car+0x1F58.
-  const double vertical = body.velocity.dot(
+  // 0x44EF49..0x44EF81: the hull's yaw rate -- the angular velocity about
+  // the body's own up axis -- and the one-frame extrapolation the exe
+  // keeps in car+0x1F58. omega() is world-frame, orientation maps the
+  // body up axis to world, so this is W.up exactly as the listing dots
+  // it. Subtracted from the request below, it counter-steers a car that
+  // is already rotating: the "holds the road" term.
+  const double yaw_rate = body.omega().dot(
       body.orientation.rotate(physics::Vec3{0., 1., 0.}));
-  const double dir = 2. * vertical - rec.steering_dir_prev;
-  rec.steering_dir_prev = static_cast<float>(vertical);
+  const double dir = no_dir ? 0. : 2. * yaw_rate - rec.steering_dir_prev;
+  rec.steering_dir_prev = static_cast<float>(yaw_rate);
 
   // 0x44EF5F..0x44EFEB: the aid's target, clamped, slewed at 10/s, and a
   // reversal carrying half the travel.
