@@ -39,6 +39,22 @@ Move fixed items to the bottom with the fixing commit.
   изменилась: задний `slip +0.498` при `F 7059/255` — те же числа, что до правки.
 - **Статус:** шина верна, шинный путь исправлен. Остальное («мыло») — DRV-12
   и помощник руля.
+- **Roll/passport замеры 2026-11-29 (порт vs retail, тест-трек):**
+  * Roll stiffness совпадает: порт 1.4–1.6°/g (по честной перегрузке скорости
+    v·dθ_v/dt) против retail 1.7°/g (Baiern, живые сэмплы: 2.2° при 1.25 g,
+    2.3° при 1.3 g). Порт кренится не сильнее retail.
+  * Переворот порта: held 0.3 на стенде — внутренняя ось в 505 Н при
+    скорости ~49 км/ч (use 0.57), затем 443/5742/882/6621 при use 0.70
+    (lat 2.0 g_v) и кувырок (roll 25°). Флик 64 км/ч доводит до двух нулей
+    (0/6137/0/6100), но не кувыркает (roll -3.39°, slide -0.69).
+  * Слоты Pacejka стендового Baiern (дамп `SLRR_DUMP_PACEJKA`): C0 0.814, C2 1.769,
+    C4 8, C8 -1 (плато без спада), maxload 7433 -- совпадают со скриптами,
+    закон дословно из 0x0043BA80. «17.6839» из раннего чтения скрифта --
+    промежуточная константа, скрипт отдаёт 8.
+  * Остаток: статика перегрузки в порте соответствует полной высоте CG
+    (h=0.71, без центра крена); retail-loads для сравнения не хватает.
+    Нужен живой тест порта на пределе (липкая резина, занос) от водителя --
+    кувырок там виден только вручную.
 
 ### DRV-12 Коробка не переключается выше первой под полным газом
 - **Симптом:** 10 с полного газа, 77 км/ч, `gear=1 ratio=10.85` всё время;
@@ -733,8 +749,9 @@ look at, so the check takes a minute rather than a session.
   foreground (the poll otherwise clears every key, `host_input.cpp:167`).
 - **Tests:** vehicle_dynamics 39/39, physics_recovery 8/8, missing_support 16/16.
 - **Status:** the `dir` term is now measure-verified (live read below);
-  port feeds it the chassis yaw rate. Driver verification of the feel still
-  pending.
+  port feeds it the chassis yaw rate. **Driver verified 2026-11-29:**
+  "прилично лучше, похоже на оригинал; машина держит траекторию даже
+  при оборотистом V8 на 230 км/ч" -- the straight holds on its own now.
 - **A/B measured 2026-11-29 (ValoCity, Baiern 0x6, bench straight; logs in
   `%TEMP%/steer_ab`, 4 combos x straight/held/flick):** all three driver
   complaints isolated to one term each. (1) *Self-steer on the straight:*
