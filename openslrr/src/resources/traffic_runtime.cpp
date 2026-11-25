@@ -30,6 +30,7 @@
 #include "slrr/rpk_index.hpp"
 #include "slrr/frame_profiler.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/signal_glow.hpp"
 #include "slrr/section_machine.hpp"
 #include "slrr/traffic_streaming.hpp"
 
@@ -1380,6 +1381,18 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
   std::vector<void *> ground_keys;
   for (const auto &e : populations)
     ground_keys.push_back(e.first);
+  // U2-C: the heads glow even with traffic switched off, so this runs outside
+  // the population loop. Twenty rebuilds a second is four times faster than a
+  // phase can move and keeps the vertex blob stable between frames.
+  static double glow_at = -1;
+  if (clock_seconds - glow_at >= .05) {
+    glow_at = clock_seconds;
+    for (void *key : race_ground_keys()) {
+      if (!world || !belongs(key, world)) continue;
+      if (auto graph = race_ground_roads(*resources, key))
+        signal_glow_update(*graph, clock_seconds);
+    }
+  }
   // One car per maintenance pass: a long deficit fills over several passes
   // instead of dropping a burst into a single frame.
   static void *warm_ground = nullptr;

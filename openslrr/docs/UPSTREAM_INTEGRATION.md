@@ -523,6 +523,39 @@ unlimited. The suite has to call `open_all()` first — the signal heads are ICF
 without them has no lamps at all, which is also why the corpus test reports 1146
 heads.
 
+**The lamps glow.** The heads were dark, so a driver could not see which way a
+light was pointed. The lamp geometry is already in the shipped mesh:
+`objects\meshes\traffic_lamp\trafficlamp_body.SCX` (87 vertices, 40 triangles)
+carries three lens panels whose UV coordinates pick the red, amber and green row
+of `maps\textures\Trafficlight.dds` (a 2x3 atlas). `signal_head_panels` keeps the
+triangles whose normal faces the driver (mean `z` normal >= 0.85) and whose UV row
+is inside the atlas (< 0.95, which drops the mounting bracket), groups them by that
+row and stores the bounding box of each lamp in head space (`x` left-right, `y`
+up-down, `z` = the front face), swapped when the map's own order is inverted. So a
+head is measured from its own model, not from numbers copied into the host.
+
+`signal_glow_update` then, twenty times a second, matches every measured head to
+the crossing and branch that own its placement (a 5 cm position key over the
+graph's fixture list), asks the same `RoadRoutes::signal` the cars obey, and emits
+one camera-independent quad per head on the front face of the lamp that is
+currently on -- red, amber or green. Heads that never bind to a crossing stay dark,
+which is the same set the car behaviour ignores, so the light a driver sees and
+the light a car obeys cannot disagree. `bgfx_signal_glow.cpp` uploads that vertex
+blob once per revision and draws the three phase ranges with an additive blend
+after the world, depth-tested `LEQUAL`, so a lamp behind a car or a pole stays
+behind it. The pass runs only in the main world view.
+
+**Measured in game.** `--bench-map ValoCity --bench-time 21 --spawn-car
+cars/racers/Baiern.rpk:0x6` with `SLRR_GLOW_DEBUG=1`: `heads=1146 bound=1146`,
+`faces=1146 (r=821 a=0 g=325)` -- every head on the map has a live quad, and the
+split follows the two maps' branches at that instant. `SLRR_GLOW=0` turns the pass
+off in the same build, which is what made the driver's own before/after
+observation possible.
+
+**Tests.** `test_signal_glow` 3/3: the panel boxes come out of the real SCX and
+are ordered red above amber above green; the phase-to-lamp mapping puts red on 0,
+amber on 1 and green on 2 with the range offsets the renderer relies on; and the
+yaw rotation of a head lands its quad where the placement pose puts the panel.
 **Status: done.** The remaining #180 blocks are U2-D (race brain), U2-E (ROC) and
 U2-F (native vehicle assembly).
 

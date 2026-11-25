@@ -216,7 +216,8 @@ class LibBgfxBackend final : public IRenderBackend {
 
   void draw_sky(uint16_t view_id, const float* view, const float* projection);
   void draw_dynamic_world(uint16_t view_id);
-  void draw_sun_flare(const float* view, const float* projection, uint16_t view_id);
+  // U2-C: additive lamp faces of the map's traffic lights, in the drawn world.
+  void draw_signal_glow(uint16_t view_id);  void draw_sun_flare(const float* view, const float* projection, uint16_t view_id);
 
   bool ensure_vehicle_shadow_target(int slot, uint16_t size);
   void draw_vehicle_shadows(uint16_t view_id, const float* eye, const VideoOptions& video);
@@ -550,6 +551,12 @@ class LibBgfxBackend final : public IRenderBackend {
   // it to the window (PBR plan step 2).
   bool scene_rt_active_ = false;
   bgfx::ProgramHandle hiz_program_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle glow_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_glow_params_ = BGFX_INVALID_HANDLE;
+  bgfx::VertexLayout glow_layout_;
+  bgfx::DynamicVertexBufferHandle glow_vb_ = BGFX_INVALID_HANDLE;
+  uint32_t glow_vb_floats_ = 0;
+  uint32_t glow_revision_ = 0;
   bgfx::UniformHandle u_hiz_params_ = BGFX_INVALID_HANDLE;
   bgfx::FrameBufferHandle scene_fb_ = BGFX_INVALID_HANDLE;
   // Own HDR target with depth for the 3D catalogue previews, tone mapped

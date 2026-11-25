@@ -79,6 +79,7 @@ add_executable(slrr_host
   src/resources/race_runtime.cpp
   src/resources/traffic_runtime.cpp
   src/resources/traffic_streaming.cpp
+  src/resources/signal_glow.cpp
   src/resources/scene_instances.cpp
   src/resources/scene_ambience.cpp
   src/resources/scene_triggers.cpp
@@ -183,7 +184,7 @@ target_include_directories(slrr_host PRIVATE
 
 bgfx_compile_shaders(
   TYPE VERTEX
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_cast.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_cast.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_glow.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -193,7 +194,7 @@ bgfx_compile_shaders(
 )
 bgfx_compile_shaders(
   TYPE FRAGMENT
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_present.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_cubeview.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_hiz.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_blur.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_prefilter.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_irradiance.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_present.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_cubeview.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_hiz.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_blur.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_prefilter.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_irradiance.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_glow.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -207,6 +208,7 @@ target_sources(slrr_host PRIVATE
   src/render/bgfx_lighting.cpp
   src/render/bgfx_shadows.cpp
   src/render/bgfx_osd.cpp
+  src/render/bgfx_signal_glow.cpp
   ${SLRR_VS_SHADER_HEADERS}
   ${SLRR_FS_SHADER_HEADERS}
 )

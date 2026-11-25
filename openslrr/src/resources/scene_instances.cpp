@@ -142,6 +142,10 @@ struct NativeCollisionData {
   std::vector<PartBody> primitives;
 };
 std::unordered_map<uint32_t, NativeCollisionData> g_native_collision;
+// U2-C: the traffic-light heads the ground placed, and the lamp faces of each
+// head type, so one model is measured once and every placement reuses it.
+std::vector<SignalHead> g_signal_heads;
+std::unordered_map<uint32_t, SignalHead> g_signal_shapes;
 bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out);
 const NativeCollisionData& native_collision_data(
     const RpkIndex& rpk, uint32_t type, const PartConfig* parsed = nullptr);
@@ -753,6 +757,8 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_overrides.clear();
   g_collision_overrides.clear();
   g_ground_props.clear();
+  g_signal_heads.clear();
+  g_signal_shapes.clear();
   scene_ambience_reset();
   g_pending_dormant.clear();
   g_live_dormant.clear();
@@ -2029,6 +2035,8 @@ void scene_instances_set_hiz(SceneHizTest test, void* user) {
   g_hiz_user = user;
 }
 
+const std::vector<SignalHead>& scene_instances_signal_heads() { return g_signal_heads; }
+
 bool scene_instances_has_ground_props() {
   const auto* world = gameref_get(g_world);
   if (!world || g_ground_props.empty()) return false;
@@ -2349,6 +2357,60 @@ bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out) {
   out.native_kind = std::string(subtype);
   return true;
 }
+// U2-C: the shipped head has a flat front face split into three lamp panels,
+// and the panels are the triangles lying on that plane. Their texture row
+// tells the lamps apart, and each panel's bounds give the lamp's face. The
+// atlas rows run top to bottom while the head's Y runs bottom to top, so the
+// two are checked against each other instead of being trusted separately.
+bool signal_head_panels(const ScxGeometry& geo, SignalHead& head) {
+  if (!geo.info.ok || geo.indices.empty()) return false;
+  const float scale = geo.position_scale > 0.f ? geo.position_scale : 0.01f;
+  const auto axis = [&](uint32_t v, int k) {
+    return geo.positions[static_cast<size_t>(v) * 3 + k] * scale;
+  };
+  float bounds[3][4] = {};
+  int hits[3] = {0, 0, 0};
+  float plane = -1e9f;
+  for (size_t t = 0; t + 2 < geo.indices.size(); t += 3) {
+    bool front = true;
+    float row = 0.f, facing = 0.f;
+    for (int k = 0; k < 3; ++k) {
+      const uint32_t v = geo.indices[t + k];
+      const float z = axis(v, 2);
+      if (z < .015f || z > .055f) front = false;
+      if (geo.uvs.size() > static_cast<size_t>(v) * 2 + 1) row += geo.uvs[v * 2 + 1] / 3.f;
+      const size_t n = static_cast<size_t>(v) * 3 + 2;
+      if (geo.normals.size() > n) facing += geo.normals[n] / 3.f;
+    }
+    // A lens faces the street, and the atlas' last row is a bracket, not a
+    // lamp: only the three lit squares are wanted.
+    if (!front || facing < .85f || row >= .95f) continue;
+    const int lamp = row < .32f ? 0 : row < .66f ? 1 : 2;
+    for (int k = 0; k < 3; ++k) {
+      const uint32_t v = geo.indices[t + k];
+      const float x = axis(v, 0), y = axis(v, 1), z = axis(v, 2);
+      if (!hits[lamp]) {
+        bounds[lamp][0] = bounds[lamp][1] = x;
+        bounds[lamp][2] = bounds[lamp][3] = y;
+      }
+      bounds[lamp][0] = std::min(bounds[lamp][0], x);
+      bounds[lamp][1] = std::max(bounds[lamp][1], x);
+      bounds[lamp][2] = std::min(bounds[lamp][2], y);
+      bounds[lamp][3] = std::max(bounds[lamp][3], y);
+      plane = std::max(plane, z);
+    }
+    ++hits[lamp];
+  }
+  if (!hits[0] || !hits[1] || !hits[2]) return false;
+  if (bounds[0][2] + bounds[0][3] < bounds[2][2] + bounds[2][3])
+    std::swap(bounds[0], bounds[2]);
+  for (int k = 0; k < 3; ++k)
+    for (int i = 0; i < 4; ++i) head.lamp[k][i] = bounds[k][i];
+  // A hair in front of the panel face, or the glow z-fights its own lens.
+  head.plane_z = plane + .004f;
+  head.lit = true;
+  return true;
+}
 
 const NativeCollisionData& native_collision_data(
     const RpkIndex& rpk, uint32_t type, const PartConfig* parsed) {
@@ -2536,6 +2598,29 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
           if (i != best_index && renders[i].lod_level >= 0)
             renders.erase(renders.begin() + i);
       }
+      if (type->second.native_kind == "trlight") {
+        auto [shape, unseen] = g_signal_shapes.try_emplace(placement.type);
+        if (unseen) {
+          shape->second.type = placement.type;
+          for (const auto& render : type->second.renders) {
+            auto mesh = geometry(render.resource);
+            if (mesh && signal_head_panels(*mesh, shape->second)) break;
+            for (const uint32_t variant : render.variants) {
+              mesh = geometry(variant);
+              if (mesh && signal_head_panels(*mesh, shape->second)) break;
+            }
+            if (shape->second.lit) break;
+          }
+        }
+      }
+    }
+    if (type->second.native_kind == "trlight") {
+      const auto shape = g_signal_shapes.find(placement.type);
+      SignalHead lamp = shape != g_signal_shapes.end() ? shape->second : SignalHead{};
+      lamp.type = placement.type;
+      for (int axis = 0; axis < 3; ++axis) lamp.position[axis] = placement.position[axis];
+      lamp.yaw = placement.rotation[0];
+      g_signal_heads.push_back(lamp);
     }
     const auto pose = part_pose_matrix({placement.position, placement.rotation});
     const auto& collision = native_collision_data(*g_resources, placement.type,

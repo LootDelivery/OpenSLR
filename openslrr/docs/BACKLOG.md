@@ -124,9 +124,9 @@ look at, so the check takes a minute rather than a session.
       5 m/s² braking curve while the speed could only fall at 4 m/s², so every car
       overshot the line and was then released as committed. With the response rate
       fixed: 25 rest, 7 through, the seven having entered at a speed from which
-      stopping was no longer possible. Still needs a driver: the lamp heads do not
-      glow, so which way the light is cannot be seen. That glow is the open item;
-      the behaviour behind it is now measured.
+      stopping was no longer possible. The lamp heads now glow (`signal_glow.cpp`),
+      so the driver can finally see which approach is green, amber or red and
+      check the behaviour against it.
 - [ ] **Reflections after the irradiance probe became default-on** (`90ff7dcf`).
       Verified on paint, chrome and glass shots; the driver has seen it once and
       approved, and this entry exists so the state is not forgotten.

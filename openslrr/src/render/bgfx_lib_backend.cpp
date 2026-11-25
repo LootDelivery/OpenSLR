@@ -94,7 +94,11 @@
 #include "dxbc/fs_prefilter.sc.bin.h"
 #include "glsl/fs_prefilter.sc.bin.h"
 #include "dxbc/fs_irradiance.sc.bin.h"
+#include "dxbc/vs_glow.sc.bin.h"
+#include "dxbc/fs_glow.sc.bin.h"
 #include "glsl/fs_irradiance.sc.bin.h"
+#include "glsl/vs_glow.sc.bin.h"
+#include "glsl/fs_glow.sc.bin.h"
 
 #include "bgfx_lib_backend.hpp"
 
@@ -104,6 +108,7 @@ namespace {
 static const bgfx::EmbeddedShader k_vs[] = {
     BGFX_EMBEDDED_SHADER(vs_mesh),
     BGFX_EMBEDDED_SHADER(vs_mesh_inst),
+    BGFX_EMBEDDED_SHADER(vs_glow),
     BGFX_EMBEDDED_SHADER_END()};
 static const bgfx::EmbeddedShader k_skin[] = {
     BGFX_EMBEDDED_SHADER(vs_skin),
@@ -117,6 +122,7 @@ static const bgfx::EmbeddedShader k_fs[] = {
     BGFX_EMBEDDED_SHADER(fs_blur),
     BGFX_EMBEDDED_SHADER(fs_prefilter),
     BGFX_EMBEDDED_SHADER(fs_irradiance),
+    BGFX_EMBEDDED_SHADER(fs_glow),
     BGFX_EMBEDDED_SHADER_END()};
 static const bgfx::EmbeddedShader k_vehicle[] = {
     BGFX_EMBEDDED_SHADER(vs_vehicle), BGFX_EMBEDDED_SHADER(fs_vehicle),
@@ -277,6 +283,15 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     u_refl_right_ = bgfx::createUniform("u_reflRight", bgfx::UniformType::Vec4);
     u_refl_up_ = bgfx::createUniform("u_reflUp", bgfx::UniformType::Vec4);
     u_refl_fwd_ = bgfx::createUniform("u_reflFwd", bgfx::UniformType::Vec4);
+    // U2-C: the lamp faces are their own tiny pass, additive over the head.
+    glow_program_ = bgfx::createProgram(
+        bgfx::createEmbeddedShader(k_vs, rt, "vs_glow"),
+        bgfx::createEmbeddedShader(k_fs, rt, "fs_glow"), true);
+    u_glow_params_ = bgfx::createUniform("u_glowParams", bgfx::UniformType::Vec4);
+    glow_layout_.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .end();
     s_static_shadow_ = bgfx::createUniform("s_staticShadow", bgfx::UniformType::Sampler);
     u_static_shadow_mtx_ = bgfx::createUniform("u_staticShadowMtx", bgfx::UniformType::Mat4);
     u_static_shadow_params_ = bgfx::createUniform("u_staticShadowParams", bgfx::UniformType::Vec4);
@@ -487,6 +502,13 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       reflection_chain_[level] = BGFX_INVALID_HANDLE;
       reflection_chain_fb_[level] = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(glow_vb_)) bgfx::destroy(glow_vb_);
+    glow_vb_ = BGFX_INVALID_HANDLE;
+    glow_vb_floats_ = 0;
+    if (bgfx::isValid(u_glow_params_)) bgfx::destroy(u_glow_params_);
+    u_glow_params_ = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(glow_program_)) bgfx::destroy(glow_program_);
+    glow_program_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(hiz_program_)) bgfx::destroy(hiz_program_);
     hiz_program_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(u_hiz_params_)) bgfx::destroy(u_hiz_params_);
@@ -2993,6 +3015,8 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         }
         draw_instance(view_id, instance, instance.transform.data(), false, pass);
       }
+    // Last, so a lamp behind a car or a pole stays hidden by the depth buffer.
+    draw_signal_glow(view_id);
   }
   void LibBgfxBackend::draw_previews()
 {

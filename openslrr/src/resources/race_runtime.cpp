@@ -121,6 +121,15 @@ std::shared_ptr<const RoadRoutes> race_ground_roads(const RpkIndex& rpk, void* k
   auto* g = ground_state(rpk, key);
   return g ? g->roads : nullptr;
 }
+std::vector<void*> race_ground_keys() {
+  std::vector<void*> keys;
+  keys.reserve(grounds.size());
+  for (const auto& entry : grounds) {
+    auto* n = gameref_get(entry.first);
+    if (n && entry.second.roads) keys.push_back(n->key);
+  }
+  return keys;
+}
 
 std::optional<RoadRoute> race_query_route(const RpkIndex& rpk, void* key,
                                           const RoadPoint& a, const RoadPoint& b) {

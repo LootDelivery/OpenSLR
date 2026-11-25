@@ -83,6 +83,21 @@ std::vector<SceneInstance> scene_instances_collect(
 void scene_instances_collect_batches(const SceneFrustum* frustum,
                                      std::vector<SceneBatch>& out,
                                      const float* reflection_origin = nullptr);
+// U2-C: a traffic-light head the ground placed. The head model's lamp faces
+// travel with it so the glow pass does not have to parse the type again.
+// Three faces per head, in the head's own metres, ordered top (red), middle
+// (amber), bottom (green), which is how the shipped model lays them out.
+struct SignalHead {
+  float position[3] = {0.f, 0.f, 0.f};
+  float yaw = 0.f;
+  uint32_t type = 0;
+  // Lamp k covers [x0, x1] x [y0, y1] on the plane z = plane_z. Empty when the
+  // type's mesh did not resolve, which leaves the head drawn but not lit.
+  float lamp[3][4] = {};
+  float plane_z = 0.f;
+  bool lit = false;
+};
+const std::vector<SignalHead>& scene_instances_signal_heads();
 std::vector<SceneInstance> scene_instances_collect_root(void *root);
 // Sphere test of one instance against a frustum. Collected objects are not
 // culled by scene_instances_collect, because the same list feeds every view and

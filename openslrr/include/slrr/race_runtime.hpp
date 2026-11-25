@@ -18,6 +18,9 @@ void register_race_natives(Jvm&, RpkIndex&, SectionMachine&);
 
 // Shared, cached road graph of the ground's map. Null when the map has no TRC.
 std::shared_ptr<const RoadRoutes> race_ground_roads(const RpkIndex&, void* ground);
+// Every ground whose graph has been built and is still alive, for callers that
+// only read it (the traffic-light glow) and do not know which grounds are up.
+std::vector<void*> race_ground_keys();
 
 // Ground teardown. Both are called from GameRef: removal of one ref and the
 // wholesale reset of the native scene.
