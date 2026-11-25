@@ -59,8 +59,12 @@ constexpr Lamp kLamps[] = {{"led_ABS", 0x61, -499.19f},
                            {"led_ASR", 0x62, -471.85f},
                            {"led_HB", 0x63, -444.89f}};
 
-// Nominal panel: 1280x768 anchored to the bottom-right corner.
-constexpr float kPanelW = 1280.f, kPanelH = 768.f;
+// The lamp transform used by draw_vehicle_hud: panel pixel space mapped onto a
+// frame of the shipped HUD, where the game paints the four unlit labels that
+// the lit icons have to cover. OSD clip space is y down, so the panel's +y
+// steps downwards.
+constexpr float kLedX = .739f, kLedSx = .00245f;
+constexpr float kLedY = 1.f, kLedSy = .0031f;
 }  // namespace
 
 SLRR_TEST(lamps_resolve_to_the_panel_quads_with_the_panel_atlas) {
@@ -93,25 +97,23 @@ SLRR_TEST(the_lamp_row_lands_along_the_bottom_right_corner) {
     std::puts("SKIP retail install not found (set SLRR_GAME_ROOT)");
     return;
   }
-  const float sx = 2.f / kPanelW, sy = 2.f / kPanelH;
   float previous = -2.f;
   for (const Lamp& lamp : kLamps) {
     const auto geo =
         scene_instances_geometry(rpk_resolve_resource("cars.rpk", lamp.id));
     SLRR_REQUIRE(geo && geo->info.ok);
-    // OSD clip space is x right, y down: the panel corner is (1, 1) -- the
-    // bottom-right of the screen -- and the panel's +y steps upwards.
-    const float left = 1.f + geo->info.bbox_min[0] * sx;
-    const float right = 1.f + geo->info.bbox_max[0] * sx;
-    const float bottom = 1.f - geo->info.bbox_min[1] * sy;
-    const float top = 1.f - geo->info.bbox_max[1] * sy;
+    const float left = kLedX + geo->info.bbox_min[0] * kLedSx;
+    const float right = kLedX + geo->info.bbox_max[0] * kLedSx;
+    const float bottom = kLedY - geo->info.bbox_min[1] * kLedSy;
+    const float top = kLedY - geo->info.bbox_max[1] * kLedSy;
     std::printf("[lamps] %s x %.3f..%.3f  y %.3f..%.3f\n", lamp.alias,
                 double(left), double(right), double(bottom), double(top));
-    // Right of centre, on the bottom edge, four icons in a row.
-    SLRR_REQUIRE(left > .15f && right < .45f);
+    // Left of centre, on the bottom edge, one lamp about a hundredth of the
+    // height tall, three in a row without overlapping.
+    SLRR_REQUIRE(left > -.55f && right < -.25f);
     SLRR_REQUIRE(bottom <= 1.f && top > .9f && bottom > top);
-    SLRR_REQUIRE(right - left > .03f && right - left < .05f);
-    SLRR_REQUIRE(left > previous);
+    SLRR_REQUIRE(right - left > .06f && right - left < .07f);
+    SLRR_REQUIRE(left > previous + .05f);
     previous = left;
   }
 }

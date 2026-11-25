@@ -773,17 +773,20 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     if (count > 65535) continue;
     const std::vector<uint16_t> indices(mesh->indices.begin(), mesh->indices.end());
     if (slot == HudSlot::Handbrake || slot == HudSlot::Abs || slot == HudSlot::Asr) {
-      // The LED meshes live in the panel's own pixel space, which is anchored
-      // to the bottom-right corner of the screen: the newosd panel spans
-      // x -502..0, y 0..99.2, and the row sits at x -499.19 (ABS) -471.85
-      // (ASR) -444.89 (HB) -416.80 (ER), y 0.69..17.42 -- 26 x 17 px icons,
-      // i.e. 61..70% of the width along the bottom edge. OSD clip space is
-      // x right, y DOWN (top = -1, see the ortho above), so the bottom edge is
-      // +1 and the panel's +y (up) is a negative step: x = 1 + px*(2/1280),
-      // y = 1 - py*(2/768). Not the config position (0,0) and not the mesh
-      // position_scale, which belongs to world meshes.
-      draw(*mesh, 0, count, indices.data(), indices.size(), 1.f, 1.f,
-           2.f / 1280.f, -2.f / 768.f, 0, 0, 0, 0xffffffffu);
+      // The LED meshes live in the panel's pixel space (newosd spans
+      // x -502..0, y 0..99.2; the row sits at x -499.19 (ABS) -471.85 (ASR)
+      // -444.89 (HB) -416.80 (ER), y 0.69..17.42, 26 x 17 units a lamp). The
+      // transform below is that space measured on a frame of the shipped HUD,
+      // where the game itself paints the four unlit labels: the row lands on
+      // 26..35% of the width along the bottom edge, one lamp about 0.042 wide
+      // and 0.068 tall in clip units, which is where the labels are. OSD clip
+      // space is x right, y DOWN (top = -1, see the ortho), so the panel's +y
+      // (up) is a negative step. Position comes from here, not from the config
+      // line (all four ship 0,0,0) nor from position_scale (world meshes).
+      constexpr float kLedX = .739f, kLedSx = .00245f;
+      constexpr float kLedY = 1.f, kLedSy = .0031f;
+      draw(*mesh, 0, count, indices.data(), indices.size(), kLedX, kLedY,
+           kLedSx, -kLedSy, 0, 0, 0, 0xffffffffu);
       continue;
     }
     const float yscale = override.defined ? -.82f : -.406f * stock_scale;
