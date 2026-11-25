@@ -280,10 +280,10 @@ look at, so the check takes a minute rather than a session.
   the cfg ships `osd_abs/asr/hbrake 0xFFFFFFFF 0 0 0` and there is nothing in the
   car files to nudge. `<game root>/hud_lamps.txt` carries `dx dy scale` instead
   (clip units: `dx` right, `dy` up, 0.01 is half a percent of the screen;
-  `scale` multiplies the icon). A bare line moves all three lamps; `abs`,
-  `asr` and `hbrake` lines add to it for one lamp only, so the row can be
-  lined up label by label when the mesh pitch and the labels disagree.
-  Read once at start-up by
+  `scale` multiplies the icon). One named line per lamp -- `ABS`, `ASR`,
+  `HBRAKE` -- with `right up size` columns, so each icon can be lined up with
+  its own label when the mesh pitch and the labels disagree; a lamp without a
+  line keeps the measured spot. Read once at start-up by
   `slrr::load_hud_lamp_tuning` (`include/slrr/hud_lamp_tuning.hpp`), so the row
   can be moved by editing one text file and restarting the game.
   `rebuild_openslrr.bat` at the repo root closes the game, rebuilds
