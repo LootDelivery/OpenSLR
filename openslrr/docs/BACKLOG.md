@@ -563,12 +563,39 @@ look at, so the check takes a minute rather than a session.
 
 ### DRV-1 Poor steering at speed
 - **Symptom:** the car barely turns at high speed ("поворачиваемость говно").
-- **Suspect (user hypothesis):** steering help blends the steering angle and
-  hurts turning at speed — but with it disabled the car is genuinely hard to
-  control, so a plain removal is not the fix. Need to reread the stock
-  steering-help/steer-lock logic (Java script side) and reproduce its exact
-  behaviour instead of guessing.
-- **Status:** open.
+- **What the original does (recovered 2026-11-26):** nothing. The slider
+  (`Config.player_steeringhelp`, default 0.666) reaches the car through
+  `Vehicle.setDefaultSteeringHelp` -> `setSteeringHelp` -> a queued
+  `steerhelp <value>` command (`Vehicle.java:199`), and both that command and
+  the car's own `steerhelp 1.0 30.0 0.5 0.0 1.57 1.0` resource line
+  (`FUN_00458c00:751`) write one field, `gearbox+0xA20`, parsed with a single
+  `%*s %f` so only the first number is ever read. That field has no consumer:
+  the only two references to `0xA20` in all 4393 decompiled functions are the
+  writer and its `> 0` guard. `steerhelp_turn` (`_DAT_0063c7a8`) is likewise
+  written by the config reader and read by nothing.
+- **The exe's only yaw aid is ESP, and it is dead in retail:**
+  `FUN_0044e2d0` computes a slip/yaw error from `esp_steer_scale` and
+  `esp_angvel_scale`, compares it with `esp_yaw_allowed`, then brakes individual
+  wheels (`wheel+0xFC`, 0..1 through `esp_brake_level`) and cuts the throttle by
+  `esp_power_level` into `car+0x1DB4`. Its gate is `0.001 < gearbox+0xA30` =
+  `1/esp`, `+0xA30` is written only by the `esp` resource line, and **no shipped
+  car cfg has an `esp` line**, so the gate never opens. There is no script
+  setter for it either (`setASR`/`setABS` exist, `setESP` does not). So the
+  original ships with ABS and ASR only; the wheel angle follows the axis with no
+  speed limit.
+- **The port had invented the sailor it was accused of:** `update_steering`
+  capped the requested angle at 0.85 g of lateral acceleration
+  (`atan(wb*0.85g/(v^2*help))`) and added a slide-alignment correction. The cap
+  left 25 deg of 37 at 30 km/h, 6.7 at 60, 3.8 at 80 and 2.4 at 100 (a 62 m
+  radius), which is exactly the reported feel. The keyboard-only gate
+  (`drive_steer_analog`) is why no bench ever showed it: the route drives with
+  the analog path, where the cap was already off.
+- **Fix (`501d61cf`):** the axis reaches the wheels unchanged; only the hand
+  rate is bounded (2 rad/s at full lock, ~0.33 s to lock, no speed-dependent
+  damping), and the slide correction is gone. `SLRR_STEER_LEGACY=1` restores
+  the old law for A/B. Tests unchanged: vehicle_dynamics 39/39, drive_faithful
+  18/18, physics_tick_rate 6/9 (the same three rows red at HEAD).
+- **Status:** awaiting driver verification (does it now turn at speed?).
 
 ### DRV-2 Bench drive has no route
 - **Symptom:** `--bench-drive` holds full throttle straight; the car crashes
