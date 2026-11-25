@@ -66,7 +66,7 @@ constexpr Lamp kLamps[] = {{"led_ABS", 0x61, -499.19f},
 // the lit icons have to cover. OSD clip space is y down, so the panel's +y
 // steps downwards.
 constexpr float kLedX = .647f, kLedSx = .00209f;
-constexpr float kLedY = 1.f, kLedSy = .00463f;
+constexpr float kLedY = 1.f, kLedSy = .00435f;
 }  // namespace
 
 SLRR_TEST(lamps_resolve_to_the_panel_quads_with_the_panel_atlas) {
@@ -148,6 +148,14 @@ SLRR_TEST(hud_lamps_file_moves_each_lamp_without_a_rebuild) {
   SLRR_REQUIRE(moved.handbrake.dx > .009f && moved.handbrake.dy < -.002f);
   SLRR_REQUIRE(moved.handbrake.scale > .94f && moved.handbrake.scale < .96f);
 
+  // The fourth number squashes one icon vertically without touching the width,
+  // and leaving it out means "as tall as the size says".
+  const slrr::HudLampTuning flat = slrr::parse_hud_lamp_tuning(
+      "ABS 0 0 1 0.900\nASR 0 0 1.200\nHBRAKE 0 0 1 1.100\n");
+  SLRR_REQUIRE(flat.abs.height > .89f && flat.abs.height < .91f);
+  SLRR_REQUIRE(flat.asr.height == 1.f && flat.asr.scale > 1.19f);
+  SLRR_REQUIRE(flat.handbrake.height > 1.09f);
+
   // Only the lamps that have a complete line move, the rest keep the measured
   // spot: a line without a lamp name and a named line with two numbers do
   // nothing, and a zero size falls back to 1 because it would collapse the icon
@@ -167,11 +175,13 @@ SLRR_TEST(the_shipped_lamp_file_is_the_one_the_game_reads) {
   std::printf("[lamps] root %s -> abs %.3f asr %.3f hb %.3f\n", root.c_str(),
               double(shipped.abs.dx), double(shipped.asr.dx),
               double(shipped.handbrake.dx));
-  // The file in the install is the measured row, so it must read as a no-op:
-  // every lamp at 0 0 1.
+  // The shipped file carries the row that was lined up with the labels on
+  // screen, so the numbers are the driver's nudge, not zeros: a few thousandths
+  // to the right, no vertical shift, no resize.
   for (const slrr::HudLampOffset* lamp :
        {&shipped.abs, &shipped.asr, &shipped.handbrake}) {
-    SLRR_REQUIRE(lamp->dx == 0.f && lamp->dy == 0.f && lamp->scale == 1.f);
+    SLRR_REQUIRE(lamp->dx > -.05f && lamp->dx < .05f);
+    SLRR_REQUIRE(lamp->dy == 0.f && lamp->scale == 1.f && lamp->height == 1.f);
   }
 }
 

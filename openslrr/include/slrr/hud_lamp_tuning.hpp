@@ -12,18 +12,21 @@ namespace slrr {
 // "osd_abs 0xFFFFFFFF 0 0 0", so <game root>/hud_lamps.txt is the only place a
 // driver can move the row. It is deliberately one line per lamp, named:
 //
-//   ABS       0.000   0.000   1.000
-//   ASR       0.000   0.000   1.000
-//   HBRAKE    0.000   0.000   1.000
+//   ABS       0.000   0.000   1.000   1.000
+//   ASR       0.000   0.000   1.000   1.000
+//   HBRAKE    0.000   0.000   1.000   1.000
 //
-// columns are right / up / size: the first two are OSD clip units (0.01 is
-// half a percent of the screen, so the nudge looks the same at any
-// resolution), the third multiplies the icon. Every line is optional; a lamp
-// without a line keeps the measured spot. A missing file means the same.
+// columns are right / up / size / height: the first two are OSD clip units
+// (0.01 is half a percent of the screen, so the nudge looks the same at any
+// resolution), the third multiplies the icon and the optional fourth squashes
+// it vertically only (1.100 is 10% taller, 0.900 is 10% flatter). Every line is
+// optional; a lamp without a line keeps the measured spot. A missing file means
+// the same.
 struct HudLampOffset {
   float dx = 0.f;
   float dy = 0.f;
   float scale = 1.f;
+  float height = 1.f;  // vertical part only, so an icon can be squashed
 };
 
 struct HudLampTuning {
@@ -34,14 +37,15 @@ struct HudLampTuning {
 
 inline HudLampTuning parse_hud_lamp_tuning(const char* text) {
   HudLampTuning result;
-  float values[3] = {0.f, 0.f, 1.f};
+  float values[4] = {0.f, 0.f, 1.f, 1.f};
   int count = 0;
   HudLampOffset* target = nullptr;
   const auto commit = [&] {
-    if (target && count == 3) {
+    if (target && (count == 3 || count == 4)) {
       target->dx = values[0];
       target->dy = values[1];
       target->scale = values[2] > 0.f ? values[2] : 1.f;
+      target->height = count == 4 ? (values[3] > 0.f ? values[3] : 1.f) : 1.f;
     }
     count = 0;
     target = nullptr;
@@ -65,7 +69,7 @@ inline HudLampTuning parse_hud_lamp_tuning(const char* text) {
       char* end = nullptr;
       const float value = std::strtof(p, &end);
       if (end != p) {
-        if (count < 3) values[count++] = value;
+        if (count < 4) values[count++] = value;
         p = end;
         continue;
       }

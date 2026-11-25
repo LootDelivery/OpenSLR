@@ -796,7 +796,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       // (up) is a negative step. Position comes from here, not from the config
       // line (all four ship 0,0,0) nor from position_scale (world meshes).
       constexpr float kLedX = .647f, kLedSx = .00209f;
-      constexpr float kLedY = 1.f, kLedSy = .00463f;
+      constexpr float kLedY = 1.f, kLedSy = .00435f;
       // The cfg line carries the same three numbers every other osd_ command
       // does -- x, y and scale (see "osd_gauge 0x00000000 -0.500 -1.050 1.0").
       // The lamps ship zeros because the engine positions the stock LED itself,
@@ -815,7 +815,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
                                ? item.position[2] : 1.f) *
                           own.scale;
       draw(*mesh, 0, count, indices.data(), indices.size(), kLedX + dx,
-           kLedY - dy, kLedSx * scale, -kLedSy * scale, 0, 0, 0, 0xffffffffu);
+           kLedY - dy, kLedSx * scale, -kLedSy * scale * own.height, 0, 0, 0,
+           0xffffffffu);
       continue;
     }
     const float yscale = override.defined ? -.82f : -.406f * stock_scale;
