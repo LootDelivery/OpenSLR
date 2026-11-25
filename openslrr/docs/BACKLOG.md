@@ -131,6 +131,29 @@ Move fixed items to the bottom with the fixing commit.
       -4860 N per rear wheel on an FWD car, and the three aids the pedal also
       switches off (launch aid, auto-clutch launch, steering help).
 
+### SHDW-1 A dark car-shaped blot trails the car and fades after a second
+- **Symptom:** a soft, elongated dark stain on the asphalt a few metres behind
+  or beside the car, shaped like a car seen from above; it moves along with the
+  car and vanishes a moment later. The driver found that switching *Map
+  shadows* off in the debug overlay removes it, which points at the cached map
+  shadow, not at the vehicle shadow.
+- **Cause (measured):** the cached map is rebuilt only when the camera has moved
+  `step = max(8, range*.15)` metres (8.4 m in the city). Every rebuild draws
+  the player's own car body into the map: the caster filter skips
+  `instance.vehicle_material`, but the body instance of the driven car reaches
+  the pass with that flag clear. `SLRR_SHADOW_TRACE=1` prints, per rebuild,
+  `cars=1 car=0x0023000c at <x,y,z>` with the position identical to the car's
+  own `[route] pos` at that instant. The map then keeps that copy while the car
+  drives on, so the stale silhouette stays on the road for up to 8.4 m of
+  travel -- at 10-30 km/h about one second, exactly the observed fade -- and it
+  reappears at a new spot with the next rebuild, which reads as a shadow that
+  follows the car.
+- **Fix:** a caster that resolves to a car (`part_shadow_source`) is skipped in
+  the cached map; cars keep their own depth map. `SLRR_SHADOW_KEEP_CARS=1`
+  restores the old behaviour for A/B runs. A/B on the same 14 s ValoCity route
+  (`carAB-keep` / `carAB-fixed`) differs exactly where the stale copies lie on
+  the road behind the car, and the car's real shadow is unchanged.
+- **Status:** fixed, awaiting a live run.
 ## Awaiting driver verification
 
 Code-level evidence is not acceptance. Items here are implemented, tested or

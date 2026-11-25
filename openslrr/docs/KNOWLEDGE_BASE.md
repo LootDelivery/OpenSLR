@@ -144,6 +144,10 @@ current gaps to SLRR_rev code are in
   quad counts once a second (`signal_glow.cpp`).
   `SLRR_SUN_TIME=<seconds>` pins the time of day, which is how a bench gets
   daylight on a route whose save sits at dusk (`mainloop.cpp`).
+  `SLRR_SHADOW_TRACE=1` prints one line per cached-map rebuild (casters, prop
+  batches, cars skipped, range, camera travel since the last rebuild), and
+  `SLRR_SHADOW_KEEP_CARS=1` puts the driven car back into that map for A/B
+  runs (`bgfx_shadows.cpp`).
 - There is no test target on `main`. `main` had a CTest suite (added in
   `8637eae` with PR #3's `System.arraycopy`, PTX and dyno regressions) until
   `b907b6b` deleted it. A Windows CI workflow only ever existed on the PR #3

@@ -17,6 +17,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_set>
 #include <utility>
@@ -180,6 +181,11 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
   bgfx::setViewClear(kStaticShadowView, BGFX_CLEAR_DEPTH, 0, 1.f, 0);
   bgfx::setViewTransform(kStaticShadowView, view, proj);
   bgfx::touch(kStaticShadowView);
+  int caster_instances = 0, car_skips = 0, decal_skips = 0;
+  // The old behaviour is kept behind a switch to compare the two maps.
+  const bool keep_cars = std::getenv("SLRR_SHADOW_KEEP_CARS") != nullptr;
+  uint32_t car_type = 0;
+  float car_pos[3] = {0.f, 0.f, 0.f};
   for (const auto& instance : scene_instances_collect(&frustum)) {
     // Cars have their own depth map. Skinned pedestrians move, so they would
     // freeze into this cached map. Everything else on the map casts.
@@ -188,6 +194,27 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
     if (!instance.geometry || instance.sky || instance.vehicle_material ||
         instance.gpu_skin || instance.light_flags || instance.geometry->ground_polygons)
       continue;
+    // A car the flags call something else still must not freeze into the
+    // cached map. Its kocsiarnyek quad is a soft car-shaped decal, and a
+    // stale copy of it left on the asphalt reads as a shadow that follows
+    // the car until the map is rebuilt.
+    if (instance.key) {
+      uint32_t shadow_flags = 0;
+      SceneShadowDecal decal;
+      scene_shadow_info(static_cast<uint32_t>(instance.type_id), &shadow_flags, &decal);
+      if (decal.present) ++decal_skips;
+      float frame[16]{};
+      if (!keep_cars && part_shadow_source(instance.key, frame)) {
+        if (!car_skips) {
+          car_type = static_cast<uint32_t>(instance.type_id);
+          car_pos[0] = frame[12];
+          car_pos[1] = frame[13];
+          car_pos[2] = frame[14];
+        }
+        ++car_skips;
+        continue;
+      }
+    }
     const auto found = instance_meshes_.find(instance.geometry.get());
     if (found == instance_meshes_.end()) continue;
     const auto& part = found->second;
@@ -216,11 +243,23 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
       const uint64_t coverage = conservative ? BGFX_STATE_CONSERVATIVE_RASTER : 0;
       bgfx::setState(BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | coverage);
       bgfx::submit(kStaticShadowView, static_shadow_program_);
+      ++caster_instances;
     }
   }
   std::vector<SceneBatch> shadow_batches;
   scene_instances_collect_batches(&frustum, shadow_batches);
   draw_prop_batches(kStaticShadowView, shadow_batches, true, conservative);
+  static const bool shadow_trace = std::getenv("SLRR_SHADOW_TRACE") != nullptr;
+  if (shadow_trace)
+    std::fprintf(stderr,
+                 "[shadow-map] casters=%d batches=%zu cars=%d decals=%d "
+                 "car=0x%08x at %.1f,%.1f,%.1f "
+                 "range=%.0f moved=%.1f step=%.1f\n",
+                 caster_instances, shadow_batches.size(), car_skips, decal_skips,
+                 car_type, static_cast<double>(car_pos[0]),
+                 static_cast<double>(car_pos[1]), static_cast<double>(car_pos[2]),
+                 static_cast<double>(range), static_cast<double>(moved),
+                 static_cast<double>(step));
   static_shadow_distance_ = range;
   static_shadow_world_ = ground->key;
   static_shadow_focus_ = focus;
