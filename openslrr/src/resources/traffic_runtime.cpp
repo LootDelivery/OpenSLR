@@ -99,6 +99,9 @@ struct Registration {
   // rested at the line instead of only that the cap was consulted.
   bool lamp_seen = false;
   float lamp_min_speed = 0;
+  // The car came to rest at the line and then left it again. On a red lamp that
+  // is the report worth chasing, so it is counted on its own.
+  bool lamp_rested_at_line = false;
 };
 struct Event {
   Object *target = nullptr;
@@ -1435,7 +1438,8 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
     // What the caps did, not only how often they fired: approaches entered on
     // red, of those that came to rest, and of those that drove through.
     static int lamp_red_approaches = 0, lamp_rested = 0, lamp_ran = 0;
-    static float lamp_worst_speed = 0;
+    static int lamp_released = 0;
+    static float lamp_worst_speed = 0, lamp_worst_overshoot = 0;
     static double lamp_report = 0;
     std::sort(ids.begin(), ids.end());
     // Population target for the network around the player, from the slider and
@@ -1527,9 +1531,12 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       lamp_report = clock_seconds;
       std::fprintf(stderr,
                    "[traffic-lamp] capped_steps=%d t=%.1f red=%d rested=%d "
-                   "ran_red=%d worst=%.2f m/s mean=%.1f km/h\n",
+                   "ran_red=%d released=%d worst=%.2f overshoot=%.2f m "
+                   "mean=%.1f km/h\n",
                    lamp_stops, clock_seconds, lamp_red_approaches, lamp_rested,
-                   lamp_ran, static_cast<double>(lamp_worst_speed),
+                   lamp_ran, lamp_released,
+                   static_cast<double>(lamp_worst_speed),
+                   static_cast<double>(lamp_worst_overshoot),
                    traffic_mean_speed());
       lamp_stops = 0;
     }
@@ -1572,13 +1579,11 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         desired = 0;
       // U2-C: the lamp at the junction ahead caps the speed; a closure outranks
       // it, because a closed lane is a wall and a red light is a wait.
-      if (desired > 0) {
-        const float lamp = race_traffic_signal_cap(
-            *graph, r.edge, r.along, r.speed, clock_seconds);
-        if (lamp < desired) {
-          desired = lamp;
-          if (lamp_trace) ++lamp_stops;
-        }
+      const float lamp = race_traffic_signal_cap(*graph, r.edge, r.along,
+                                                r.speed, clock_seconds);
+      if (desired > 0 && lamp < desired) {
+        desired = lamp;
+        if (lamp_trace) ++lamp_stops;
       }
       // Keep a gap to the car ahead on the same lane. This is spacing, not
       // collision: the runtime only slows down, it never applies impulses.
@@ -1606,22 +1611,33 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
               ++lamp_red_approaches;
               ++lamp_ran;
               lamp_worst_speed = std::max(lamp_worst_speed, r.lamp_min_speed);
+              lamp_worst_overshoot = std::max(lamp_worst_overshoot, -to_line);
             } else if (r.speed < .5f && to_line < 2.f) {
               // Rests at the line: the approach is a stop, not a drive-past.
               r.lamp_seen = false;
+              r.lamp_rested_at_line = true;
               ++lamp_red_approaches;
               ++lamp_rested;
             }
           }
-        } else if (r.lamp_seen) {
-          // The lamp went green: close the approach with what it did.
-          r.lamp_seen = false;
-          ++lamp_red_approaches;
-          if (r.lamp_min_speed < .5f)
-            ++lamp_rested;
-          else
-            ++lamp_ran;
-          lamp_worst_speed = std::max(lamp_worst_speed, r.lamp_min_speed);
+          // A car that rested at the line and is moving again while the lamp is
+          // still not green: the line let it go, which is what the driver saw.
+          if (r.lamp_rested_at_line && r.speed > 1.5f) {
+            r.lamp_rested_at_line = false;
+            ++lamp_released;
+          }
+        } else {
+          r.lamp_rested_at_line = false;
+          if (r.lamp_seen) {
+            // The lamp went green: close the approach with what it did.
+            r.lamp_seen = false;
+            ++lamp_red_approaches;
+            if (r.lamp_min_speed < .5f)
+              ++lamp_rested;
+            else
+              ++lamp_ran;
+            lamp_worst_speed = std::max(lamp_worst_speed, r.lamp_min_speed);
+          }
         }
       }
       r.speed += std::clamp(desired - r.speed, -kTrafficBrakeResponse * seconds,
@@ -1629,6 +1645,14 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       float advance = r.speed * seconds;
       if (desired == 0)
         advance = std::min(advance, std::max(0.f, e.length - r.along));
+      // A lamp that says stop is a wall at the line, not only a target speed.
+      // Capping the speed alone let the car crawl over the line at a metre a
+      // second; the next step then read it as committed and let it drive through
+      // the red, which is what the driver saw: cars resting, then pulling away
+      // while the lamp was still red.
+      if (lamp < std::numeric_limits<float>::infinity())
+        advance = std::min(advance,
+                           std::max(0.f, e.length - kTrafficStopLine - r.along));
       r.along += advance;
       if (advance <= 0)
         r.speed = 0;

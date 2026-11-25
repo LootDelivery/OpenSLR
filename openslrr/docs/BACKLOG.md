@@ -118,15 +118,22 @@ Code-level evidence is not acceptance. Items here are implemented, tested or
 measured, and have not been checked by driving the game. Each one names what to
 look at, so the check takes a minute rather than a session.
 
-- [ ] **Traffic stops at a red light** (U2-C). The first in-game measurement
-      after the physics swap said the opposite of what a driver saw: 30 red
-      approaches, 1 car rested, 29 drove through -- the cap was computed with a
-      5 m/s² braking curve while the speed could only fall at 4 m/s², so every car
-      overshot the line and was then released as committed. With the response rate
-      fixed: 25 rest, 7 through, the seven having entered at a speed from which
-      stopping was no longer possible. The lamp heads now glow (`signal_glow.cpp`),
-      so the driver can finally see which approach is green, amber or red and
-      check the behaviour against it.
+- [x] **Traffic stops at a red light** (U2-C). Confirmed by the driver: cars
+      stop on red, go on green. Three rounds of measurement got there. The first
+      in-game run said 1 of 30 red approaches rested, the rest drove through: the
+      cap used a 5 m/s² braking curve while the speed could only fall at 4 m/s²,
+      so every car overshot the line and was released as committed. Fixing the
+      response rate left 570 of 613 resting cars pulling away again while the lamp
+      was still red (`released`, added to the signal trace): the cap is a target
+      speed, so it approaches zero without ever reaching it, the car crawls over
+      the line at about 1 m/s, and the next step reads it as committed. A lamp that
+      says stop is now a wall at the line, not only a speed target
+      (`traffic_runtime.cpp`), after which no resting car leaves on red and 68 of
+      357 red approaches are driven through, all of them entered too fast to stop.
+      Note for later: every crossing in the city switches at the same instant
+      (one clock, `RoadRoutes::signal`), which is why the mean speed drops to
+      21 km/h where the cheating version held 38; a per-crossing offset would
+      look like a real city and is not recovered yet.
 - [ ] **Reflections after the irradiance probe became default-on** (`90ff7dcf`).
       Verified on paint, chrome and glass shots; the driver has seen it once and
       approved, and this entry exists so the state is not forgotten.
