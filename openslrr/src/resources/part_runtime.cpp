@@ -2460,7 +2460,10 @@ void update_steering_help(Record &rec, bool controls) {
   const double dir = 2 * slide - rec.steering_dir_prev;
   rec.steering_dir_prev = static_cast<float>(slide);
 
-  // Mean tyre slip angle over the loaded wheels (`angle` term).
+  // Mean tyre slip angle over the loaded wheels (`angle` term), and the lateral
+  // acceleration of the turn in hundredths of a g -- the grip the car is using,
+  // which is the quantity the exe's blend is built from (`car+0x2128` is a
+  // weighted mean of sign(slip angle) * lateral grip over the loaded wheels).
   double weight = 0, angle = 0;
   for (size_t i = 0; i < rec.dynamics.state.size(); ++i) {
     const auto &s = rec.dynamics.state[i];
@@ -2470,19 +2473,26 @@ void update_steering_help(Record &rec, bool controls) {
         std::max(1., rec.dynamics.drive.wheels[i].tyre.maximum_load);
     const double w = std::clamp(s.force / reference, 0., 1.);
     if (w <= 0.) continue;
-    // |angle| > pi/2 zeroes the term (0x44ED2C); otherwise the +-clamp.
     const double slip_angle = s.slip_state.angle;
+    // |angle| > pi/2 zeroes the term (0x44ED2C); otherwise the +-clamp.
     weight += w;
     angle += (std::abs(slip_angle) <= 1.5707963
                   ? std::clamp(slip_angle, -static_cast<double>(cfg[4]),
                                static_cast<double>(cfg[4]))
                   : 0.) * w;
   }
+  const double lateral_g =
+      std::abs(forward_speed) * std::abs(body.omega().y) / 9.81 * 100.;
 
+  // The blend follows that grip, so `lo 1` .. `hi 30` reads 0.01 .. 0.3 g and the
+  // slider scales the window: a straight line gets no help at all, a firm corner
+  // blends it in. A speed measure instead pinned the blend to 1 above 30 m/s and
+  // the counter-steer then fought every corner -- with a held 0.30 axis at
+  // 60 km/h the axis was driven to -0.11 and the slide to -0.42 rad, a spin.
   double blend = 0;
   if (help > 0 && cfg[1] > 0) {
     const double lo = cfg[0], hi = cfg[1];
-    const double measure = speed * help;
+    const double measure = lateral_g * help;
     if (measure > lo)
       blend = std::clamp((measure - lo) / std::max(1e-6, hi - lo), 0., 1.);
   }
@@ -2490,8 +2500,12 @@ void update_steering_help(Record &rec, bool controls) {
   const double slip_angle = weight > 0 ? angle / weight : 0.;
   const double requested = static_cast<double>(steer) * max_steer *
                            (1. - (1. - min_lock) * blend);
+  // Counter-steer: the blend twice over, so a firm corner adds almost nothing
+  // while a real slide gets half of the slide angle. The 0.5 is a mapping, not a
+  // recovery -- the exe's `dir` is a projection of a wheel body's velocity and
+  // its units do not survive the port -- and `gain_dir` scales it.
   const double assist =
-      blend * (slip_angle * cfg[3] + dir * cfg[5]);
+      blend * slip_angle * cfg[3] + blend * blend * dir * cfg[5] * 0.5;
   const float target = static_cast<float>(
       std::clamp((requested + assist) / max_steer, -1., 1.));
 
@@ -2508,11 +2522,11 @@ void update_steering_help(Record &rec, bool controls) {
     if (++ticks % 20 == 0)
       std::fprintf(stderr,
                    "[steer] v=%.1f req=%.3f axis=%.3f tgt=%.3f a=%.2f "
-                   "slide=%.3f slip=%.3f help=%.3f cfg=%.2f %.2f %.2f %.2f %.2f "
+                   "slide=%.3f slip=%.3f lat_g=%.2f help=%.3f cfg=%.2f %.2f %.2f %.2f %.2f "
                    "%.2f\n",
                    forward_speed * 3.6, static_cast<double>(steer),
                    static_cast<double>(axis), static_cast<double>(target), blend,
-                   slide, slip_angle, static_cast<double>(help),
+                   slide, slip_angle, lateral_g, static_cast<double>(help),
                    static_cast<double>(cfg[0]), static_cast<double>(cfg[1]),
                    static_cast<double>(cfg[2]), static_cast<double>(cfg[3]),
                    static_cast<double>(cfg[4]), static_cast<double>(cfg[5]));

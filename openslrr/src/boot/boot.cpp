@@ -753,6 +753,21 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
           }
         }
         input.bench_reverse = reversing;
+        // Scripted input for physics experiments: SLRR_BENCH_STEER=<axis> with
+        // SLRR_BENCH_STEER_FROM=<seconds> holds a fixed steering input after
+        // that moment, so a step manoeuvre at speed repeats run to run.
+        {
+          static const char* scripted = std::getenv("SLRR_BENCH_STEER");
+          static const char* scripted_from = std::getenv("SLRR_BENCH_STEER_FROM");
+          static const char* scripted_to = std::getenv("SLRR_BENCH_STEER_TO");
+          static const int from_frame = static_cast<int>(
+              (scripted_from ? std::atof(scripted_from) : 0.) * kBenchRate);
+          static const int to_frame = static_cast<int>(
+              (scripted_to ? std::atof(scripted_to) : 1e9) * kBenchRate);
+          if (scripted && bench_running && !opt.bench_route &&
+              bench_frames >= from_frame && bench_frames < to_frame)
+            input.bench_steer = static_cast<float>(std::atof(scripted));
+        }
         input.bench_throttle =
             !bench_running || opt.bench_manual
                 ? -1.f

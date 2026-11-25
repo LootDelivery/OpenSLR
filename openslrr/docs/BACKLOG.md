@@ -590,30 +590,41 @@ look at, so the check takes a minute rather than a session.
   mean wheel slip angle (zero outside +-pi/2, clamped to `+-clamp`); `dir` comes
   from a wheel rigid body's velocity.
 - **Port (`update_steering_help`, default):** the gate, the band shape, `min`,
-  both gains, both clamps, the 10 Hz rate and the reversal rule are used as
+  the gains, the clamps, the 10 Hz rate and the reversal rule are used as
   written, with the six numbers read from the car's cfg (`part_config` parses the
-  line; AI cars ship five numbers, which leaves `gain_dir` at zero). Two
-  quantities do not map one-to-one and are marked in the code: the measure is
-  the car's speed (so the cfg band reads in m/s -- with the shipped `help 1.0`,
-  which is `java.util.Config.player_steeringhelp`, the help is full at 30 m/s and
-  absent below 1 m/s; the listing's weighted lateral grip cannot be turned into
-  units without the running game), and `dir` is the body slip angle in radians,
-  extrapolated. The slider is read every frame, so it stays live even though the
-  cfg line loads after the options. Effect at 100 km/h with `help 1.0`: the held
-  lock is halved and
-  the slide adds counter-steer, so a 48 deg slide with the driver holding 0.42
-  of lock takes the wheels back to straight (`[steer] ... slide=0.835
-  req=-0.416 tgt=0.001`). The angle is never amplified: an earlier reading of the
-  blend (which grew the axis by 1.5) pinned full lock in the first corner of the
-  bench and was discarded.
+  line; AI cars ship five numbers, which leaves `gain_dir` at zero). The slider
+  is read every frame, so it stays live even though the cfg line loads after the
+  options.
+- **Two mapping choices, both marked in the code** (the listing's own units do not
+  survive the port): the measure is the lateral acceleration of the turn in
+  hundredths of a g, measured from `v * yaw_rate`, so `lo 1` .. `hi 30` reads
+  0.01 .. 0.3 g; and `dir` is the body slip angle in radians, extrapolated
+  (`2b - b_prev`). The counter-steer is half the slide, multiplied by the blend
+  twice over, so a firm corner adds almost nothing while a real slide is caught.
+- **Two dead ends, kept here so they are not repeated:**
+  * measuring the blend by *speed* pinned it to 1 above 30 m/s, so the
+    counter-steer fought every corner: a held 0.30 axis at 60 km/h drove the axis
+    to -0.11 and the slide to -0.42 rad, i.e. it steered the car into a spin;
+  * mapping the counter-steer 1:1 to the slip angle (`beta/max_steer`) made the
+    loop oscillate: the axis swung to full lock one way and back, which is the
+    driver's "1>;B05B 87 AB>@>=K 2 AB>@>=C, G5< 2KH5 A:>@>ABL - B5< 1>;LH5 H0=A>2
+    =0 @072>@>B".
+- **Effect:** a straight line gets no help (blend 0), a 0.1 g corner blends about
+  a third and keeps ~85% of the held lock, a 0.3 g corner halves the lock and only
+  a real slide gets counter-steer. The knob for feel is the car's `steerhelp`
+  line: the third number (`min`) sets the lock left at full blend, the second
+  (`hi`) how much grip is needed for full help, the sixth (`gain_dir`) scales the
+  counter-steer.
 - **Switches:** `SLRR_STEER_LEGACY=1` keeps the old invented curvature cap for an
-  A/B; `SLRR_STEER_TRACE=1` prints `[steer] v req axis tgt a slide slip help
-  cfg...` every 20 frames.
+  A/B; `SLRR_STEER_TRACE=1` prints `[steer] v req axis tgt a slide slip lat_g
+  help cfg...` every 20 frames. `--bench-drive` without `--bench-route` accepts
+  `SLRR_BENCH_STEER=<axis>` with `SLRR_BENCH_STEER_FROM=<s>` / `_TO=<s>` for a
+  reproducible step or pulse.
 - **Tests:** vehicle_dynamics 39/39, drive_faithful 18/18, physics_recovery 8/8,
-  road_routes 6/6; the bench route reaches 58.8 km/h and completes.
-- **Status:** awaiting driver verification (does it feel assisted, and does the
-  car stagger on the slalom). The remaining unknowns are the units of the
-  listing's measure and of `dir`; both need a live read of the retail game
+  road_routes 6/6; the ValoCity route reaches 57.9 km/h, holds 16 m/s to the end
+  and the trace's slide stays at 0.004 rad on the straights.
+- **Status:** awaiting driver verification. The remaining unknowns are the units of
+  the listing's measure and of `dir`; both need a live read of the retail game
   (`rea/live_read.ps1`) with `gearbox+0xA20`, `car+0x12BC..+0x12D0`, `+0x2128`
   and `+0x1F58` sampled while driving.
 
