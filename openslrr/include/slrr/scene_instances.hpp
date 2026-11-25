@@ -89,7 +89,11 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
 // (amber), bottom (green), which is how the shipped model lays them out.
 struct SignalHead {
   float position[3] = {0.f, 0.f, 0.f};
-  float yaw = 0.f;
+  // The prop's own draw transform at this placement: placement pose times the
+  // render slot's pose, before the world-space Z mirror the renderer applies.
+  // The lamp faces travel through it, so a model whose pivot is offset from the
+  // placement point still gets its glow on the lens.
+  float frame[16] = {};
   uint32_t type = 0;
   // Lamp k covers [x0, x1] x [y0, y1] on the plane z = plane_z. Empty when the
   // type's mesh did not resolve, which leaves the head drawn but not lit.

@@ -43,7 +43,10 @@ void LibBgfxBackend::draw_signal_glow(uint16_t view_id) {
     signal_glow_color(phase, tint);
     // Every prop is drawn with its Z mirrored; these faces are too.
     bgfx::setTransform(nullptr);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LEQUAL |
+    // The scene projection is reversed (near = 1, far = 0), so "closer wins"
+    // is GEQUAL here, not LEQUAL. With the normal test the lamps showed
+    // through buildings and vanished behind the very housing they light.
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_GEQUAL |
                    BGFX_STATE_BLEND_ADD);
     bgfx::setVertexBuffer(0, glow_vb_, starts[phase] / 5, (ends[phase] - starts[phase]) / 5);
     bgfx::setUniform(u_glow_params_, tint);

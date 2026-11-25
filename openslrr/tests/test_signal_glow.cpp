@@ -5,6 +5,7 @@
 
 #include "slrr/gameref.hpp"
 #include "slrr/object.hpp"
+#include "slrr/part_config.hpp"
 #include "slrr/race_runtime.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
@@ -101,6 +102,27 @@ float mean_corner(const std::vector<float>& vertices, size_t start, size_t count
   return sum / static_cast<float>(count);
 }
 
+// A prop is drawn as S*M*S*v: the mesh point is mirrored, the placement pose
+// applies, and the result is mirrored again. The engine's own pose matrix is
+// the only reference that can catch a sign in the wrong half of that sandwich.
+// A prop is drawn as (S*M*S)*(S*v) = S*(M*v): see the mirror sandwich in
+// scene_instances_collect_batches. The lamp face is then lifted a centimetre
+// along that same normal so the reversed depth buffer keeps it in front.
+std::array<float, 3> drawn_point(const float* m, float x, float y, float z) {
+  const float v[3] = {x, y, z};
+  std::array<float, 3> out{};
+  for (int r = 0; r < 3; ++r)
+    out[static_cast<size_t>(r)] =
+        m[r] * v[0] + m[4 + r] * v[1] + m[8 + r] * v[2] + m[12 + r];
+  out[2] = -out[2];
+  const float normal[3] = {m[8], m[9], -m[10]};
+  const float length =
+      std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+  if (length > 1e-6f)
+    for (int r = 0; r < 3; ++r) out[static_cast<size_t>(r)] += normal[r] * .01f / length;
+  return out;
+}
+
 }  // namespace
 
 SLRR_TEST(the_head_model_yields_three_lamp_faces_in_red_amber_green_order) {
@@ -155,15 +177,20 @@ SLRR_TEST(the_phase_lights_its_own_face_on_the_head) {
         const float value = mesh.vertices[i * 5 + axis];
         SLRR_REQUIRE(std::isfinite(value));
       }
+    // The face lands on the lens the renderer would draw: the box centre of
+    // that lamp, through the head's own draw transform.
+    const float box_cx = (head.lamp[lamp][0] + head.lamp[lamp][1]) * .5f;
+    const float box_cy = (head.lamp[lamp][2] + head.lamp[lamp][3]) * .5f;
+    const auto want = drawn_point(head.frame, box_cx, box_cy, head.plane_z);
+    const float x = mean_corner(mesh.vertices, 0, 6, 0);
     const float y = mean_corner(mesh.vertices, 0, 6, 1);
     const float z = mean_corner(mesh.vertices, 0, 6, 2);
-    const float x = mean_corner(mesh.vertices, 0, 6, 0);
-    const float face = (head.lamp[lamp][2] + head.lamp[lamp][3]) * .5f;
-    std::printf("[glow] t=%.2f lamp %d y %.3f (face %.3f)\n", seconds, lamp,
-                double(y), double(face));
-    SLRR_REQUIRE(std::fabs(y - (at[1] + face)) < .01f);
-    SLRR_REQUIRE(std::fabs(x - at[0]) < .01f);
-    SLRR_REQUIRE(std::fabs(z + (at[2] + head.plane_z)) < .01f);
+    std::printf("[glow] t=%.2f lamp %d at %.3f,%.3f,%.3f (want %.3f,%.3f,%.3f)\n",
+                seconds, lamp, double(x), double(y), double(z), double(want[0]),
+                double(want[1]), double(want[2]));
+    SLRR_REQUIRE(std::fabs(x - want[0]) < 1e-3f);
+    SLRR_REQUIRE(std::fabs(y - want[1]) < 1e-3f);
+    SLRR_REQUIRE(std::fabs(z - want[2]) < 1e-3f);
   };
   check(red, 0);
   check(amber, 1);
@@ -177,40 +204,38 @@ SLRR_TEST(the_head_turns_with_its_placement_yaw) {
   const RoadPoint at = fixture_signal.position;
   const double red = seconds_for(*f.graph, fixture_signal.crossing, fixture_signal.branch, 0);
   SLRR_REQUIRE(red >= 0);
-  const float plane_z = place_one_head(f, at, 0.f).plane_z;
-  signal_glow_update(*f.graph, red);
-  const auto& flat = signal_glow_mesh();
-  SLRR_REQUIRE(!flat.vertices.empty());
-  const size_t count = flat.vertices.size() / 5;
-  float flat_x0 = 1e9f, flat_x1 = -1e9f, flat_z0 = 1e9f, flat_z1 = -1e9f;
-  for (size_t i = 0; i < count; ++i) {
-    flat_x0 = std::min(flat_x0, flat.vertices[i * 5]);
-    flat_x1 = std::max(flat_x1, flat.vertices[i * 5]);
-    flat_z0 = std::min(flat_z0, flat.vertices[i * 5 + 2]);
-    flat_z1 = std::max(flat_z1, flat.vertices[i * 5 + 2]);
+  // Two poses, and for each one every corner of the lit face is compared with
+  // the point the renderer would draw for that same corner of the model.
+  for (const float yaw : {0.f, 1.5707963f, .7f}) {
+    const SignalHead& head = place_one_head(f, at, yaw);
+    SLRR_REQUIRE(head.lit);
+    signal_glow_update(*f.graph, red);
+    const auto& mesh = signal_glow_mesh();
+    SLRR_REQUIRE(mesh.vertices.size() == 30);
+    const float* box = head.lamp[0];  // red is the face lit at `red`
+    const float plane = head.plane_z;
+    const std::array<std::array<float, 3>, 4> want = {
+        drawn_point(head.frame, box[0], box[2], plane),
+        drawn_point(head.frame, box[1], box[2], plane),
+        drawn_point(head.frame, box[1], box[3], plane),
+        drawn_point(head.frame, box[0], box[3], plane),
+    };
+    for (size_t i = 0; i < 6; ++i) {
+      const float got[3] = {mesh.vertices[i * 5], mesh.vertices[i * 5 + 1],
+                            mesh.vertices[i * 5 + 2]};
+      // The quad repeats the first corner twice, so a vertex matches when it
+      // sits on any wanted corner.
+      bool hit = false;
+      for (const auto& w : want)
+        hit = hit || (std::fabs(got[0] - w[0]) < 1e-3f &&
+                      std::fabs(got[1] - w[1]) < 1e-3f &&
+                      std::fabs(got[2] - w[2]) < 1e-3f);
+      if (!hit)
+        std::printf("[glow] yaw %.3f vertex %zu at %.3f,%.3f,%.3f\n", double(yaw), i,
+                    double(got[0]), double(got[1]), double(got[2]));
+      SLRR_REQUIRE(hit);
+    }
   }
-  place_one_head(f, at, 1.5707963f);
-  signal_glow_update(*f.graph, red);
-  const auto& turned = signal_glow_mesh();
-  SLRR_REQUIRE(turned.vertices.size() == flat.vertices.size());
-  float x0 = 1e9f, x1 = -1e9f, z0 = 1e9f, z1 = -1e9f;
-  for (size_t i = 0; i < count; ++i) {
-    x0 = std::min(x0, turned.vertices[i * 5]);
-    x1 = std::max(x1, turned.vertices[i * 5]);
-    z0 = std::min(z0, turned.vertices[i * 5 + 2]);
-    z1 = std::max(z1, turned.vertices[i * 5 + 2]);
-  }
-  std::printf("[glow] yaw 0: x %.2f..%.2f z %.2f..%.2f\n", double(flat_x0), double(flat_x1),
-              double(flat_z0), double(flat_z1));
-  std::printf("[glow] yaw 90: x %.2f..%.2f z %.2f..%.2f\n", double(x0), double(x1),
-              double(z0), double(z1));
-  // A quarter turn trades the face's width and depth, and centres stay put.
-  SLRR_REQUIRE(x1 - x0 < flat_x1 - flat_x0 - .2f);
-  SLRR_REQUIRE(z1 - z0 > flat_z1 - flat_z0 + .2f);
-  // The face sits a few centimetres in front of the post, so a quarter turn
-  // moves the centre by that offset and nothing else.
-  const float flat_centre = (flat_x0 + flat_x1) * .5f;
-  SLRR_REQUIRE(std::fabs((x0 + x1) * .5f - flat_centre) <= plane_z + .01f);
 }
 
 int main() {

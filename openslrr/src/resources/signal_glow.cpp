@@ -86,15 +86,27 @@ void signal_glow_update(const RoadRoutes& graph, double seconds) {
           {box[1], box[3], head.plane_z},
           {box[0], box[3], head.plane_z},
       };
-      const float cy = std::cos(head.yaw), sy = std::sin(head.yaw);
       float corners[4][3];
+      // The batch builder hands the renderer S*M*S and uploads the mesh as S*v
+      // (scene_instances.cpp, "(col == 2) != (row == 2)"), so a model point
+      // lands at S*(M*v). Writing S*M*S*v put the face one lens-depth on the
+      // wrong side of the glass, where its own housing hid it.
+      const float* m = head.frame;
       for (int i = 0; i < 4; ++i) {
-        const float x = local[i][0], y = local[i][1], z = local[i][2];
-        // The placement pose's Y rotation, then the prop space's mirrored Z.
-        corners[i][0] = head.position[0] + cy * x + sy * z;
-        corners[i][1] = head.position[1] + y;
-        corners[i][2] = -(head.position[2] - sy * x + cy * z);
+        const float* v = local[i];
+        for (int r = 0; r < 3; ++r)
+          corners[i][r] = m[r] * v[0] + m[4 + r] * v[1] + m[8 + r] * v[2] + m[12 + r];
+        corners[i][2] = -corners[i][2];
       }
+      // Lift the face a centimetre along the lens normal, which is the model's
+      // +Z carried through the same mirror. Reversed depth means a face even a
+      // millimetre behind the glass is rejected, and the lamps vanish.
+      const float normal[3] = {m[8], m[9], -m[10]};
+      const float length = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] +
+                                     normal[2] * normal[2]);
+      const float step = length > 1e-6f ? .01f / length : 0.f;
+      for (int i = 0; i < 4; ++i)
+        for (int r = 0; r < 3; ++r) corners[i][r] += normal[r] * step;
       append_face(phase[lamp], corners);
     }
   }

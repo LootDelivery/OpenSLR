@@ -146,6 +146,10 @@ std::unordered_map<uint32_t, NativeCollisionData> g_native_collision;
 // head type, so one model is measured once and every placement reuses it.
 std::vector<SignalHead> g_signal_heads;
 std::unordered_map<uint32_t, SignalHead> g_signal_shapes;
+// The render slot whose mesh supplied the lamp faces, relative to the placement
+// pose. The shipped lamp is drawn 1 m along its own X, so a face placed at the
+// bare placement point misses the lens by exactly that much.
+std::unordered_map<uint32_t, PartMatrix> g_signal_frames;
 bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out);
 const NativeCollisionData& native_collision_data(
     const RpkIndex& rpk, uint32_t type, const PartConfig* parsed = nullptr);
@@ -759,6 +763,7 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_ground_props.clear();
   g_signal_heads.clear();
   g_signal_shapes.clear();
+g_signal_frames.clear();
   scene_ambience_reset();
   g_pending_dormant.clear();
   g_live_dormant.clear();
@@ -2602,27 +2607,39 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
         auto [shape, unseen] = g_signal_shapes.try_emplace(placement.type);
         if (unseen) {
           shape->second.type = placement.type;
+          // The slot that supplied the faces also supplies the pose they are
+          // drawn with; the lamp model's pivot is a metre away from it.
+          PartMatrix used_frame = part_pose_matrix({});
           for (const auto& render : type->second.renders) {
             auto mesh = geometry(render.resource);
-            if (mesh && signal_head_panels(*mesh, shape->second)) break;
-            for (const uint32_t variant : render.variants) {
-              mesh = geometry(variant);
-              if (mesh && signal_head_panels(*mesh, shape->second)) break;
+            if (!mesh || !signal_head_panels(*mesh, shape->second))
+              for (const uint32_t variant : render.variants) {
+                mesh = geometry(variant);
+                if (mesh && signal_head_panels(*mesh, shape->second)) break;
+              }
+            if (shape->second.lit) {
+              used_frame = part_pose_matrix(render.pose);
+              break;
             }
-            if (shape->second.lit) break;
           }
+          if (shape->second.lit) g_signal_frames[placement.type] = used_frame;
         }
       }
     }
+    const auto pose = part_pose_matrix({placement.position, placement.rotation});
     if (type->second.native_kind == "trlight") {
       const auto shape = g_signal_shapes.find(placement.type);
       SignalHead lamp = shape != g_signal_shapes.end() ? shape->second : SignalHead{};
       lamp.type = placement.type;
       for (int axis = 0; axis < 3; ++axis) lamp.position[axis] = placement.position[axis];
-      lamp.yaw = placement.rotation[0];
+      // The same transform the render slot draws this placement with.
+      const auto frame = g_signal_frames.find(placement.type);
+      const PartMatrix draw = frame != g_signal_frames.end()
+                                  ? part_matrix_multiply(pose, frame->second)
+                                  : pose;
+      for (int i = 0; i < 16; ++i) lamp.frame[i] = draw[static_cast<size_t>(i)];
       g_signal_heads.push_back(lamp);
     }
-    const auto pose = part_pose_matrix({placement.position, placement.rotation});
     const auto& collision = native_collision_data(*g_resources, placement.type,
                                                   &type->second);
     const auto& p = placement.position;
