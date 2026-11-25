@@ -783,7 +783,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       // space is x right, y DOWN (top = -1, see the ortho), so the panel's +y
       // (up) is a negative step. Position comes from here, not from the config
       // line (all four ship 0,0,0) nor from position_scale (world meshes).
-      constexpr float kLedX = .739f, kLedSx = .00245f;
+      constexpr float kLedX = .812f, kLedSx = .00245f;
       constexpr float kLedY = 1.f, kLedSy = .0031f;
       draw(*mesh, 0, count, indices.data(), indices.size(), kLedX, kLedY,
            kLedSx, -kLedSy, 0, 0, 0, 0xffffffffu);
