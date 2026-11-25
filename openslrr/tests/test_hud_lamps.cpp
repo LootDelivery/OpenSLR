@@ -99,16 +99,17 @@ SLRR_TEST(the_lamp_row_lands_along_the_bottom_right_corner) {
     const auto geo =
         scene_instances_geometry(rpk_resolve_resource("cars.rpk", lamp.id));
     SLRR_REQUIRE(geo && geo->info.ok);
-    // Screen space: the panel corner is (1, -1) in clip space.
+    // OSD clip space is x right, y down: the panel corner is (1, 1) -- the
+    // bottom-right of the screen -- and the panel's +y steps upwards.
     const float left = 1.f + geo->info.bbox_min[0] * sx;
     const float right = 1.f + geo->info.bbox_max[0] * sx;
-    const float bottom = -1.f + geo->info.bbox_min[1] * sy;
-    const float top = -1.f + geo->info.bbox_max[1] * sy;
+    const float bottom = 1.f - geo->info.bbox_min[1] * sy;
+    const float top = 1.f - geo->info.bbox_max[1] * sy;
     std::printf("[lamps] %s x %.3f..%.3f  y %.3f..%.3f\n", lamp.alias,
                 double(left), double(right), double(bottom), double(top));
-    // Right of centre, bottom edge, four icons in a row.
+    // Right of centre, on the bottom edge, four icons in a row.
     SLRR_REQUIRE(left > .15f && right < .45f);
-    SLRR_REQUIRE(bottom > -1.f && top < -.9f);
+    SLRR_REQUIRE(bottom <= 1.f && top > .9f && bottom > top);
     SLRR_REQUIRE(right - left > .03f && right - left < .05f);
     SLRR_REQUIRE(left > previous);
     previous = left;

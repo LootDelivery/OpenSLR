@@ -257,9 +257,10 @@ look at, so the check takes a minute rather than a session.
 - **The lamps live in the panel's pixel space, anchored to the bottom-right
   corner of the screen.** `newosd` (0x55) spans x -502..0, y 0..99.2; the LED
   quads are 26x17 px at x -499.19 (ABS) / -471.85 (ASR) / -444.89 (HB) /
-  -416.80 (ER), y 0.69..17.42. So clip `x = 1 + px*(2/1280)`,
-  `y = -1 + py*(2/768)`: the row covers 61..70% of the width along the bottom
-  edge, four icons left to right -- exactly the row the driver sees.
+  -416.80 (ER), y 0.69..17.42. OSD clip space is x right, y **down** (top =
+  -1, from the ortho in `draw_osd`), so `x = 1 + px*(2/1280)`,
+  `y = 1 - py*(2/768)`: the row covers 61..70% of the width along the bottom
+  edge, four icons left to right.
 - **What was broken in the port, twice over.** The name table knew only
   `osd_hbrake` of the four lamps; a `0xFFFFFFFF` id became resource 0, which
   `draw_vehicle_hud` skipped on its first line; and the LED quads were drawn
@@ -269,8 +270,8 @@ look at, so the check takes a minute rather than a session.
   (0x61 / 0x62 / 0x63 for HB), a dedicated panel-space draw, and
   `VehicleHudState::abs/asr` fed from `drive.abs_active/asr_active`.
 - **Regression test:** `test_hud_lamps` pins the three ids, the atlas and the
-  clip-space row (`x 0.220..0.346`, `y -0.998..-0.955`), so the rows cannot
-  drift off screen again without a failing test.
+  clip-space row (`x 0.220..0.346`, `y 0.955..0.998` -- bottom edge), so the
+  row cannot drift off screen again without a failing test.
 - **Status:** closed. The lamps are drawn only while their aid intervenes,
   which is the original rule: ASR on a hard launch, ABS only on a locking
   wheel (stock cars also ship `abs 0`).

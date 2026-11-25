@@ -777,12 +777,13 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       // to the bottom-right corner of the screen: the newosd panel spans
       // x -502..0, y 0..99.2, and the row sits at x -499.19 (ABS) -471.85
       // (ASR) -444.89 (HB) -416.80 (ER), y 0.69..17.42 -- 26 x 17 px icons,
-      // i.e. 61..70% of the width along the bottom edge. So x = 1 + px*(2/W),
-      // y = -1 + py*(2/H) for the 1280x768 panel: a fraction of the viewport,
-      // not the config position (0,0) and not the mesh position_scale, which
-      // belongs to world meshes.
-      draw(*mesh, 0, count, indices.data(), indices.size(), 1.f, -1.f,
-           2.f / 1280.f, 2.f / 768.f, 0, 0, 0, 0xffffffffu);
+      // i.e. 61..70% of the width along the bottom edge. OSD clip space is
+      // x right, y DOWN (top = -1, see the ortho above), so the bottom edge is
+      // +1 and the panel's +y (up) is a negative step: x = 1 + px*(2/1280),
+      // y = 1 - py*(2/768). Not the config position (0,0) and not the mesh
+      // position_scale, which belongs to world meshes.
+      draw(*mesh, 0, count, indices.data(), indices.size(), 1.f, 1.f,
+           2.f / 1280.f, -2.f / 768.f, 0, 0, 0, 0xffffffffu);
       continue;
     }
     const float yscale = override.defined ? -.82f : -.406f * stock_scale;
