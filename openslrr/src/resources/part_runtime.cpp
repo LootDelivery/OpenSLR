@@ -2579,7 +2579,16 @@ void update_steering_help(Record &rec, bool controls) {
       body.center.y - (fw[0].center.y - fw[0].radius);
   const double track = std::abs(double(fw[0].center.x) - double(fw[1].center.x));
   const double roll_threshold = track / (2. * std::max(.05, cg_height));
+  // Body tilt against the world: up-in-body (x = roll around the
+  // longitudinal axis, z = pitch). On a corner this is the roll the
+  // anti-roll question is about -- see DRV-11.
+  const auto world_up_body = body.orientation.inverse_rotate(
+      physics::Vec3{0., 1., 0.});
+  const double roll_deg = std::atan2(world_up_body.x, world_up_body.y) * 57.29578;
+  const double pitch_deg = std::atan2(world_up_body.z, world_up_body.y) * 57.29578;
   if (std::getenv("SLRR_STEER_TRACE")) {
+    static const bool dump_pacejka = std::getenv("SLRR_DUMP_PACEJKA") != nullptr;
+    const bool SLRR_DUMP_PACEJKA = dump_pacejka;
     static const unsigned long every = [] {
       const char *e = std::getenv("SLRR_STEER_TRACE_EVERY");
       const double n = e ? std::atof(e) : 0.;
@@ -2592,7 +2601,8 @@ void update_steering_help(Record &rec, bool controls) {
                    "ld=%.2f mu=%.2f use=%.2f "
                    "slide=%.3f slip=%.3f as=%.2f du=%.2f lat_g=%.2f help=%.3f cfg=%.2f %.2f %.2f %.2f %.2f "
                    "%.2f h=%.2f tr=%.2f thr=%.2f wb=%.2f iy=%.0f "
-                   "l=%.0f/%.0f/%.0f/%.0f st=%.1f/%.1f/%.1f/%.1f wy=%.3f y=%.3f vy=%.2f\n",
+                   "l=%.0f/%.0f/%.0f/%.0f st=%.1f/%.1f/%.1f/%.1f wy=%.3f y=%.3f vy=%.2f "
+                   "rl=%.2f pi=%.2f\n",
                    forward_speed * 3.6, static_cast<double>(steer),
                    static_cast<double>(axis), static_cast<double>(target), blend,
                    speed, load_sum / (mass * 9.81),
@@ -2612,7 +2622,7 @@ void update_steering_help(Record &rec, bool controls) {
                    rec.dynamics.drive.wheels[1].steer * 57.29578,
                    rec.dynamics.drive.wheels[2].steer * 57.29578,
                    rec.dynamics.drive.wheels[3].steer * 57.29578, body.omega().y,
-                   body.position.y, body.velocity.y);
+                   body.position.y, body.velocity.y, roll_deg, pitch_deg);
       // Per-wheel probe for the tyre comparison: the force the model actually
       // put on the car against what the recovered law gives for the same
       // load, road speed and lateral speed. A gap is a pipeline fault, not a
@@ -2631,6 +2641,13 @@ void update_steering_help(Record &rec, bool controls) {
         const double law_s = physics::tire_scale(s.force, 1., w.tyre);
         const auto law = physics::tire_forces(s.force, 1., s.spin * radius,
                                               road, s.lateral_speed, w.tyre);
+        if (i == 0 && SLRR_DUMP_PACEJKA) {
+          std::fprintf(stderr, "[pacejka] ");
+          for (size_t k = 0; k < 11; ++k)
+            std::fprintf(stderr, "%.4g ", w.tyre.pacejka[k]);
+          std::fprintf(stderr, " sliction=%.4g friction=%.4g stiffness=%.4g maxload=%.0f\n",
+                       w.tyre.sliction, w.tyre.friction, w.tyre.stiffness, w.tyre.maximum_load);
+        }
         std::fprintf(stderr,
                      "[tyre] w%zu l=%.0f road=%.2f lat=%.3f slip=%.4f "
                      "ang=%.4f tan=%.4f s=%.0f F=%.0f/%.0f law=%.0f/%.0f\n",
