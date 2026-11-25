@@ -86,6 +86,9 @@ struct Record {
   unsigned deformation_upload_ticks = 0;
   float steering_input = 0;
   float steering_request = 0, steering_correction = 0;
+  // car+0x1F58: the steering help's memory of the previous frame's direction
+  // term. FUN_0044E690 grows it into `dir = 2*v - v_prev` before the blend.
+  float steering_dir_prev = 0;
   float steering_help = 0, abs_strength = 0, launch_help = 0;
   int transmission = 1;
   uint64_t driving_options_revision = 0;
@@ -2405,30 +2408,128 @@ void update_steering_legacy(Record &rec, bool controls) {
   rec.steering_correction = std::lerp(rec.steering_correction, correction, alpha);
 }
 
-// `steerhelp <f>` (`Vehicle.setSteeringHelp`) and the car's own
-// `steerhelp 1.0 ...` resource line both write `gearbox+0xA20` (`FUN_00458c00`).
-// That field IS read: 0x44EDEE/0x44EE72/0x44EEB3 divide the wheel's lateral slip
-// by it, in a block that Ghidra's listing shows as orphaned code (no function),
-// so this law still has to be recovered by hand. Until it is ported, the old
-// behaviour stays the default; `SLRR_STEER_FAITHFUL=1` runs the unrestricted
-// axis, which is what the driver reports as "assistant off".
+// The steering help of FUN_0044E690 (retail 606) -- the function Ghidra never
+// defined; it was found by scanning .text for car+0x12BC and gearbox+0xA20.
+// The car's own `steerhelp` line is the whole parameter block:
+//   +0x12BC lo   +0x12C0 hi   +0x12C4 min
+//   +0x12C8 gain_angle       +0x12CC clamp   +0x12D0 gain_dir
+// and gearbox+0xA20 (`steerhelp <f>`, the driving-options slider) scales the
+// measure the blend is built from. In the listing's order:
+//
+//   a   = clamp((measure*help - lo) / (hi - lo), 0, 1)   0x44ECxx
+//   dir = 2*v - v_prev; car+0x1F58 keeps v               0x44ED06..0x44ED1A
+//   tgt = (angle*gain_angle + (axis - dir)*gain_dir)*a
+//         + (1 - (1-min)*a)*axis                          0x44ED1C..0x44ED40
+//   axis = clamp(tgt, -1, 1)                             0x44ED44..0x44ED5A
+//   axis += (clamped - axis) * min(1, dt*10)             0x44ED5C..0x44ED70
+//   if (axis*old < 0) axis *= min(1, |old|*0.5/|axis|)   0x44ED72..0x44ED94
+//
+// The gate (`help > 0 && +0x12C0 > 0`) is used as written. Two quantities do
+// not map one-to-one, so they are mapped here and marked as such:
+//  * the measure is the car's speed, so the cfg band 1..30 reads in m/s with
+//    the slider scaling it (`help 0.666` -> full help at 45 m/s). The listing
+//    builds it from a weighted lateral grip; that value is not recoverable to
+//    units without the running game, and a force band of 1..30 N would pin the
+//    blend to 1 in every corner (the first port attempt did exactly that and
+//    held full lock, 0x44ED40).
+//  * `dir` is the body slip angle in radians, extrapolated (2b - b_prev), and
+//    the counter-steer is applied in radians before the axis clamp; the exe
+//    takes `v` off a wheel rigid body, whose frame we do not reproduce.
+// The blend therefore reduces the held lock and adds counter-steer, never more
+// than the axis it was asked for -- the sign the driver reported missing.
+void update_steering_help(Record &rec, bool controls) {
+  auto &in = host_input();
+  const float steer = controls ? std::clamp(in.drive_steer, -1.f, 1.f) : 0.f;
+  rec.steering_request = steer;
+  rec.steering_correction = 0.f;
+  const auto &cfg = rec.config->steerhelp;
+  // The original has one field here (gearbox+0xA20): the car's `steerhelp` line
+  // writes it at part load and the player's `steerhelp <f>` command (the
+  // options slider) writes it when the car is handed over, so the slider wins.
+  // In this port the cfg load runs after the options are applied, which would
+  // make the slider inert, so the options value is read directly -- it is the
+  // same number the script's setDefaultSteeringHelp passes.
+  const float help = std::clamp(host_game_options().driving.steering_help, 0.f, 1.f);
+  const float max_steer = std::max(.01f, rec.config->max_steer);
+  const auto &body = rec.dynamics.body;
+  const auto local = body.orientation.inverse_rotate(body.velocity);
+  const double forward_speed = -local.z;
+  const double speed = std::max(0., forward_speed);
+  const double slide =
+      forward_speed > .5 ? -std::atan2(local.x, forward_speed) : 0.;
+  const double dir = 2 * slide - rec.steering_dir_prev;
+  rec.steering_dir_prev = static_cast<float>(slide);
+
+  // Mean tyre slip angle over the loaded wheels (`angle` term).
+  double weight = 0, angle = 0;
+  for (size_t i = 0; i < rec.dynamics.state.size(); ++i) {
+    const auto &s = rec.dynamics.state[i];
+    if (!s.contact || s.force <= 0 || i >= rec.dynamics.drive.wheels.size())
+      continue;
+    const double reference =
+        std::max(1., rec.dynamics.drive.wheels[i].tyre.maximum_load);
+    const double w = std::clamp(s.force / reference, 0., 1.);
+    if (w <= 0.) continue;
+    // |angle| > pi/2 zeroes the term (0x44ED2C); otherwise the +-clamp.
+    const double slip_angle = s.slip_state.angle;
+    weight += w;
+    angle += (std::abs(slip_angle) <= 1.5707963
+                  ? std::clamp(slip_angle, -static_cast<double>(cfg[4]),
+                               static_cast<double>(cfg[4]))
+                  : 0.) * w;
+  }
+
+  double blend = 0;
+  if (help > 0 && cfg[1] > 0) {
+    const double lo = cfg[0], hi = cfg[1];
+    const double measure = speed * help;
+    if (measure > lo)
+      blend = std::clamp((measure - lo) / std::max(1e-6, hi - lo), 0., 1.);
+  }
+  const double min_lock = std::clamp(static_cast<double>(cfg[2]), 0., 1.);
+  const double slip_angle = weight > 0 ? angle / weight : 0.;
+  const double requested = static_cast<double>(steer) * max_steer *
+                           (1. - (1. - min_lock) * blend);
+  const double assist =
+      blend * (slip_angle * cfg[3] + dir * cfg[5]);
+  const float target = static_cast<float>(
+      std::clamp((requested + assist) / max_steer, -1., 1.));
+
+  const float before = rec.steering_input;
+  const float step = static_cast<float>(10. / physics::VehicleDynamics::update_frequency);
+  float axis = before + (target - before) * step;
+  if (axis * before < 0.f) {
+    // A reversal only carries half the travel (0x005F09D0).
+    axis *= std::min(1.f, std::abs(before) * .5f / std::max(1e-6f, std::abs(axis)));
+  }
+  rec.steering_input = axis;
+  if (std::getenv("SLRR_STEER_TRACE")) {
+    static unsigned long ticks = 0;
+    if (++ticks % 20 == 0)
+      std::fprintf(stderr,
+                   "[steer] v=%.1f req=%.3f axis=%.3f tgt=%.3f a=%.2f "
+                   "slide=%.3f slip=%.3f help=%.3f cfg=%.2f %.2f %.2f %.2f %.2f "
+                   "%.2f\n",
+                   forward_speed * 3.6, static_cast<double>(steer),
+                   static_cast<double>(axis), static_cast<double>(target), blend,
+                   slide, slip_angle, static_cast<double>(help),
+                   static_cast<double>(cfg[0]), static_cast<double>(cfg[1]),
+                   static_cast<double>(cfg[2]), static_cast<double>(cfg[3]),
+                   static_cast<double>(cfg[4]), static_cast<double>(cfg[5]));
+  }
+}
+
 void update_steering(Record &rec, bool controls) {
-  // Temporary: the faithful path is behind a switch until the recovered law below
-  // is ported; the old behaviour stays the default so the car is drivable.
-  static const bool legacy = std::getenv("SLRR_STEER_FAITHFUL") == nullptr;
+  // The recovered law is the default now; `SLRR_STEER_LEGACY=1` keeps the old
+  // invented curvature cap for an A/B.
+  static const bool legacy = std::getenv("SLRR_STEER_LEGACY") != nullptr;
   if (legacy) {
     update_steering_legacy(rec, controls);
     return;
   }
-  const auto &in = host_input();
-  const float steer = controls ? std::clamp(in.drive_steer, -1.f, 1.f) : 0.f;
-  rec.steering_request = steer;
-  const float max_steer = std::max(.01f, rec.config->max_steer);
-  constexpr float hand_rate = 2.f;  // rad/s of hand travel at full lock
-  const float max_delta = hand_rate / (max_steer * physics::VehicleDynamics::update_frequency);
-  rec.steering_input += std::clamp(steer - rec.steering_input, -max_delta, max_delta);
-  rec.steering_correction = 0.f;
+  update_steering_help(rec, controls);
 }
+
 void configure_drive(Object *chassis, Record &rec, bool controlled) {
   // Chassis.updatevariables: C_drag = fully_stripped_drag minus the
   // drag_reduction of every installed body part, floored at zero. The EXE

@@ -157,6 +157,13 @@ struct PartConfig {
   float shifter[3] = {};
   std::vector<PartPose> wheels;
   float max_steer = .6f, ackermann_length = 0;
+  // The car's `steerhelp <lo> <hi> <min> <angle_gain> <clamp> <speed_gain>`
+  // resource line, in that order. Retail parses it with `%f %f %f %f %f %f`
+  // (key "steerhelp" at 0x0060FDE8, handler 0x004460A0) into car+0x12BC,
+  // +0x12C0, +0x12C4, +0x12C8, +0x12CC, +0x12D0, and FUN_0044E690 reads the
+  // block as the whole law. All zero is the EXE's constructor default, which
+  // disables the help (the guard is `+0x12C0 > 0`).
+  std::array<float, 6> steerhelp{};
   std::vector<PartPose> cameras;
   float brake_power = 1000.f, handbrake_power = 2000.f;
   float brake_inertia = 50.f;

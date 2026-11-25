@@ -562,40 +562,60 @@ look at, so the check takes a minute rather than a session.
   at ~0 rad/s for more than ~0.1 s.
 
 ### DRV-1 Poor steering at speed
-- **Symptom:** the car barely turns at high speed ("поворачиваемость говно").
-- **What the original does (recovered 2026-11-26):** nothing. The slider
-  (`Config.player_steeringhelp`, default 0.666) reaches the car through
-  `Vehicle.setDefaultSteeringHelp` -> `setSteeringHelp` -> a queued
-  `steerhelp <value>` command (`Vehicle.java:199`), and both that command and
-  the car's own `steerhelp 1.0 30.0 0.5 0.0 1.57 1.0` resource line
-  (`FUN_00458c00:751`) write one field, `gearbox+0xA20`, parsed with a single
-  `%*s %f` so only the first number is ever read. That field has no consumer:
-  the only two references to `0xA20` in all 4393 decompiled functions are the
-  writer and its `> 0` guard. `steerhelp_turn` (`_DAT_0063c7a8`) is likewise
-  written by the config reader and read by nothing.
-- **The exe's only yaw aid is ESP, and it is dead in retail:**
-  `FUN_0044e2d0` computes a slip/yaw error from `esp_steer_scale` and
-  `esp_angvel_scale`, compares it with `esp_yaw_allowed`, then brakes individual
-  wheels (`wheel+0xFC`, 0..1 through `esp_brake_level`) and cuts the throttle by
-  `esp_power_level` into `car+0x1DB4`. Its gate is `0.001 < gearbox+0xA30` =
-  `1/esp`, `+0xA30` is written only by the `esp` resource line, and **no shipped
-  car cfg has an `esp` line**, so the gate never opens. There is no script
-  setter for it either (`setASR`/`setABS` exist, `setESP` does not). So the
-  original ships with ABS and ASR only; the wheel angle follows the axis with no
-  speed limit.
-- **The port had invented the sailor it was accused of:** `update_steering`
-  capped the requested angle at 0.85 g of lateral acceleration
-  (`atan(wb*0.85g/(v^2*help))`) and added a slide-alignment correction. The cap
-  left 25 deg of 37 at 30 km/h, 6.7 at 60, 3.8 at 80 and 2.4 at 100 (a 62 m
-  radius), which is exactly the reported feel. The keyboard-only gate
-  (`drive_steer_analog`) is why no bench ever showed it: the route drives with
-  the analog path, where the cap was already off.
-- **Fix (`501d61cf`):** the axis reaches the wheels unchanged; only the hand
-  rate is bounded (2 rad/s at full lock, ~0.33 s to lock, no speed-dependent
-  damping), and the slide correction is gone. `SLRR_STEER_LEGACY=1` restores
-  the old law for A/B. Tests unchanged: vehicle_dynamics 39/39, drive_faithful
-  18/18, physics_tick_rate 6/9 (the same three rows red at HEAD).
-- **Status:** awaiting driver verification (does it now turn at speed?).
+- **Symptom:** the car barely turns at high speed ("?>2>@0G8205<>ABL 3>2=>"),
+  and removing the port's invented cap made it worse: ":0: 1C4B> ?><>I=8:
+  >B:;NG5= ... =5B 02B><0B8G5A:>9 AB018;870F88, B0A:05B ?@8 ?>2>@>B0E".
+- **Correction (2026-11-26):** the earlier claim in this file -- that
+  `gearbox+0xA20` has no consumer and the original ships no steering help --
+  was **wrong**. It came from the 4393-function decompiled set, and the consumer
+  is in code Ghidra never defined as a function (`0x0044E690`, body 0x0E41,
+  absent from that set). Scanning `.text` for the field offset finds the real
+  readers at `0x44EDEE` (`d9 81 20 0a 00 00` = `fld [ecx+0xa20]`), `0x44EE72`
+  (`d9 80 20 0a 00 00`) and `0x44EEB3` (`d8 b7 20 0a 00 00` = `fdiv
+  [edi+0xa20]`). Absence from the decomp set is not evidence of absence.
+- **The law (`FUN_0044E690`):** the car's own `steerhelp` line is the whole
+  parameter block, not one number. The file parser's table entry `steerhelp`
+  (`0x0060FDE8` -> handler `0x004460A0`, format `%f %f %f %f %f %f`) fills
+  `car+0x12BC lo`, `+0x12C0 hi`, `+0x12C4 min`, `+0x12C8 gain_angle`,
+  `+0x12CC clamp`, `+0x12D0 gain_dir`; the script command
+  `steerhelp <f>` (the options slider, `Config.player_steeringhelp`) writes
+  `gearbox+0xA20` and *scales the measure the blend is built from*. The gate is
+  `help > 0 && car+0x12C0 > 0` (both zero in the EXE's constructor, so a car
+  without the line gets no help), and then:
+  `a = clamp((measure*help - lo)/(hi - lo), 0, 1)`;
+  `dir = 2*v - v_prev` (memory in `car+0x1F58`);
+  `tgt = (angle*gain_angle + (axis - dir)*gain_dir)*a + (1-(1-min)*a)*axis`;
+  `axis = clamp(tgt,-1,1)`, then `axis += (axis - before)*min(1, dt*10)`, and a
+  sign reversal keeps only `|before|*0.5` of the travel. The `angle` term is the
+  mean wheel slip angle (zero outside +-pi/2, clamped to `+-clamp`); `dir` comes
+  from a wheel rigid body's velocity.
+- **Port (`update_steering_help`, default):** the gate, the band shape, `min`,
+  both gains, both clamps, the 10 Hz rate and the reversal rule are used as
+  written, with the six numbers read from the car's cfg (`part_config` parses the
+  line; AI cars ship five numbers, which leaves `gain_dir` at zero). Two
+  quantities do not map one-to-one and are marked in the code: the measure is
+  the car's speed (so the cfg band reads in m/s -- with the shipped `help 1.0`,
+  which is `java.util.Config.player_steeringhelp`, the help is full at 30 m/s and
+  absent below 1 m/s; the listing's weighted lateral grip cannot be turned into
+  units without the running game), and `dir` is the body slip angle in radians,
+  extrapolated. The slider is read every frame, so it stays live even though the
+  cfg line loads after the options. Effect at 100 km/h with `help 1.0`: the held
+  lock is halved and
+  the slide adds counter-steer, so a 48 deg slide with the driver holding 0.42
+  of lock takes the wheels back to straight (`[steer] ... slide=0.835
+  req=-0.416 tgt=0.001`). The angle is never amplified: an earlier reading of the
+  blend (which grew the axis by 1.5) pinned full lock in the first corner of the
+  bench and was discarded.
+- **Switches:** `SLRR_STEER_LEGACY=1` keeps the old invented curvature cap for an
+  A/B; `SLRR_STEER_TRACE=1` prints `[steer] v req axis tgt a slide slip help
+  cfg...` every 20 frames.
+- **Tests:** vehicle_dynamics 39/39, drive_faithful 18/18, physics_recovery 8/8,
+  road_routes 6/6; the bench route reaches 58.8 km/h and completes.
+- **Status:** awaiting driver verification (does it feel assisted, and does the
+  car stagger on the slalom). The remaining unknowns are the units of the
+  listing's measure and of `dir`; both need a live read of the retail game
+  (`rea/live_read.ps1`) with `gearbox+0xA20`, `car+0x12BC..+0x12D0`, `+0x2128`
+  and `+0x1F58` sampled while driving.
 
 ### DRV-2 Bench drive has no route
 - **Symptom:** `--bench-drive` holds full throttle straight; the car crashes

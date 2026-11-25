@@ -316,6 +316,13 @@ PartConfig parse_part_config(const std::string &source,
         }
         out.wheel_springs.push_back(spec);
         open_wheel = static_cast<int>(out.wheels.size()) - 1;
+      } else if (command == "steerhelp") {
+        // `<lo> <hi> <min> <angle_gain> <clamp> <speed_gain>`. AI cars ship five
+        // numbers (no speed_gain), so a short line leaves the rest at zero, as
+        // the retail parser does when its format string runs out of fields.
+        open_wheel = -1;
+        for (size_t i = 0; i < out.steerhelp.size() && i + 1 < t.size(); ++i)
+          out.steerhelp[i] = number(t, i + 1);
       } else if (command == "maxsteer") {
         open_wheel = -1;
         out.max_steer = number(t, 1);
