@@ -6,6 +6,10 @@ Question: this tree was downloaded at one upstream state. What has the author do
 on top of that state, which of it do we need, and which do we not. The traffic
 work is already integrated here, but not necessarily completely.
 
+**State:** §1-§8 audit `17115433` -> `d661d250`; §9 adds the seventeen merges
+after that, up to `d13e7102` (2026-11-24), each with a verdict. The short
+answer for this tree's open defects is in §9: none of them was fixed upstream.
+
 ## 0. Answer to "does `UPSTREAM_INTEGRATION.md` cover the whole difference"
 
 No. It is a registry of upstream changes that were **considered**: nine blocks
@@ -363,3 +367,40 @@ furthest.
 | 324 | 2026-11-22 | `978ec4c2` | 8 | #324 Pan traffic engines, vary them per car and play native sfx_loop radios |
 | 349 | 2026-11-23 | `614eef1c` | 4 | PR #349 bug/348-gps-frame-above-map |
 | 215 | 2026-11-23 | `d661d250` | 39 | PR #215 spike/203/continue-physics-tick-8e669f8bf2dc |
+
+## 9. Since the audit: `d661d250` -> `d13e7102` (2026-11-24)
+
+Seventeen first-parent merges, 462 files, +499 695 / -6 550 lines -- of which
+nearly all of the additions are `assets/validation/` captures (webp frames of
+shadows and perf runs), not code. Read against the same question: does any of
+it change a defect this tree has open.
+
+| PR | commit | files | change | verdict |
+|---|---|---|---|---|
+| [#387](https://github.com/EliasFD3S/openslrr/pull/388) | `d13e7102` | 3 | patch deployment before launch | **rejected** -- `scripts/` and the `patch/` tree, which this port does not use |
+| [#385](https://github.com/EliasFD3S/openslrr/pull/386) | `1cb657bd` | 16 | FMOD -> SDL3_mixer | **rejected** -- this host never linked FMOD; audio is XAudio2 (`host_sfx`) |
+| [#383](https://github.com/EliasFD3S/openslrr/pull/384) | `3c5eced6` | 21 | one combined-slip tyre, keyboard steering window, STEERING SPEED SENS. | **rejected as a port, kept as a reference.** Their tyre is a Magic Formula with a 1.15x peak on script friction, i.e. a *new* law; ours is the recovered original. Their steering window (speed-dependent turn-in, follows the slide for countersteer) is the only upstream answer to DRV-1, but it is written against their tyre and input path |
+| [#380](https://github.com/EliasFD3S/openslrr/pull/382) | `73edc68e` | 29 | physics at 1000 Hz, `docs/vehicles/physics-tick.md` | **deferred.** A tick architecture of theirs (it continues #215). Our 0-100 4.15 s / 228 km/h / slide-residual measurements are tied to the recovered tick; adopting this invalidates them, and no defect asks for it |
+| [#377](https://github.com/EliasFD3S/openslrr/pull/379) | `2414751c` | 146 | native options dialog, `src/ui`, `patch/system` | **deferred.** Needs the `patch/` assembly and their UI registry; our options live in `host_game_options` and the stock scripts |
+| [#376](https://github.com/EliasFD3S/openslrr/pull/376) | `5b0a0a83` | 4 | doc drift | **none** -- docs |
+| [#374](https://github.com/EliasFD3S/openslrr/pull/374), [#372](https://github.com/EliasFD3S/openslrr/pull/372), [#370](https://github.com/EliasFD3S/openslrr/pull/370), [#369](https://github.com/EliasFD3S/openslrr/pull/369), [#368](https://github.com/EliasFD3S/openslrr/pull/368), [#367](https://github.com/EliasFD3S/openslrr/pull/367), [#366](https://github.com/EliasFD3S/openslrr/pull/366), [#365](https://github.com/EliasFD3S/openslrr/pull/365) | `62846edf`...`5ef33268` | 15-54 each | sun cascades on workers, collect cache, cascade alternation, occlusion spike, GPU pass timing, shadow flicker | **rejected.** Their shadow/cascade tree does not exist here; the lines are validation captures, the code is `src/render/bgfx_*` of a renderer we replaced |
+| [#373](https://github.com/EliasFD3S/openslrr/pull/373) | `597f0287` | 1 | AO pass cost note | **none** -- doc |
+| [#364](https://github.com/EliasFD3S/openslrr/pull/364) | `3512fc48` | 31 | perf baseline harness (`scripts/perf_baseline.ps1`) | **needs a look** -- a measurement harness, not engine code; useful if PERF-2 is ever attacked |
+| [#357](https://github.com/EliasFD3S/openslrr/pull/357) | `25d8fd72` | 45 | docs regroup (`docs/core`, `docs/rendering`, ...) | **none** -- docs, but the paths moved: references to upstream docs from here must use the new layout |
+
+### What it does *not* contain
+
+- **DRV-6 (camera does not return):** upstream has no camera code. `git grep`
+  over `src/` for a chase camera finds nothing on either side, so the auto-return
+  is stock Java in `system/Scripts` and would have to be restored there, not
+  ported from upstream.
+- **UI-3 (part condition icons):** no upstream commit touches part icons; the
+  icons in this build are the stock ones drawn by our OSD path.
+- **DRV-4 / DRV-5 (wheel rotation on part attach / clutch toggle):** nothing
+  upstream; both are still our own defects.
+- **Traffic light glow:** untouched upstream (its traffic work is #305-style
+  scaling, not signal heads), so the open item in `BACKLOG.md` is ours to
+  finish.
+
+So the answer to "has the author fixed these already" is no for every one of
+them, and the only overlap is DRV-1 through #383, on physics that is not ours.
