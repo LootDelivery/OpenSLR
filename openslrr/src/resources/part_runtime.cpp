@@ -2457,8 +2457,16 @@ void update_steering_help(Record &rec, bool controls) {
   const double speed = std::max(0., forward_speed);
   const double slide =
       forward_speed > .5 ? -std::atan2(local.x, forward_speed) : 0.;
-  const double dir = 2 * slide - rec.steering_dir_prev;
-  rec.steering_dir_prev = static_cast<float>(slide);
+  // `dir` is a fraction of the lock, not an angle. The recovered form adds it to
+  // the axis (`tgt = (axis - dir)*gain_dir + ...`) and a player car's `gain_dir`
+  // is 1.0, so a radian-valued slide pins the wheel at full counter-lock: with
+  // the old radian measure a 40-degree slide already clamped the axis to -1
+  // regardless of what the driver asked for. sin(slide) is the lateral share of
+  // the body velocity, which is what a wheel body's projection measures, and it
+  // saturates at 90 degrees -- the exe's own memory is `2*v - v_prev`.
+  const double slip_unit = std::sin(std::clamp(slide, -1.5707963, 1.5707963));
+  const double dir = std::clamp(2 * slip_unit - rec.steering_dir_prev, -1., 1.);
+  rec.steering_dir_prev = static_cast<float>(slip_unit);
 
   // Mean tyre slip angle over the loaded wheels (`angle` term), and the lateral
   // acceleration of the turn in hundredths of a g -- the grip the car is using,
@@ -2517,16 +2525,20 @@ void update_steering_help(Record &rec, bool controls) {
   const double blend = std::max(blend_speed, blend_grip);
   const double min_lock = std::clamp(static_cast<double>(cfg[2]), 0., 1.);
   const double slip_angle = weight > 0 ? angle / weight : 0.;
-  const double requested = static_cast<double>(steer) * max_steer *
-                           (1. - (1. - min_lock) * blend_speed);
-  // Counter-steer: the blend twice over, so a firm corner adds almost nothing
-  // while a real slide gets half of the slide angle. The 0.5 is a mapping, not a
-  // recovery -- the exe's `dir` is a projection of a wheel body's velocity and
-  // its units do not survive the port -- and `gain_dir` scales it.
+  // Everything below is in axis units, i.e. a fraction of the lock: the driver's
+  // own input, with the speed band cutting it towards `min`.
+  const double requested =
+      static_cast<double>(steer) * (1. - (1. - min_lock) * blend_speed);
+  // Counter-steer: at most half a lock at 90 degrees of slide, blended twice over
+  // so a firm corner adds almost nothing and proportional in between. The 0.5 is
+  // a mapping, not a recovery (the exe's `dir` units do not survive the port) and
+  // `gain_dir` scales it. The `angle` term is the mean wheel slip angle over the
+  // lock, so both terms share the axis's units.
+  const double angle_unit = std::clamp(slip_angle / max_steer, -1., 1.);
   const double assist =
-      blend * slip_angle * cfg[3] + blend * blend * dir * cfg[5] * 0.5;
-  const float target = static_cast<float>(
-      std::clamp((requested + assist) / max_steer, -1., 1.));
+      blend * angle_unit * cfg[3] + blend * blend * dir * cfg[5] * 0.5;
+  const float target =
+      static_cast<float>(std::clamp(requested + assist, -1., 1.));
 
   const float before = rec.steering_input;
   const float step = static_cast<float>(10. / physics::VehicleDynamics::update_frequency);
@@ -2552,18 +2564,20 @@ void update_steering_help(Record &rec, bool controls) {
       std::fprintf(stderr,
                    "[steer] v=%.1f req=%.3f axis=%.3f tgt=%.3f a=%.2f sp=%.2f "
                    "ld=%.2f mu=%.2f use=%.2f "
-                   "slide=%.3f slip=%.3f lat_g=%.2f help=%.3f cfg=%.2f %.2f %.2f %.2f %.2f "
-                   "%.2f h=%.2f tr=%.2f thr=%.2f\n",
+                   "slide=%.3f slip=%.3f as=%.2f du=%.2f lat_g=%.2f help=%.3f cfg=%.2f %.2f %.2f %.2f %.2f "
+                   "%.2f h=%.2f tr=%.2f thr=%.2f bx=%.2f bz=%.2f iy=%.0f\n",
                    forward_speed * 3.6, static_cast<double>(steer),
                    static_cast<double>(axis), static_cast<double>(target), blend,
                    blend_speed, load_sum / (mass * 9.81),
                    load_sum > 0 ? cap_lat / load_sum : 0.,
                    cap_lat > 0 ? used_lat / cap_lat : 0.,
-                   slide, slip_angle, lateral_g, static_cast<double>(help),
+                   slide, slip_angle, assist, dir, lateral_g,
+                   static_cast<double>(help),
                    static_cast<double>(cfg[0]), static_cast<double>(cfg[1]),
                    static_cast<double>(cfg[2]), static_cast<double>(cfg[3]),
                    static_cast<double>(cfg[4]), static_cast<double>(cfg[5]), cg_height,
-                   track, roll_threshold);
+                   track, roll_threshold, body.maximum.x - body.minimum.x,
+                   body.maximum.z - body.minimum.z, body.inertia().y);
   }
 }
 

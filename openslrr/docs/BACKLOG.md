@@ -690,6 +690,50 @@ Trace fields, in order: `v req axis tgt a sp ld mu use slide slip lat_g help cfg
 -- `a` and `sp` are the two blends (grip, speed), `ld` the load sum over
 `mass*g`, `mu` the peak lateral per unit load, `use` the share of it in use, and
 `h tr thr` the tip geometry above.
+#### 2026-11-25 -- the drift is sharp: two causes, both measured
+
+The driver: "В оригинале я на 100 км/ч закидываю задницу на 90 градусов и машина
+скользит. И в опенслр тоже так. Только в оригинале я машиной могу управлять в это
+время, я могу перекладываться, она не резкая, она плавная. А в опенслр она резкая,
+она дёргается и скорее всего она развернётся." Two separate defects:
+
+1. **The counter-steer was in the wrong units.** The recovered form adds `dir` to
+   the axis (`tgt = (axis - dir)*gain_dir + ...`) and a player car's `gain_dir` is
+   1.0, so `dir` is a *fraction of the lock*. The port fed it the body slip angle
+   in radians: at a 40-degree slide `dir` was -1.4, the term alone was -0.7 rad
+   against a 0.58 rad lock, and the axis pinned itself at full counter-lock no
+   matter what the driver asked for. That is the "дёргается": the wheel slams
+   across, the reversal rule keeps half of the travel, and the car snaps the other
+   way. `dir` is now `sin(slide)` extrapolated (`2v - v_prev`, still the exe's
+   memory), so it saturates at 90 degrees and the counter-steer is at most half a
+   lock, blended twice over. Measured on the fixed-steer run: at a 71-degree slide
+   the assist is -0.48 of a lock and the axis is 0.45, i.e. the driver's input
+   survives.
+2. **The yaw inertia was 1.5x too small.** `RigidBody::configure` used a solid box
+   of 0.75 times the bounds, which is 0.56 of the box once squared. Measured on the
+   Baiern: bounds 1.73 x 4.21 m, yaw inertia 1481 kg m2, where a plain box over the
+   same bounds gives 2244 and a real 1300 kg car sits at 1800-2500. A flick rotated
+   the tail about 1.5x faster than the geometry allows. The 0.75 was host tuning
+   and is now a plain box.
+
+A/B on the same bench flick (full lock for 0.8 s at ~71 km/h, `SLRR_BENCH_STEER=`,
+`--bench-drive`):
+
+| after the flick | before | after |
+| --- | --- | --- |
+| body slip at +1 s | -0.11 rad | -0.04 rad |
+| body slip at +2 s | -0.41 | -0.17 |
+| body slip at +3 s | -0.60 | -0.29 |
+| end of the run | -1.24 rad (spun), 17 km/h | -0.51 rad, 55 km/h |
+
+The car still slides (that is the point), but the slide builds over seconds instead
+of tenths and costs half the speed instead of all of it. Neither change touches the
+tyre law or the recovered constants; both were mappings the port had guessed.
+
+**Test note:** `test_physics_tick_rate` reports 6 passed, 3 failed (its tests 3, 6
+and 9). It is not these changes: the same three fail on the same peaks (7049 rpm)
+with the old inertia restored, and they date from `adc6e518` (DRV-7, the recovered
+EC). vehicle_dynamics 39/39, drive_faithful 18/18.
 ### DRV-2 Bench drive has no route
 - **Symptom:** `--bench-drive` holds full throttle straight; the car crashes
   into a tree minutes into the run, so long runs are not reproducible.

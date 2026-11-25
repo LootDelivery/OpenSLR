@@ -53,10 +53,15 @@ void RigidBody::configure(double kilograms, Vec3 lo, Vec3 hi, Vec3 com) {
   maximum = hi;
   center = com;
 
-  // Les masses d'une voiture sont concentrées dans l'empattement et la voie,
-  // pas dans les porte-à-faux ni le pavillon. Un facteur ~0.75 sur les dimensions
-  // évite de surestimer l'inertie en lacet et en tangage.
-  Vec3 s = (hi - lo) * 0.75;
+  // A uniform box over the authored bounds. This used to be 0.75 of the
+  // dimensions, which is 0.56 of the box once squared; on the Baiern that put
+  // the yaw inertia at 1481 kg m2 where a plain box over its own 1.73 x 4.21 m
+  // bounds gives 2244, against 1800-2500 for a real 1300 kg car. The 0.75 was
+  // host tuning, and it is what made the tail rotate about 1.5x faster than the
+  // geometry allows: on a 70 km/h flick the box value grows the slide to 0.29 rad
+  // instead of 0.41 and keeps 55 km/h instead of 17. The exe's own tensor is not
+  // recovered; a plain box is the honest baseline.
+  Vec3 s = hi - lo;
   inverse_inertia_ = {12.0 / (mass * (s.y * s.y + s.z * s.z)),
                       12.0 / (mass * (s.x * s.x + s.z * s.z)),
                       12.0 / (mass * (s.x * s.x + s.y * s.y))};
