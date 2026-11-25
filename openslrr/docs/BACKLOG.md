@@ -613,25 +613,34 @@ look at, so the check takes a minute rather than a session.
   is read every frame, so it stays live even though the cfg line loads after the
   options.
 - **Two mapping choices, both marked in the code** (the listing's own units do not
-  survive the port): the measure is the lateral acceleration of the turn in
-  hundredths of a g, measured from `v * yaw_rate`, so `lo 1` .. `hi 30` reads
-  0.01 .. 0.3 g; and `dir` is the body slip angle in radians, extrapolated
-  (`2b - b_prev`). The counter-steer is half the slide, multiplied by the blend
-  twice over, so a firm corner adds almost nothing while a real slide is caught.
+  survive the port):
+  * the cfg band `lo 1` .. `hi 30` is read twice and the two blends are combined
+    with `max()`. As speed in m/s it is the sharpness control -- the `min`
+    fraction is all the lock left at full help -- and as grip (hundredths of a g,
+    from `v * yaw rate`) it decides when a slide is caught. The speed term is open
+    loop, so it cannot oscillate; the counter-steer stays slide-triggered, which
+    is what stopped it fighting the driver.
+  * `dir` is the body slip angle in radians, extrapolated (`2b - b_prev`). The
+    counter-steer is half the slide, multiplied by the blend twice over, so a firm
+    corner adds almost nothing while a real slide is caught.
+- **What the driver feels** (cfg `1 30 0.5`, slider 100%): a quarter of the lock is
+  gone by 30 km/h, a third by 60, half by 120; at 150 km/h the front wheels answer
+  with 50% of the input, and the counter-steer catches a slide on top of that.
+  With the slider at 0.666 (the fallback) the full cut arrives at 162 km/h and
+  150 km/h keeps 54%.
 - **Two dead ends, kept here so they are not repeated:**
-  * measuring the blend by *speed* pinned it to 1 above 30 m/s, so the
-    counter-steer fought every corner: a held 0.30 axis at 60 km/h drove the axis
-    to -0.11 and the slide to -0.42 rad, i.e. it steered the car into a spin;
+  * measuring the blend by *speed alone* and feeding the counter-steer 1:1: a held
+    0.30 axis at 60 km/h drove the axis to -0.11 and the slide to -0.42 rad, i.e.
+    the assist steered the car into a spin;
   * mapping the counter-steer 1:1 to the slip angle (`beta/max_steer`) made the
-    loop oscillate: the axis swung to full lock one way and back, which is the
-    driver's "1>;B05B 87 AB>@>=K 2 AB>@>=C, G5< 2KH5 A:>@>ABL - B5< 1>;LH5 H0=A>2
-    =0 @072>@>B".
-- **Effect:** a straight line gets no help (blend 0), a 0.1 g corner blends about
-  a third and keeps ~85% of the held lock, a 0.3 g corner halves the lock and only
-  a real slide gets counter-steer. The knob for feel is the car's `steerhelp`
-  line: the third number (`min`) sets the lock left at full blend, the second
-  (`hi`) how much grip is needed for full help, the sixth (`gain_dir`) scales the
-  counter-steer.
+    loop oscillate -- the axis swung to full lock one way and back, the driver's
+    "болтает из стороны в сторону, чем выше скорость - тем больше шансов на
+    разворот".
+- **Effect:** a straight line gets no help (blend 0 at rest), a firm corner blends
+  the grip term in, and a real slide gets counter-steer. The knob for feel is the
+  car's `steerhelp` line: the third number (`min`) is the lock left at full help
+  (lower = calmer, 1.0 disables the cut), the second (`hi`) how much speed or grip
+  is needed for full help, the sixth (`gain_dir`) scales the counter-steer.
 - **Switches:** `SLRR_STEER_LEGACY=1` keeps the old invented curvature cap for an
   A/B; `SLRR_STEER_TRACE=1` prints `[steer] v req axis tgt a slide slip lat_g
   help cfg...` every 20 frames. `--bench-drive` without `--bench-route` accepts

@@ -2484,22 +2484,35 @@ void update_steering_help(Record &rec, bool controls) {
   const double lateral_g =
       std::abs(forward_speed) * std::abs(body.omega().y) / 9.81 * 100.;
 
-  // The blend follows that grip, so `lo 1` .. `hi 30` reads 0.01 .. 0.3 g and the
-  // slider scales the window: a straight line gets no help at all, a firm corner
-  // blends it in. A speed measure instead pinned the blend to 1 above 30 m/s and
-  // the counter-steer then fought every corner -- with a held 0.30 axis at
-  // 60 km/h the axis was driven to -0.11 and the slide to -0.42 rad, a spin.
-  double blend = 0;
-  if (help > 0 && cfg[1] > 0) {
-    const double lo = cfg[0], hi = cfg[1];
-    const double measure = lateral_g * help;
-    if (measure > lo)
-      blend = std::clamp((measure - lo) / std::max(1e-6, hi - lo), 0., 1.);
-  }
+  // Two readings of the one cfg band (`lo 1` .. `hi 30`, scaled by the slider):
+  //
+  //  * as speed in m/s, it is the sharpness control -- the `min` fraction is all
+  //    the lock left at full help, so a powerful rear-drive car stops answering
+  //    1:1 at 150 km/h. This is the term the driver asked for ("=0 A:>@>AB8
+  //    <0H8=0 >G5=L @57:0O"), and it is open loop, so it cannot oscillate.
+  //  * as grip in hundredths of a g, it decides when a slide gets caught.
+  //
+  // They are combined with max(): the sharpness cut at speed, and the catch only
+  // when the car is actually using its grip. Feeding either measure alone into a
+  // 1:1 counter-steer fights the driver -- measured: a held 0.30 axis at 60 km/h
+  // with a speed-only blend drove the axis to -0.11 and the slide to -0.42 rad.
+  auto band = [&](double measure) {
+    double value = 0;
+    if (help > 0 && cfg[1] > 0) {
+      const double lo = cfg[0], hi = cfg[1];
+      measure *= help;
+      if (measure > lo)
+        value = std::clamp((measure - lo) / std::max(1e-6, hi - lo), 0., 1.);
+    }
+    return value;
+  };
+  const double blend_speed = band(speed);
+  const double blend_grip = band(lateral_g);
+  const double blend = std::max(blend_speed, blend_grip);
   const double min_lock = std::clamp(static_cast<double>(cfg[2]), 0., 1.);
   const double slip_angle = weight > 0 ? angle / weight : 0.;
   const double requested = static_cast<double>(steer) * max_steer *
-                           (1. - (1. - min_lock) * blend);
+                           (1. - (1. - min_lock) * blend_speed);
   // Counter-steer: the blend twice over, so a firm corner adds almost nothing
   // while a real slide gets half of the slide angle. The 0.5 is a mapping, not a
   // recovery -- the exe's `dir` is a projection of a wheel body's velocity and
@@ -2521,11 +2534,12 @@ void update_steering_help(Record &rec, bool controls) {
     static unsigned long ticks = 0;
     if (++ticks % 20 == 0)
       std::fprintf(stderr,
-                   "[steer] v=%.1f req=%.3f axis=%.3f tgt=%.3f a=%.2f "
+                   "[steer] v=%.1f req=%.3f axis=%.3f tgt=%.3f a=%.2f sp=%.2f "
                    "slide=%.3f slip=%.3f lat_g=%.2f help=%.3f cfg=%.2f %.2f %.2f %.2f %.2f "
                    "%.2f\n",
                    forward_speed * 3.6, static_cast<double>(steer),
                    static_cast<double>(axis), static_cast<double>(target), blend,
+                   blend_speed,
                    slide, slip_angle, lateral_g, static_cast<double>(help),
                    static_cast<double>(cfg[0]), static_cast<double>(cfg[1]),
                    static_cast<double>(cfg[2]), static_cast<double>(cfg[3]),
