@@ -12,70 +12,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-#include <windows.h>
-#include <dbghelp.h>
-// Temporary crash reporter: resolves faulting address and stack frames
-// through the PDB next to the executable (DbgHelp).
-static LONG WINAPI slrr_crash_filter(EXCEPTION_POINTERS* ep) {
-  const DWORD64 fault =
-      reinterpret_cast<DWORD64>(ep->ExceptionRecord->ExceptionAddress);
-  std::fprintf(stderr, "[crash] code=0x%08lX\n",
-               (unsigned long)ep->ExceptionRecord->ExceptionCode);
-  // Also append to a file next to the executable: GUI launches have no
-  // console, and a crash report must survive the process dying.
-  char path[MAX_PATH] = {};
-  GetModuleFileNameA(nullptr, path, MAX_PATH);
-  if (char* dot = std::strrchr(path, '.')) *dot = 0;
-  std::strcat(path, "-crash.log");
-  std::FILE* log = std::fopen(path, "a");
-  auto out = [&](const char* fmt, auto... args) {
-    std::fprintf(stderr, fmt, args...);
-    if (log) std::fprintf(log, fmt, args...);
-  };
-  out("[crash] code=0x%08lX\n",
-      (unsigned long)ep->ExceptionRecord->ExceptionCode);
-  HANDLE proc = GetCurrentProcess();
-  const bool sym = SymInitialize(proc, nullptr, TRUE);
-  auto report = [&](DWORD64 addr) {
-    HMODULE mod = nullptr;
-    char name[MAX_PATH] = "?";
-    DWORD64 base = 0;
-    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           reinterpret_cast<LPCSTR>(addr), &mod)) {
-      GetModuleFileNameA(mod, name, MAX_PATH);
-      base = reinterpret_cast<DWORD64>(mod);
-      const char* slash = std::strrchr(name, '\\');
-      out("  %s+0x%llX", slash ? slash + 1 : name,
-          (unsigned long long)(addr - base));
-    } else {
-      out("  0x%llX", (unsigned long long)addr);
-    }
-    if (sym) {
-      char buf[sizeof(SYMBOL_INFO) + 256] = {};
-      SYMBOL_INFO* si = reinterpret_cast<SYMBOL_INFO*>(buf);
-      si->SizeOfStruct = sizeof(SYMBOL_INFO);
-      si->MaxNameLen = 255;
-      DWORD64 disp = 0;
-      if (SymFromAddr(proc, addr, &disp, si))
-        out("  %s+0x%llX", si->Name, (unsigned long long)disp);
-    }
-    out("\n");
-  };
-  report(fault);
-  void* trace[24];
-  const USHORT n = RtlCaptureStackBackTrace(0, 24, trace, nullptr);
-  for (USHORT i = 0; i < n; ++i)
-    report(reinterpret_cast<DWORD64>(trace[i]));
-  std::fflush(stderr);
-  if (log) std::fclose(log);
-  return EXCEPTION_CONTINUE_SEARCH;
-}
-#endif
+#include "slrr/crash_log.hpp"
 
 namespace {
 
@@ -88,6 +29,7 @@ void usage() {
       "  slrr_host --probe-pacejka\n"
       "  slrr_host --probe-dyno\n"
       "  slrr_host --probe-gc [--root DIR]\n"
+      "  slrr_host --crash-test\n"
       "  slrr_host --game [--root DIR] [--window] [--no-wait] [--auto-new]\n"
   "  slrr_host --root DIR --compile-scripts DIR [DIR...]\n"
       "           [--auto-cmd mainmenu|street|N]\n"
@@ -107,11 +49,8 @@ void usage() {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+static int run_host(int argc, char** argv) {
   using namespace slrr;
-#ifdef _WIN32
-  SetUnhandledExceptionFilter(slrr_crash_filter);
-#endif
   // Line-buffered stdout stalls a dialog on every log line. Keep a block
   // buffer; real failures still go to stderr.
   std::setvbuf(stdout, nullptr, _IOFBF, 1 << 16);
@@ -121,6 +60,7 @@ int main(int argc, char** argv) {
   bool want_dyno = false;
   bool want_game = false;
   bool want_gc = false;
+  bool want_crash_test = false;
   BootOptions opt;
   const char* root_arg = nullptr;
   std::vector<std::string> compile_dirs;
@@ -146,6 +86,10 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--probe-gc") == 0) {
       want_gc = true;
+      continue;
+    }
+    if (std::strcmp(a, "--crash-test") == 0) {
+      want_crash_test = true;
       continue;
     }
     if (std::strcmp(a, "--game") == 0) {
@@ -246,6 +190,18 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "unknown arg: %s\n", a);
     usage();
     return 1;
+  }
+
+  if (want_crash_test) {
+    // Diagnostic: prove the crash reporter end to end. Three events, then a
+    // fault, so the report has a ring to print and a stack to symbolise.
+    slrr::crash_note("crash-test: first event");
+    slrr::crash_note("crash-test: second event");
+    slrr::crash_note("crash-test: third event");
+    std::fprintf(stderr, "[crash-test] faulting on purpose\n");
+    std::fflush(stderr);
+    *(volatile int*)0 = 1;
+    return 0;
   }
 
   if (!want_probe && !want_game && !want_pacejka && !want_dyno && !want_gc &&
@@ -388,6 +344,23 @@ int main(int argc, char** argv) {
 
   if (want_probe && !want_game) return boot_probe(jvm, opt);
 
+
   auto render = create_render_backend(opt.render);
   return boot_game(jvm, *render, opt);
+}
+
+
+int main(int argc, char** argv) {
+  // Before anything else: a crash must leave a report behind, not a dialog.
+  slrr::install_crash_handlers("");
+  try {
+    return run_host(argc, argv);
+  } catch (const std::exception& e) {
+    slrr::crash_note((std::string("uncaught: ") + e.what()).c_str());
+    std::fprintf(stderr, "[crash] uncaught: %s\n", e.what());
+    throw;
+  } catch (...) {
+    slrr::crash_note("uncaught: non-std exception");
+    throw;
+  }
 }

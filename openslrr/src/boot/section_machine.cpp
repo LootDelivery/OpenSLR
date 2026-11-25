@@ -1,4 +1,5 @@
 #include "slrr/section_machine.hpp"
+#include "slrr/crash_log.hpp"
 #include "slrr/host_game_options.hpp"
 
 #include <cstdio>
@@ -130,6 +131,7 @@ void SectionMachine::change_active_section(Object* next) {
   Object* old = actual_;
   if (old) {
     std::printf("[section] exit %s\n", old->class_name.c_str());
+    crash_note(("section exit: " + old->class_name).c_str());
     call_lifecycle(jvm_, old, "exit", next);
     // Drop pending timers (tree-smoke Splash.addTimer must not fire later).
     if (jvm_)
@@ -143,6 +145,7 @@ void SectionMachine::change_active_section(Object* next) {
   std::printf("[section] actual=%s\n", actual_name_.c_str());
   if (actual_) {
     std::printf("[section] enter %s\n", actual_->class_name.c_str());
+    crash_note(("section enter: " + actual_->class_name).c_str());
     call_lifecycle(jvm_, actual_, "enter", old);
   }
 }

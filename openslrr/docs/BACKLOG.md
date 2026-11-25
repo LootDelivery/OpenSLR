@@ -20,10 +20,27 @@ Move fixed items to the bottom with the fixing commit.
   survives a scene, but only ever compared, never dereferenced),
   `frontend_scripts` cache (built once, affects a second game start, not
   transitions).
-- **Next:** ring log of transitions written unbuffered to disk, then a scene
-  unload hook; the log must land first so a new clean-up cannot hide the
-  cause.
-- **Status:** open.
+- **Crash log (done, `--crash-test` proves it):** an unhandled exception, a
+  terminate, a pure-call and an invalid CRT parameter now write
+  `build\Release\logs\crash-<date>-<time>-<pid>.log` plus a `.dmp` next to
+  it: exception code and address, already-symbolised stack with source lines
+  (the Release build now carries its PDB), the loaded modules, and the last 64
+  host events -- section exits/enters, the spawn. `slrr_host --crash-test`
+  faulting on purpose writes a report that resolves `run_host` to
+  `main.cpp:203`, which is the whole point: a stack of RVAs is useless after a
+  rebuild, and that is exactly what the old log was.
+- **What the old log already said:** `slrr_host-crash.log` from 2026-11-24
+  23:13 holds 11 entries -- one C++ `std::_Xout_of_range` and ten access
+  violations -- all raised from the same place: a recursive script/VM invoke
+  chain (`+0x1924FB` repeating) with nothing of ours below it. No PDB existed
+  for that build, so the names are gone for good; the shapes are not, and they
+  say the faulting code is reached through Java calls, not through a transition
+  hook -- which fits a use-after-GC or a stale object rather than a dangling
+  scene pointer.
+- **Next:** drive until it crashes, then read the report. The scene unload hook
+  comes after a signed report, not before: a new clean-up would hide the cause
+  it is supposed to fix.
+- **Status:** open; the crash log is in place, the cause is not.
 
 ### STB-2 Second spawn lands at a different point
 - **Symptom:** in ValoCity the player can spawn twice in a row; the first

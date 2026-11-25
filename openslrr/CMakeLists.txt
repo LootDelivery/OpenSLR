@@ -37,6 +37,7 @@ add_executable(slrr_host
   src/platform/game_root.cpp
   src/platform/frame_profiler.cpp
   src/platform/stack_sampler.cpp
+  src/platform/crash_log.cpp
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
@@ -130,6 +131,10 @@ target_include_directories(slrr_host PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_
 if(MSVC)
   target_compile_options(slrr_host PRIVATE /W3 /utf-8)
   target_compile_definitions(slrr_host PRIVATE _CRT_SECURE_NO_WARNINGS)
+  # Symbols in the shipped build: the crash reporter resolves frames through the
+  # PDB that sits next to the executable, and Release has none by default.
+  target_compile_options(slrr_host PRIVATE $<$<CONFIG:Release>:/Zi>)
+  target_link_options(slrr_host PRIVATE $<$<CONFIG:Release>:/DEBUG>)
 endif()
 
 if(WIN32)

@@ -1,4 +1,5 @@
 #include "slrr/boot.hpp"
+#include "slrr/crash_log.hpp"
 #include "slrr/frame_profiler.hpp"
 #include "slrr/stack_sampler.hpp"
 
@@ -425,6 +426,10 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     // the NEW CAREER dialog or writes a save as a side effect of spawning.
     sections.change_active_section(sections.garage());
     std::printf("[boot] spawned %s parts=%zu\n",opt.spawn_car.c_str(),part_installed_tree(car).size());
+    char note[160];
+    std::snprintf(note, sizeof note, "spawned %s parts=%zu",
+                  opt.spawn_car.c_str(), part_installed_tree(car).size());
+    crash_note(note);
   } else if (opt.auto_new) {
     std::fprintf(stderr,
                  "[boot] WARN --auto-new bypasses Splash→MainMenu (stock "
