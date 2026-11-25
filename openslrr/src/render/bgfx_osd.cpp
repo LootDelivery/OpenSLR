@@ -12,6 +12,8 @@
 #include "slrr/slrr_font.hpp"
 #include "slrr/slrr_localization.hpp"
 #include "slrr/video_fmv.hpp"
+#include "slrr/game_root.hpp"
+#include "slrr/hud_lamp_tuning.hpp"
 
 #include <bx/math.h>
 
@@ -19,12 +21,22 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+
+namespace {
+// Read once: <game root>/hud_lamps.txt holds the driver's nudge for the LED row.
+const slrr::HudLampTuning& hud_lamp_tuning() {
+  static const slrr::HudLampTuning tuning =
+      slrr::load_hud_lamp_tuning(slrr::find_game_root(nullptr));
+  return tuning;
+}
+}  // namespace
 
 namespace slrr {
 
@@ -783,10 +795,21 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       // space is x right, y DOWN (top = -1, see the ortho), so the panel's +y
       // (up) is a negative step. Position comes from here, not from the config
       // line (all four ship 0,0,0) nor from position_scale (world meshes).
-      constexpr float kLedX = .887f, kLedSx = .0026f;
-      constexpr float kLedY = 1.f, kLedSy = .0051f;
-      draw(*mesh, 0, count, indices.data(), indices.size(), kLedX, kLedY,
-           kLedSx, -kLedSy, 0, 0, 0, 0xffffffffu);
+      constexpr float kLedX = .647f, kLedSx = .00209f;
+      constexpr float kLedY = 1.f, kLedSy = .00463f;
+      // The cfg line carries the same three numbers every other osd_ command
+      // does -- x, y and scale (see "osd_gauge 0x00000000 -0.500 -1.050 1.0").
+      // The lamps ship zeros because the engine positions the stock LED itself,
+      // so a non-zero value is an offset the driver can tune without a rebuild:
+      // x moves right, y moves up, both in clip units (.01 is half a percent of
+      // the width), and scale multiplies the icon. Zero means "as measured".
+      const slrr::HudLampTuning& tune = hud_lamp_tuning();
+      const float dx = (override.defined ? item.position[0] : 0.f) + tune.dx;
+      const float dy = (override.defined ? item.position[1] : 0.f) + tune.dy;
+      const float scale = (override.defined && item.position[2] > 0.f
+                               ? item.position[2] : 1.f) * tune.scale;
+      draw(*mesh, 0, count, indices.data(), indices.size(), kLedX + dx,
+           kLedY - dy, kLedSx * scale, -kLedSy * scale, 0, 0, 0, 0xffffffffu);
       continue;
     }
     const float yscale = override.defined ? -.82f : -.406f * stock_scale;

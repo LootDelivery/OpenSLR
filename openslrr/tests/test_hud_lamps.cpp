@@ -5,6 +5,8 @@
 // that places the row in the bottom-right corner of the screen.
 #include "standalone_test.hpp"
 
+#include "slrr/game_root.hpp"
+#include "slrr/hud_lamp_tuning.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/scx_mesh.hpp"
@@ -63,8 +65,8 @@ constexpr Lamp kLamps[] = {{"led_ABS", 0x61, -499.19f},
 // frame of the shipped HUD, where the game paints the four unlit labels that
 // the lit icons have to cover. OSD clip space is y down, so the panel's +y
 // steps downwards.
-constexpr float kLedX = .887f, kLedSx = .0026f;
-constexpr float kLedY = 1.f, kLedSy = .0051f;
+constexpr float kLedX = .647f, kLedSx = .00209f;
+constexpr float kLedY = 1.f, kLedSy = .00463f;
 }  // namespace
 
 SLRR_TEST(lamps_resolve_to_the_panel_quads_with_the_panel_atlas) {
@@ -110,18 +112,55 @@ SLRR_TEST(the_lamp_row_lands_along_the_bottom_right_corner) {
                 double(left), double(right), double(bottom), double(top));
     // Left of centre, on the bottom edge, one lamp about a hundredth of the
     // height tall, three in a row without overlapping.
-    SLRR_REQUIRE(left > -.46f && right < -.18f);
-    SLRR_REQUIRE(bottom <= 1.f && top > .88f && bottom > top);
-    SLRR_REQUIRE(right - left > .065f && right - left < .075f);
-    SLRR_REQUIRE(left > previous + .05f);
+    SLRR_REQUIRE(left > -.44f && right < -.20f);
+    SLRR_REQUIRE(bottom <= 1.f && top > .9f && bottom > top);
+    SLRR_REQUIRE(right - left > .05f && right - left < .06f);
+    SLRR_REQUIRE(left > previous + .045f);
     previous = left;
   }
+}
+
+SLRR_TEST(hud_lamps_file_moves_the_row_without_a_rebuild) {
+  // The shipped line is the measured row, so it must change nothing.
+  const slrr::HudLampTuning base = slrr::parse_hud_lamp_tuning("0 0 1\n");
+  SLRR_REQUIRE(base.dx == 0.f && base.dy == 0.f && base.scale == 1.f);
+
+  // Comments are skipped, and the three numbers are dx, dy, scale.
+  const slrr::HudLampTuning moved = slrr::parse_hud_lamp_tuning(
+      "# move the row\r\n0.02 -0.03 1.25\r\n# trailing\r\n");
+  std::printf("[lamps] tuning dx %.3f dy %.3f scale %.3f\n", double(moved.dx),
+              double(moved.dy), double(moved.scale));
+  SLRR_REQUIRE(moved.dx > .019f && moved.dx < .021f);
+  SLRR_REQUIRE(moved.dy < -.029f && moved.dy > -.031f);
+  SLRR_REQUIRE(moved.scale > 1.24f && moved.scale < 1.26f);
+
+  // A half written or nonsense file keeps the measured row: a zero scale would
+  // collapse the icons and two numbers are not a placement.
+  const slrr::HudLampTuning partial =
+      slrr::parse_hud_lamp_tuning("0.02 0.03\n");
+  SLRR_REQUIRE(partial.dx == 0.f && partial.dy == 0.f && partial.scale == 1.f);
+  const slrr::HudLampTuning zero =
+      slrr::parse_hud_lamp_tuning("0.02 0.03 0\n");
+  SLRR_REQUIRE(zero.dx > .019f && zero.dy > .029f && zero.scale == 1.f);
+  SLRR_REQUIRE(!slrr::load_hud_lamp_tuning("Z:/no/such/dir").dx);
+}
+
+SLRR_TEST(the_shipped_lamp_file_is_the_one_the_game_reads) {
+  const std::string root = slrr::find_game_root(nullptr);
+  SLRR_REQUIRE(!root.empty());
+  const slrr::HudLampTuning shipped = slrr::load_hud_lamp_tuning(root);
+  std::printf("[lamps] root %s -> dx %.3f dy %.3f scale %.3f\n", root.c_str(),
+              double(shipped.dx), double(shipped.dy), double(shipped.scale));
+  // The file in the install is the measured row, so it must read as a no-op.
+  SLRR_REQUIRE(shipped.dx == 0.f && shipped.dy == 0.f && shipped.scale == 1.f);
 }
 
 int main() {
   const slrr::standalone::Test tests[] = {
       lamps_resolve_to_the_panel_quads_with_the_panel_atlas,
       the_lamp_row_lands_along_the_bottom_right_corner,
+      hud_lamps_file_moves_the_row_without_a_rebuild,
+      the_shipped_lamp_file_is_the_one_the_game_reads,
   };
   return slrr::standalone::run("hud_lamps", tests);
 }

@@ -274,8 +274,18 @@ look at, so the check takes a minute rather than a session.
   (0x61 / 0x62 / 0x63 for HB), a dedicated panel-space draw, and
   `VehicleHudState::abs/asr` fed from `drive.abs_active/asr_active`.
 - **Regression test:** `test_hud_lamps` pins the three ids, the atlas and the
-  clip-space row (`x -0.411..-0.202`, `y 0.911..0.996` -- bottom edge, over the
+  clip-space row (`x -0.396..-0.228`, `y 0.919..0.997` -- bottom edge, over the
   labels), so the row cannot drift off screen again without a failing test.
+- **Tuning without a rebuild:** the stock meshes are positioned by the engine, so
+  the cfg ships `osd_abs/asr/hbrake 0xFFFFFFFF 0 0 0` and there is nothing in the
+  car files to nudge. `<game root>/hud_lamps.txt` carries `dx dy scale` instead
+  (clip units: `dx` right, `dy` up, 0.01 is half a percent of the screen;
+  `scale` multiplies the icon), read once at start-up by
+  `slrr::load_hud_lamp_tuning` (`include/slrr/hud_lamp_tuning.hpp`), so the row
+  can be moved by editing one text file and restarting the game.
+  `rebuild_openslrr.bat` at the repo root closes the game, rebuilds
+  `slrr_host` and stops -- the game locks the exe, so a rebuild cannot happen
+  while it runs.
 - **Status:** closed. The lamps are drawn only while their aid intervenes,
   which is the original rule: ASR on a hard launch, ABS only on a locking
   wheel (stock cars also ship `abs 0`).
