@@ -811,7 +811,13 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
   // past 6000) and never shifted down at a standstill, because the engine was still
   // sitting on its stall speed: a stopped car stayed in second.
   const double ratio = drive.ratios[gear];
-  const double coupled_rpm = std::abs(road_shaft * ratio) * rpm_per_rad;
+  static const bool allow_spin_shift =
+      std::getenv("SLRR_GEAR_NOSPIN") != nullptr;
+  // TEST (DRV-12): with SLRR_GEAR_NOSPIN the schedule is judged on the
+  // input shaft (mean wheel spin, slip included) instead of the road
+  // shaft, so a slipping clutch no longer hides the shift speed.
+  const double coupled_rpm =
+      std::abs((allow_spin_shift ? shaft : road_shaft) * ratio) * rpm_per_rad;
   // Throttle-dependent, like an automatic's own schedule: full throttle pulls to the
   // limiter, a light foot shifts early.
   static const bool gear_trace = std::getenv("SLRR_GEAR_TRACE") != nullptr;
@@ -832,10 +838,15 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
       driven_spin += std::abs(state[i].spin);
       ++driven_count;
     }
-  const bool spinning =
-      driven_count > 0 &&
+  // SLRR_GEAR_NOSPIN also ignores the retail spinning block. Default keeps
+  // the 0x0044D410 behaviour.
+  const bool spinning = !allow_spin_shift && driven_count > 0 &&
       driven_spin / driven_count > std::abs(road_shaft) * 1.15 + 1.0;
-  const double up_rpm = drive.limit * (.58 + .40 * std::clamp(drive.throttle, 0.0, 1.0));
+  // Realistic schedule: WOT just under the limiter, part throttle earlier,
+  // but the coast floor stays high enough that lifting the gas no longer
+  // drops the upshift point below speed and walks up through the gears.
+  const double up_rpm = drive.limit *
+      (.72 + .23 * std::clamp(drive.throttle, 0.0, 1.0));
   const double down_rpm = drive.limit * (.34 + .16 * std::clamp(drive.throttle, 0.0, 1.0));
   // The upshift is judged on the driveline alone, closed throttle included: an
   // automatic upshifts while coasting at speed too, and because coupled_rpm falls

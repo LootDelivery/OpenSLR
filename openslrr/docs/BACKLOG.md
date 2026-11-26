@@ -68,7 +68,17 @@ Move fixed items to the bottom with the fixing commit.
 - **Следствие:** тяга на колёсах 11…16 кН при двигателе 114–127 кВт
   (на 54 км/ч 11.9 кН = 180 кВт) — момент на колесе превышает то, что двигатель
   может дать; отсюда и +50…78 % slip в DRV-11.
-- **Статус:** открыто, воспроизводится на стенде без рук (только газ).
+- **Diagnosis (2026-11-26):** the block under throttle is not the spinning gate
+  but the schedule itself: upshift judged on road-shaft `coupled_rpm` against
+  `limit*(0.58+0.40*throttle)`. At full throttle that is 0.98 of the limit,
+  which needs the top speed of the gear; the slipping clutch caps 1st just
+  below it (78 vs 77 km/h), so it never shifts. On lift the point drops to
+  0.58 and the box walks up through the gears at constant speed.
+- **Fix:** realistic schedule `limit*(0.72+0.23*throttle)` (driver: "неплохо
+  вроде" with `SLRR_GEAR_NOSPIN=1 SLRR_GEAR_REAL=1`, now baked in). The
+  spinning gate remains behind `SLRR_GEAR_NOSPIN` (also judges on the input
+  shaft) for now.
+- **Статус:** schedule baked in; awaiting driver verification without flags.
 
 ### DRV-13 Машина отрывается/подпрыгивает на прямой выше ~64 км/ч (2026-11-29)
 - **Симптом:** на стенде (ValoCity, Baiern `0x6`, прямая на полном газу) выше
