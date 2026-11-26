@@ -23,7 +23,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -300,9 +299,6 @@ bool race_brain_command(const RpkIndex &rpk, void *key,
   b.progress = 0;
   b.replan = 0;
   b.blocked_for = b.reverse_for = 0;
-  std::fprintf(stderr, "[race-brain] cmd=%s brain=%p car=%p ground=%p\n", verb.c_str(), key,
-               static_cast<void*>(b.car), b.car ? car_ground(b.car, key) : nullptr);
-  std::fflush(stderr);
   if (!b.car)
     return true;
   if (verb == "AI_race" || verb == "AI_GoToTarget") {
@@ -324,9 +320,6 @@ bool race_brain_command(const RpkIndex &rpk, void *key,
       input >> b.target;
   } else if (verb == "AI_GoToTraffic")
     traffic_route(b, car_position(b.car));
-  std::fprintf(stderr, "[race-brain] route points=%zu length=%.1f\n", b.route.points.size(),
-               double(b.route.length));
-  std::fflush(stderr);
   if (!b.route.points.empty() || verb == "AI_follow")
     part_command(b.car, "start");
   return true;
@@ -355,13 +348,8 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
       b = &entry.second;
       break;
     }
-  if (!b) {
-    static thread_local int misses = 0;
-    if (misses++ < 3)
-      std::fprintf(stderr, "[race-brain] no brain for car=%p inc=%llu\n", static_cast<void*>(car),
-                   static_cast<unsigned long long>(n->incarnation));
+  if (!b)
     return false;
-  }
   out = {};
   if (b->runout) {
     float along = (position[0] - b->finish[0]) * b->finish_direction[0] +
@@ -540,14 +528,6 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
       b->reverse_steer =
           std::fabs(angle) > .1f ? -std::copysign(1.f, angle) : 1.f;
     }
-  }
-  {
-    static thread_local int hits = 0;
-    if (hits++ < 3)
-      std::fprintf(stderr, "[race-brain] drive input car=%p mode=%s route=%zu progress=%.1f throttle=%.2f steer=%.2f brake=%.2f start=%d reverse=%d\n",
-                   static_cast<void*>(car), b->mode.c_str(), b->route.points.size(),
-                   double(b->progress), double(out.throttle), double(out.steer),
-                   double(out.brake), int(out.start), int(out.reverse));
   }
   return true;
 }

@@ -1194,9 +1194,16 @@ a 0.5 lock flick at ~50 km/h still shows `as=-0.40` of a lock against a held axi
   drop brains.
 - **Verification:** build OK; `--probe` reaches MainMenu; bench ValoCity
   drive completes (`drive done`), ambient traffic and player path
-  unaffected. A scripted race-section drive (bots visibly moving) has no
-  bench harness yet -- needs a driver run in a race.
-- **Status:** in code, awaiting driver verification in a race section.
+  unaffected. Driver run (2026-11-27): quick race and night races -- the
+  rivals drive (the ordinary racers; the fake/dummy racers are a separate
+  script flow). Root cause of the first live failure: `car_ground` looked
+  for `GameRefKind::GroundRef`, a kind nothing in this host ever assigns;
+  the live log showed commands arriving with `ground=null` and route
+  points 0. The ground is now found by its class name (`GroundRef` in
+  `class_name`, the resref convention), walking the car chain and the
+  brain chain (the Bot parents its brain under the world).
+- **Status:** verified by the driver in street/night races. ROC
+  (AI_spline) not yet exercised.
 
 ## UI
 

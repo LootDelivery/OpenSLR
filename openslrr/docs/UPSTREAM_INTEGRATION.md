@@ -594,7 +594,7 @@ player could not start. Port of upstream PR #180 `race_brain.cpp`
 | Commands | `controllable <id>`, `renderinstance`, `leave`, `AI_level`, `AI_NightRace`, `AI_BeginRace`, `AI_stop`, `AI_suspend`, `AI_race x,y,z`, `AI_spline <width> <file>`, `AI_follow x,y,z <id>`, `AI_GoToTraffic`, `AI_GoToTarget x,y,z`. Spline files are read from the game root (path traversal refused); routes come from the shared TRC graph |
 | Driving | Pure pursuit with a steering rate limiter, curvature-limited speed, bend-braking lookahead, finish slowdown, `AI_follow` re-planning to the live target, `AI_GoToTraffic` lane following with a blocked/reverse manoeuvre, night-race run-out past the finish. A brain stops the car (brake, no throttle) in stop/suspend modes |
 | Host differences | No `race_traffic_ground`/`race_traffic_halted` (upstream external-motion traffic lookups): the ground is found by walking the parent chain, and signal stops for physics bot cars are deferred. Ambient traffic is untouched (external motion) |
-| Verification | Build OK, `--probe` green, bench ValoCity drive completes with ambient traffic. No bench harness runs a race section, so a driver run in a race is still pending |
+| Verification | Build OK, `--probe` green, bench ValoCity drive completes with ambient traffic. Driver run: rivals drive in street and night races. First live failure was `ground=null` (kind tag never matches); the ground is now found by class name along the car/brain chains. ROC (AI_spline) still unexercised |
 
 ### U2-B.2. Measuring the city
 
