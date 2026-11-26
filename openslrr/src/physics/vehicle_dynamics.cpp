@@ -1148,7 +1148,11 @@ void VehicleDynamics::step_drive() {
       // Reverse gear held while the car still rolls forwards, with the handbrake down:
       // the engine-side shaft arrives negative against a positive crank and a closed
       // link drags the engine to zero -- the 334 rpm idle that crept forward. The
-      // recovered boundary branch of 0x0044DD70 (`rpm < shaft -> open`) covers it.
+      // recovered boundary branch of 0x0044DD70 (`rpm < shaft -> open`) covers it:
+      // the link opens only when the road spins the shaft faster than the engine
+      // turns. A sign-only test opened the link at a reverse launch too (the
+      // wheels keep a whisper of forward spin from the stop), and the car sat
+      // with the engine revving until the wheels shed it -- over a second later.
       //
       // Gated on the gear being reverse, and that gate is the whole point: in a spin the
       // driven wheels can briefly rotate backwards about their own axles while the car
@@ -1156,7 +1160,9 @@ void VehicleDynamics::step_drive() {
       // dropped the engine to idle mid-slide instead of keeping the drift alive. In a
       // forward gear the driveline is what the engine drives, whatever the wheels are
       // doing; in reverse against the car's motion it is the road driving the engine.
-      const bool dragged_backwards = ratio < 0 && shaft_omega < 0 && engine_omega > 0;
+      const bool dragged_backwards =
+          ratio < 0 && shaft_omega < 0 && engine_omega > 0 &&
+          std::abs(shaft_omega) > engine_omega;
       if (idle_and_stopped || braking_at_rest || idling_against_a_stop || dragged_backwards)
         engage = 0.0;
     }

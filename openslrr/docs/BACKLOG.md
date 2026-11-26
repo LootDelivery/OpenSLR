@@ -114,7 +114,14 @@ Move fixed items to the bottom with the fixing commit.
 - **Follow-up (2026-11-26):** releasing the pedal returned to 1st. Now R
   stays selected after release; leaving R is a shift action (up through
   neutral) or Up at a standstill (brakes in R, then selects first on the
-  same press). Awaiting the driver's check.
+  same press).
+- **Follow-up 2 (2026-11-26):** launch stall -- pressing Down revved the
+  engine but the car stood ~1 s before moving back. Cause: the
+  dragged-backwards link guard (`ratio<0 && shaft<0`) opened the link
+  while the driven wheels still had a whisper of forward spin from the
+  stop, so the car free-revved until they shed it. The recovered
+  boundary is `rpm < shaft`, i.e. magnitudes: the link now opens only
+  when the road spins the shaft faster than the engine turns.
 
 ### STB-1 Crashes on scene transitions
 - **Symptom:** the game crashes on various scene transitions: garage -> map,
