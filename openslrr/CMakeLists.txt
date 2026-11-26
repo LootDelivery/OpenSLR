@@ -77,6 +77,7 @@ add_executable(slrr_host
   src/formats/matrixdata.cpp
   src/resources/gameref.cpp
   src/resources/road_routes.cpp
+  src/resources/race_brain.cpp
   src/resources/race_runtime.cpp
   src/resources/traffic_runtime.cpp
   src/resources/traffic_streaming.cpp

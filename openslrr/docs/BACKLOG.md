@@ -1172,6 +1172,32 @@ a 0.5 lock flick at ~50 km/h still shows `as=-0.40` of a lock against a held axi
   TILT pitches the view (look point) instead of moving the eye, so it can
   no longer pose as LIFT.
 
+### U2-D Race brain: rivals drive themselves (upstream PR #180)
+- **Symptom:** race bots never moved: `Bot.java` commands its `brain` GameRef
+  (`controllable`, `AI_level`, `AI_suspend`, `AI_race`, `AI_spline`,
+  `AI_follow`, `AI_GoToTraffic`, `AI_GoToTarget`, `AI_stop`) via
+  EVENT_COMMAND, but the host let those commands fall through and physics
+  never simulated uncontrolled cars, so opponents stood still.
+- **Fix:** ported upstream PR #180 `src/resources/race_brain.cpp` as
+  `src/resources/race_brain.cpp`: `race_brain_command` consumes the brain
+  commands (the Controller commands go to `part_command`, as before),
+  `GameRef.queueEvent` calls it before `part_command`, and
+  `configure_drive` asks `race_drive_input` for every uncontrolled car --
+  a car with a brain gets that throttle/steer/brake/clutch/reverse request
+  instead of nothing. `AI_spline` loads the track spline file, `AI_race`
+  and `AI_GoToTarget` query the shared road graph, `AI_GoToTraffic` follows
+  directed lanes and reverses out of a block, `AI_follow` re-plans to the
+  target car. Two adaptations for this host: the ground is found by parent
+  walk (no external-motion traffic registration lookup), and signal stops
+  for physics bot cars are left for a later pass (ambient traffic already
+  obeys lamps in its own runtime). `race_forget`/`race_reset` now also
+  drop brains.
+- **Verification:** build OK; `--probe` reaches MainMenu; bench ValoCity
+  drive completes (`drive done`), ambient traffic and player path
+  unaffected. A scripted race-section drive (bots visibly moving) has no
+  bench harness yet -- needs a driver run in a race.
+- **Status:** in code, awaiting driver verification in a race section.
+
 ## UI
 
 ### UI-3 Part condition icons change all at once

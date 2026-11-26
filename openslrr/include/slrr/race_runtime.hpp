@@ -2,6 +2,7 @@
 #include "slrr/road_routes.hpp"
 
 #include <memory>
+#include <string>
 
 namespace slrr {
 class Jvm;
@@ -33,6 +34,28 @@ std::optional<RoadRoute> race_query_route(const RpkIndex&, void*, const RoadPoin
                                           const RoadPoint&);
 const RoadRoute* race_last_route(void* ground);
 const RoadRoute* race_plot_route();
+
+// --- U2-D race brain --------------------------------------------------------
+// Port of upstream PR #180 `src/resources/race_brain.cpp` (SLRR_rev v221
+// engine/race-driver.ts). Bot scripts command their `brain` GameRef via
+// EVENT_COMMAND (`controllable`, `AI_level`, `AI_race`, `AI_spline`,
+// `AI_follow`, `AI_GoToTraffic`, `AI_GoToTarget`, `AI_suspend`, `AI_stop`).
+// The host keeps the brain state here; `race_drive_input` turns it into a
+// throttle/steer/brake request the physics step consumes for uncontrolled
+// cars. Ambient traffic stays external-motion in this host; this is only for
+// script-owned race bots (and cast cars switched to AI_GoToTraffic).
+struct RaceDriveInput {
+  float throttle = 0, steer = 0, brake = 1;
+  bool start = false, reverse = false;
+};
+// True when the command was a brain command and has been consumed.
+bool race_brain_command(const RpkIndex&, void* brain, const std::string&);
+// False when the car has no brain, in which case physics leaves it alone.
+bool race_drive_input(Object* car, const RoadPoint& position, float yaw,
+                      float speed, float dt, RaceDriveInput& out);
+void race_brain_forget(void* key);
+void race_brains_reset();
+void race_set_traffic_mode(const RpkIndex&, Object* car);
 
 // --- U2-B ambient traffic ---------------------------------------------------
 // GroundRef traffic natives: addTrafficN/P/Car, remTrafficCar,

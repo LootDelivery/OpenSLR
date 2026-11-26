@@ -161,12 +161,14 @@ void race_forget(void* key) {
   if (plot_ground == key) plot_ground = nullptr;
   grounds.erase(key);
   race_traffic_forget(key);
+  race_brain_forget(key);
 }
 
 void race_reset() {
   plot_ground = nullptr;
   grounds.clear();
   race_traffic_reset();
+  race_brains_reset();
 }
 
 void register_race_natives(Jvm& vm, RpkIndex& rpk, SectionMachine& sections) {

@@ -4,6 +4,7 @@
 #include "slrr/gameref.hpp"
 #include "slrr/script_events.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/race_runtime.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/osd_registry.hpp"
@@ -533,7 +534,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
   jvm.natives().register_method(
       "java.util.resource.GameRef", "queueEvent",
       "(Ljava.util.resource.ResourceRef;ILjava.lang.String;)V",
-      [&jvm](Object* self, const std::vector<Value>& args) {
+      [&jvm,&rpk](Object* self, const std::vector<Value>& args) {
         // EVENT_COMMAND = 0x10. Garage.cameraSetup sends smooth/dist/zoom/force/torque.
         int type = 0;
         if (args.size() > 1) {
@@ -551,6 +552,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
                      {Value::make_obj(self)}, false);
           return Value::make_void();
         }
+        if (!jvm.tree_instance_of(self,"java.io.Controller") && race_brain_command(rpk,self,line)) return Value::make_void();
         if (part_command(self, line)) return Value::make_void();
         if (!st || (st->type_id & 0xFFFF) != 0x33) return Value::make_void();
         gameref_scene_command(st->key, line);

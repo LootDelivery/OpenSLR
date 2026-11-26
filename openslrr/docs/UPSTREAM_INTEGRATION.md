@@ -556,8 +556,8 @@ observation possible.
 are ordered red above amber above green; the phase-to-lamp mapping puts red on 0,
 amber on 1 and green on 2 with the range offsets the renderer relies on; and the
 yaw rotation of a head lands its quad where the placement pose puts the panel.
-**Status: done.** The remaining #180 blocks are U2-D (race brain), U2-E (ROC) and
-U2-F (native vehicle assembly).
+**Status: done.** The remaining #180 blocks are U2-D (race brain, done below),
+U2-E (ROC) and U2-F (native vehicle assembly).
 
 ### U2-B.1. Traffic quality and the race transition
 
@@ -579,7 +579,22 @@ into one function so it could be tested, and three call sites changed.
 | Section policy | `RaceSetup` and any `Track`/`ROC` section disable the ambient population; `Valocity`/`City` enable it; every other section (menus, garage, dialogs) leaves the current policy untouched. The check runs on section adoption, i.e. before the race scene prepares its rivals, and is a one-time transition, so nothing is deleted while a list is being walked. |
 | Tests | `test_traffic_runtime`, 6/6. New: `junction_continuity` walks a real 70° corner of `city.trc` at 0.1 m steps (185 samples) and pins position step ≤ 0.104 m, heading step ≤ 0.021 rad, height step ≤ 0.001 m, and that the pose turns through the same angle the lanes make (1.14 rad of 1.23 rad) while the raw chord pose would snap by more than 0.3 rad. `race_section_clears_ambient` pins the policy and that a script-owned car survives it. |
 | Runtime | 35–40 s drives on ValoCity: `SLRR_TRAFFIC_DIAG` reported **zero** discontinuities; 39–40 spawns with distance 180.3…239.0 m and forward projection ≤ 0.42; population stayed at `cap=20` for the whole run, `drive done`, exit 0. A section probe (temporary, removed) forced the race transition in a live scene: 20 cars → 0 → 20 after the return, no GC error, no stale `GameRef`, exit 0. The real section path was exercised too: `--bench-map TestTrack` adopts `java.game.TestTrack` and the log contains no `[traffic]` spawn at all, so a track scene gets no ambient traffic. (`TestTrack` itself drops the spawned car through the map to y ≈ −93 000; that is a pre-existing defect of that map scene, unrelated to traffic, because no traffic exists there.) |
-| Not verified | A street race cannot be started without the menu: `RaceSetup` is a Java/TREE state, so the in-game check above forced the same policy call rather than the actual `changeActiveSection(RaceSetup)`. The partial NightRace flow (rivals created, race started and finished) was not re-run; nothing in this change touches script-owned cars, and the suite pins that they survive the transition. Race rivals still do not drive (U2-D) and there are no car-to-car or car-to-traffic collisions (U3/#205). Police cars are `cars/misc/Police.rpk` spawned by `java.game.PoliceScout`/`City.policeCars`, not by the ambient templates; their placement is script-side and Police AI is untouched. |
+| Not verified | A street race cannot be started without the menu: `RaceSetup` is a Java/TREE state, so the in-game check above forced the same policy call rather than the actual `changeActiveSection(RaceSetup)`. The partial NightRace flow (rivals created, race started and finished) was not re-run; nothing in this change touches script-owned cars, and the suite pins that they survive the transition. Race rivals still do not drive (see U2-D below) and there are no car-to-car or car-to-traffic collisions (U3/#205). Police cars are `cars/misc/Police.rpk` spawned by `java.game.PoliceScout`/`City.policeCars`, not by the ambient templates; their placement is script-side and Police AI is untouched. |
+
+### U2-D. Race brain
+
+`Bot.java` commands its `brain` GameRef with EVENT_COMMAND strings, but the
+host consumed none of them: opponents stood still and a race without the
+player could not start. Port of upstream PR #180 `race_brain.cpp`
+(SLRR_rev v221 race-driver.ts), adapted to this host:
+
+| Point | Content |
+|---|---|
+| Files | `src/resources/race_brain.cpp` (new), `include/slrr/race_runtime.hpp` (`RaceDriveInput`, `race_brain_command`, `race_drive_input`, `race_set_traffic_mode`, brain lifecycle), `src/natives/natives_gameref.cpp` (queueEvent hook, Controller excluded), `src/resources/part_runtime.cpp` (`configure_drive` autonomous branch), `src/resources/race_runtime.cpp` (brain forget/reset), `CMakeLists.txt` |
+| Commands | `controllable <id>`, `renderinstance`, `leave`, `AI_level`, `AI_NightRace`, `AI_BeginRace`, `AI_stop`, `AI_suspend`, `AI_race x,y,z`, `AI_spline <width> <file>`, `AI_follow x,y,z <id>`, `AI_GoToTraffic`, `AI_GoToTarget x,y,z`. Spline files are read from the game root (path traversal refused); routes come from the shared TRC graph |
+| Driving | Pure pursuit with a steering rate limiter, curvature-limited speed, bend-braking lookahead, finish slowdown, `AI_follow` re-planning to the live target, `AI_GoToTraffic` lane following with a blocked/reverse manoeuvre, night-race run-out past the finish. A brain stops the car (brake, no throttle) in stop/suspend modes |
+| Host differences | No `race_traffic_ground`/`race_traffic_halted` (upstream external-motion traffic lookups): the ground is found by walking the parent chain, and signal stops for physics bot cars are deferred. Ambient traffic is untouched (external motion) |
+| Verification | Build OK, `--probe` green, bench ValoCity drive completes with ambient traffic. No bench harness runs a race section, so a driver run in a race is still pending |
 
 ### U2-B.2. Measuring the city
 
