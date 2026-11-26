@@ -2761,14 +2761,15 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   // update_gear runs on physics substeps and a swap there would feed the
   // swapped value back into the latch.
   if (rec.dynamics.gear == 7) {
-    if (drive.brake > .5f) {
-      drive.throttle = std::max(drive.throttle, drive.brake);
+    // Read the physical pedals: the Down branch makes throttle live, and a
+    // second check on the swapped value would swap it straight back.
+    if (drive.raw_brake > .5f) {
+      drive.throttle = std::max(drive.throttle, drive.raw_brake);
       drive.brake = 0;
-    }
-    if (drive.throttle > .5f && drive.brake < .5f) {
+    } else if (drive.raw_throttle > .5f) {
       // Up while reversing brakes; at a standstill update_gear selects
       // first, after which this same press is the forward throttle.
-      drive.brake = std::max(drive.brake, drive.throttle);
+      drive.brake = std::max(drive.brake, drive.raw_throttle);
       drive.throttle = 0;
     }
   }
