@@ -2754,6 +2754,16 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   const auto &in = host_input();
   drive.throttle = controls ? in.drive_throttle : 0.f;
   drive.brake = controls ? in.drive_brake : 0.f;
+  drive.raw_brake = drive.brake;
+  // One-pedal classic (DRV-14): in brake-selected reverse with Down held,
+  // Down is the reverse throttle, not the service brake. Done here, once per
+  // input frame, because update_gear runs on physics substeps and a swap
+  // there would feed the swapped value back into the latch.
+  if (rec.dynamics.gear == 7 && rec.dynamics.brake_reverse_latched() &&
+      drive.brake > .5f) {
+    drive.throttle = std::max(drive.throttle, drive.brake);
+    drive.brake = 0;
+  }
   // The binding is a button, so the pedal is all or nothing: measured as the
   // game's own 0/1 byte, and every shipped brake script writes the handbrake
   // moment at twice the service brake's (14.7a). The old .3 was a feel hack

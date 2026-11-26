@@ -518,8 +518,11 @@ void batch_probe_report() {
       const bool procedural_sky = instance.sky && outdoor_lighting_;
       const float sky[4] = {matrix[12], matrix[13], matrix[14],
                             graphics.volumetric_clouds ? 2.f : 1.f};
+      // Dynamic sun for every world map, not only ground-props ones: without
+      // it mod-map meshes fall back to the constant ndl light and the
+      // location never darkens at night. The garage keeps its own lighting.
       const bool scene_light = procedural_sky ||
-          (world_mesh && outdoor_lighting_ && graphics.dynamic_lighting);
+          (world_mesh && !garage_ && graphics.dynamic_lighting);
       bind_baked_light(group, &part.tex, mix, world_mesh && view_id < 72,
                       scene_light ? &instance.lighting : nullptr, procedural_sky ? sky : nullptr);
       if (world_mesh) bgfx::setUniform(u_local_light_, local_light_.data());

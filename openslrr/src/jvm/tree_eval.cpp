@@ -457,6 +457,25 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         push(Value::make_int(0));
       return;
     }
+    // A receiver the collector already destroyed: reading its field map is a
+    // crash with no stack to debug. Log the context and yield a null instead
+    // -- the run continues, and the line names the method and field that
+    // still point at a dead object.
+    if (vm && !vm->is_managed(recv)) {
+      static int stale = 0;
+      if (++stale <= 16)
+        std::fprintf(stderr,
+                     "[gc-stale] getfield on freed object %p in %s.%s field %s\n",
+                     static_cast<const void*>(recv), cls.name().c_str(),
+                     mname.c_str(), fname.c_str());
+      if (!fdesc.empty() && fdesc[0] == 'L')
+        push(Value::make_obj(nullptr));
+      else if (fdesc == "F")
+        push(Value::make_float(0.f));
+      else
+        push(Value::make_int(0));
+      return;
+    }
     auto it = recv->fields.find(fname);
     if (it == recv->fields.end()) {
       if (!fdesc.empty() && fdesc[0] == 'L')

@@ -33,6 +33,7 @@ SceneHizTest g_hiz = nullptr;
 void* g_hiz_user = nullptr;
 void *g_sky = nullptr;
 bool g_preview_lamps = false;
+bool g_garage = false;
 uint32_t g_environment = 0;
 struct ShadowInfo {
   uint32_t flags = 0;
@@ -757,6 +758,7 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_resources = resources;
   g_world = g_sky = nullptr;
   g_preview_lamps = false;
+  g_garage = false;
   g_meshes.clear();
   g_overrides.clear();
   g_collision_overrides.clear();
@@ -796,11 +798,13 @@ std::string scene_instances_envmap() {
   return g_resources ? g_resources->texture_path_for_id(g_environment)
                      : std::string{};
 }
-void scene_instances_select(void *world, void *skydome, bool preview_lamps) {
+void scene_instances_select(void *world, void *skydome, bool preview_lamps,
+                             bool garage) {
   if (g_world != world) ++g_floor_revision;
   g_world = world;
   g_sky = skydome;
   g_preview_lamps = preview_lamps;
+  g_garage = garage;
   g_floor_prepared = false;
   if (auto *sky = gameref_get(skydome))
     sky->sky_render = true;
@@ -1755,7 +1759,11 @@ SceneSun scene_instances_light(void* root) {
     const auto& d=node->directional_light.direction;
     for(int i=0;i<3;++i)selected.direction[i]=frame[i]*d[0]+frame[4+i]*d[1]+frame[8+i]*d[2];
   }
-  if (root == g_world && scene_instances_has_ground_props())
+  // The day cycle must reach every world map, not only stock maps with
+  // GroundProps: without it the car keeps the directional light's daytime
+  // colours at night (a bright blue car under a correct night cubemap).
+  // The garage has its own interior lighting: never day-cycle it.
+  if (root == g_world && !g_garage)
     scene_sun_apply_day_cycle(selected);
   return selected;
 }

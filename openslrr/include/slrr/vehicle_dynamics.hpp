@@ -175,6 +175,9 @@ struct DriveInput {
   bool engaged = false, reverse = false, automatic_shift = true, auto_clutch = true;
   bool automatic_first = false;
   double throttle = 0, brake = 0, handbrake = 0;
+  // Physical Down pedal before the brake-reverse pedal swap: the latch in
+  // update_gear reads this, not the (possibly swapped) brake.
+  double raw_brake = 0;
   // Only the bearing term still uses a scale: its wheel[0xFC] meaning is not
   // recovered, so it keeps the pre-recovery form. Brakes and the tyre no longer
   // use a scale at all -- see the three fields below.
@@ -328,6 +331,7 @@ public:
   double engine_limit_fraction() const;
   // The service brake the assist is applying, 0..1. A spun car must read 0 here.
   double brake_service() const { return service_brake_; }
+  bool brake_reverse_latched() const { return brake_reverse_latched_; }
   uint64_t backlog() const;
   void sync_wheels();
 
@@ -341,6 +345,8 @@ private:
   double launch_factor_ = 1;
   int previous_shift_ = 0;
   bool accelerator_down_ = false, forced_reverse_ = false;
+  bool brake_reverse_latched_ = false;
+  double previous_brake_ = 0;
   bool launch_active_ = false;
   void step(const Terrain &terrain);
   void apply_aero();

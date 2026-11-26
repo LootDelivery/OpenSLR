@@ -741,24 +741,8 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
     gear = 0;
     shift_time_ = 0;
     forced_reverse_ = false;
+    brake_reverse_latched_ = false;
     return;
-  }
-
-  shift_time_ = std::max(0.0, shift_time_ - timestep);
-  if (gear != 7 && gear > drive.gears)
-    gear = drive.gears;
-  if (drive.reverse && !forced_reverse_ && drive.ratios[7] < 0) {
-    forced_reverse_ = true;
-    gear = 7;
-    shift_time_ = 0;
-  } else if (!drive.reverse && forced_reverse_) {
-    forced_reverse_ = false;
-    gear = drive.automatic_shift || drive.automatic_first ? 1 : 0;
-  } else if (shift_pressed && shift_time_ == 0 && !forced_reverse_) {
-    const int next = std::clamp((gear == 7 ? -1 : gear) + drive.shift,
-                                drive.ratios[7] < 0 ? -1 : 0, drive.gears);
-    gear = next < 0 ? 7 : next;
-    shift_time_ = .22;
   }
 
   double road_radius = 0;
@@ -769,9 +753,41 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
     }
   const double road_kph =
       std::abs(road_shaft) * (road_radius > 0 ? road_radius : .31) * 3.6;
-  if (road_kph < 2.0 && gear > 1) {
-    // A stopped car is in first: no lock, no conditions. This is what the reference
-    // row shows at a standstill and what the driver asked for.
+
+  shift_time_ = std::max(0.0, shift_time_ - timestep);
+  if (gear != 7 && gear > drive.gears)
+    gear = drive.gears;
+  // One-pedal classic: Down held brakes while moving forward; once the car
+  // is stopped with Down still held, reverse engages and the same held input
+  // drives backwards (the pedal swap below). Releasing Down returns to drive.
+  const double raw_brake = drive.raw_brake > 0.001 ? drive.raw_brake : drive.brake;
+  if (road_kph < 2.0 && raw_brake > .5 && drive.ratios[7] < 0)
+    brake_reverse_latched_ = true;
+  else if (raw_brake <= .5)
+    brake_reverse_latched_ = false;
+  if (brake_reverse_latched_ && !forced_reverse_ && drive.ratios[7] < 0) {
+    forced_reverse_ = true;
+    gear = 7;
+    shift_time_ = 0;
+  } else if (drive.reverse && !forced_reverse_ && drive.ratios[7] < 0) {
+    forced_reverse_ = true;
+    gear = 7;
+    shift_time_ = 0;
+  } else if (!drive.reverse && forced_reverse_ && !brake_reverse_latched_) {
+    forced_reverse_ = false;
+    gear = drive.automatic_shift || drive.automatic_first ? 1 : 0;
+  } else if (shift_pressed && shift_time_ == 0 && !forced_reverse_) {
+    const int low = (drive.ratios[7] < 0 && road_kph < 2.0) ? -1 : 0;
+    const int next = std::clamp((gear == 7 ? -1 : gear) + drive.shift,
+                                low, drive.gears);
+    gear = next < 0 ? 7 : next;
+    shift_time_ = .22;
+  }
+
+  if (road_kph < 2.0 && gear > 1 && gear != 7) {
+    // A stopped car in a forward gear is in first: no lock, no conditions.
+    // Reverse (7) is excluded: resetting it here made R unreachable at a
+    // standstill, which is exactly where reverse is selected.
     gear = 1;
     shift_time_ = .1;
     return;

@@ -52,7 +52,13 @@ void Jvm::gc_safe_point() {
       // The object is unreachable: had it become reachable again this would
       // need a new mark. Let the next sweep collect it.
       object->gc_marked = false;
+      // Root it for the duration of the call: it is no longer in the queue,
+      // and anything unusual the finalizer does (a native that pumps frames,
+      // a collection requested through a path that does not hold the call
+      // depth) must not find it unrooted.
+      gc_finalize_current_ = object;
       invoke(object->class_name, "finalize", "()V", {Value::make_obj(object)}, false);
+      gc_finalize_current_ = nullptr;
       const double spent = std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - start)
                                .count();
@@ -139,6 +145,7 @@ int Jvm::collect_garbage() {
     // finalize on freed memory -- which is how a script finalizer turned into an
     // unhandled exception while a city was loading.
     for (Object* queued : gc_finalize_queue_) mark(queued);
+    if (gc_finalize_current_) mark(gc_finalize_current_);
   };
   auto trace = [&] {
     for (size_t cursor = 0; cursor < work.size(); ++cursor) {

@@ -126,6 +126,12 @@ vec3 renderSky(vec3 ray, vec2 pixel)
 	vec3 zenith = mix(vec3(0.01, 0.02, 0.05), vec3(0.12, 0.33, 0.65), day);
 	zenith = mix(zenith, vec3(0.28, 0.16, 0.22), twilight * 0.45);
 	vec3 sky = mix(horizon, zenith, sqrt(saturate(ray.y)));
+	// Below the horizon this pseudo-sky is not sky: a downward ray would
+	// otherwise return the horizon colour (light blue by day, navy at night),
+	// which is what the mod-map cube showed on its bottom face when no ground
+	// geometry covered it. Fade to a dark ground colour below y = 0.
+	vec3 ground = vec3(0.012, 0.014, 0.018);
+	sky = mix(sky, ground, clamp(-ray.y / 0.18, 0.0, 1.0));
 	float luminance = daylightDistribution(ray.y, dot(ray, sun)) /
 	                  max(daylightDistribution(1.0, sun.y), 0.05);
 	sky *= mix(1.0, clamp(sqrt(luminance), 0.65, 1.75), day);

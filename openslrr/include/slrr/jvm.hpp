@@ -72,6 +72,14 @@ class Jvm : public TreeHost {
   void gc_safe_point();
   size_t heap_size() const { return heap_.size(); }
   size_t gc_last_freed() const { return gc_last_freed_; }
+  // Heap-membership test used by the interpreter to turn a stale receiver
+  // into a logged null instead of a crash. Pointer comparison only: safe to
+  // call on a dead pointer. Note this stays true while an object waits in
+  // the graveyard (memory valid, object dead), so it detects freed memory,
+  // not liveness.
+  bool is_managed(const void* address) const {
+    return gc_managed_.count(address) != 0;
+  }
 
   double advance_sim_time(double seconds);
   double sim_time() const { return sim_time_; }
@@ -138,6 +146,10 @@ class Jvm : public TreeHost {
   // heap until the finalizer has run, so the cleanup of a large batch is spread
   // over frames instead of freezing one.
   std::vector<Object*> gc_finalize_queue_;
+  // The object whose finalizer is running right now. It was popped from the
+  // queue before the call, so without this a collection in the middle of the
+  // call would have nothing rooting it.
+  Object* gc_finalize_current_ = nullptr;
   uint32_t gc_next_identity_ = 1;
   std::vector<GcRootProvider> gc_roots_;
   uint64_t gc_frame_id_=0;

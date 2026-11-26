@@ -732,10 +732,11 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     // source. Reads the existing cubemaps directly as samplerCube; no copy is
     // made and the capture is not redirected anywhere.
     const char* dump_env = std::getenv("SLRR_REFL_DUMP");
-    if (!dump_env) return;
     // 2 forces the panels on, so a bench run can photograph them without
-    // clicking the checkbox in the overlay.
-    const bool forced = std::atoi(dump_env) >= 2;
+    // clicking the checkbox in the overlay. The checkbox itself must also
+    // work without the env var: gating the viewer on SLRR_REFL_DUMP made
+    // the F12 "Cubemap viewer" tick a no-op in a normal launch.
+    const bool forced = dump_env && std::atoi(dump_env) >= 2;
     if (!forced && !debug_overlay_.render_options().reflection_viewer) return;
     // The panels are drawn at view 240+, above the OSD, so they would cover
     // the F12 panel and make it impossible to reach the checkbox again. Hide
@@ -1426,9 +1427,10 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
         // populated, then is frozen for as long as the dump is on, so the
         // panels can read the cube safely. Normal play is unaffected.
         static int frozen = 0;
-        if (std::getenv("SLRR_REFL_DUMP") && reflection_ready_ &&
-            debug_overlay_.render_options().reflection_viewer &&
-            !debug_overlay_.visible()) frozen = 1;
+        const bool dump_wanted = debug_overlay_.render_options().reflection_viewer ||
+                                 (std::getenv("SLRR_REFL_DUMP") &&
+                                  std::atoi(std::getenv("SLRR_REFL_DUMP")) >= 2);
+        if (dump_wanted && reflection_ready_ && !debug_overlay_.visible()) frozen = 1;
         else frozen = 0;
         if (!frozen) update_reflections(capture_position);
       }
@@ -1912,6 +1914,7 @@ bgfx::TextureHandle LibBgfxBackend::reflection_cube_to_sample() const {
   // bake alone is what there is.
   const bool dynamic = refl_dynamic_enabled();
   if (!dynamic && reflection_bake_ready_ &&
+      reflection_bake_world_ == reflection_world_ &&
       bgfx::isValid(reflection_bake_cube_[reflection_bake_write_ ^ 1]))
     return reflection_bake_cube_[reflection_bake_write_ ^ 1];
   return reflection_cubes_[reflection_write_ ^ 1];
@@ -2033,17 +2036,28 @@ void LibBgfxBackend::update_reflections(const float* eye) {
     }
     const auto ground = std::find_if(instances_.begin(), instances_.end(),
         [](const SceneInstance& instance) { return instance.geometry->ground_polygons || instance.sky; });
-    if (ground == instances_.end()) {
-      reflection_world_ = nullptr;
-      reflection_face_ = 0;
-      reflection_ready_ = false;
-      return;
-    }
+    // A mod map may carry neither ground polygons nor a sky instance, but the
+    // car still needs an environment: returning here left the cube holding the
+    // previous map's sky (usually a daytime blue) while the scene went dark.
+    // Capture anyway, keyed by a sentinel world so any map switch still
+    // invalidates the old cube through the check below.
+    static const char no_ground_world = 0;
+    void* world_key = ground != instances_.end()
+                          ? ground->key
+                          : const_cast<char*>(&no_ground_world);
     reflection_box_valid_ = false;
     // A cubemap captured for another world must not be sampled by this one.
-    if (reflection_env_world_ != ground->key) {
+    if (reflection_env_world_ != world_key) {
       reflection_env_valid_ = false;
-      reflection_env_world_ = ground->key;
+      reflection_env_world_ = world_key;
+      // A bake is a snapshot of one world. Keeping the flag across a world
+      // switch made the moving layer composite new objects onto the old
+      // world's bake -- an apparently static ValoCity frame in the garage or
+      // on a mod map, where the bake cannot be refreshed because the map has
+      // no ground props. Discard it with the environment, not just the cube.
+      reflection_bake_ready_ = false;
+      reflection_bake_face_ = 0;
+      reflection_bake_world_ = nullptr;
     }
     if (garage_) {
       reflection_box_min_ = {1e20f, 1e20f, 1e20f};
@@ -2065,7 +2079,7 @@ void LibBgfxBackend::update_reflections(const float* eye) {
           reflection_box_max_[axis] = std::max(reflection_box_max_[axis], std::max(a, b));
         }
       }
-      if (parts_.empty()) {
+      if (parts_.empty() && ground != instances_.end()) {
         // No shell loaded: fall back to the ground corners rather than leave
         // the box empty. upload_part's Z flip is the reference convention.
         const auto& geometry = *ground->geometry;
@@ -2299,8 +2313,8 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       reflection_irr_write_ = 0;
       reflection_irr_ready_ = false;
     }
-    if (reflection_world_ != ground->key) {
-      reflection_world_ = ground->key;
+    if (reflection_world_ != world_key) {
+      reflection_world_ = world_key;
       reflection_face_ = 0;
       reflection_ready_ = false;
     }
@@ -2328,7 +2342,7 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       // All six faces are in and a fresh read buffer is published, so the
       // environment is complete and safe to sample from any scene.
       reflection_env_valid_ = true;
-      reflection_env_world_ = ground->key;
+      reflection_env_world_ = world_key;
       reflection_sample_origin_ = reflection_origin_;
       s_refl_published_generation = s_refl_generation;
       s_refl_published_frame = s_refl_frame;
@@ -2380,8 +2394,15 @@ void LibBgfxBackend::update_reflections(const float* eye) {
         // The static environment was blitted into this face by the view just
         // before it, so the colour under the moving objects is already right.
       } else {
-        if (outdoor_lighting_ || std::any_of(objects.begin(), objects.end(),
-            [](const SceneInstance& object) { return object.sky; }))
+        // The reflection background is the scene sky, not the constant clear
+        // color above. Mod tracks do not necessarily expose either the
+        // GroundProps node or a skydome instance which the older gate used;
+        // leaving the clear color in the cube made their paint and chrome
+        // sample a flat steel blue, most visibly at night. The sky quad is
+        // only a background and scene geometry covers it, whereas drawing it
+        // outside the old gate would risk replacing a clear colour with
+        // atmosphere in the garage shell, so keep that path separate.
+        if (!garage_)
           draw_sky(view, view_mtx, proj);
         // The garage shell is preloaded SCX geometry outside the instance list.
         // Without it the paint and glass mirror the clear colour, not the room.
@@ -2586,14 +2607,18 @@ void LibBgfxBackend::update_reflections(const float* eye) {
     s_refl_dyn_ms = s_refl_now_ms;
 
     // With the bake ready, the per-frame pass is only the moving layer on top of
-    // it. Without the bake it is the whole environment, as before.
-    const int mode = (bake_enabled && reflection_bake_ready_) ? 2 : 0;
+    // it. Without the bake it is the whole environment, as before. The bake
+    // counts only when it belongs to this world: a ready flag from another
+    // map is a stale picture, not an environment.
+    const bool bake_current = bake_enabled && reflection_bake_ready_ &&
+                              reflection_bake_world_ == reflection_world_;
+    const int mode = bake_current ? 2 : 0;
     const int budget = debug_overlay_.render_options().reflection_faces;
     for (int capture = 0; capture < budget && reflection_face_ < face_count; ++capture) {
       const auto face = reflection_face_;
       if (face == 0)
         reflection_origin_ = {eye[0], eye[1] + .8f, -eye[2]};
-      if (mode == 2 && reflection_bake_ready_ &&
+      if (mode == 2 && bake_current &&
           bgfx::isValid(reflection_bake_cube_[reflection_bake_write_ ^ 1])) {
         // Copy the static environment into this face before the moving
         // objects are drawn on it. The blit runs in its own view, one

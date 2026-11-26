@@ -217,9 +217,10 @@ void mainloop_sync_section_render(IRenderBackend& render,
   if (!world) world = object_field("Scene");
   if (!world)
     if (GameRefState* cam = fullscreen_script_camera()) world = cam->parent;
-  scene_instances_select(world, object_field("skydome"), world && world == car_preview);
   const bool in_garage =
       actual && actual->class_name.find("Garage") != std::string::npos;
+  scene_instances_select(world, object_field("skydome"), world && world == car_preview,
+                         in_garage);
   scene_instances_enable_static_floor(in_garage);
   // Close the menu movie once, on the way in. CarSelect.enter opens
   // prime.avi and then waits; that wait still pumps with the host

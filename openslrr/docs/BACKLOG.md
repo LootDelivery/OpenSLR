@@ -55,6 +55,11 @@ Move fixed items to the bottom with the fixing commit.
     (h=0.71, без центра крена); retail-loads для сравнения не хватает.
     Нужен живой тест порта на пределе (липкая резина, занос) от водителя --
     кувырок там виден только вручную.
+  * **Вердикт водителя 2026-11-29:** на Baiern CoupeSport GT3 оригинал дрифтует,
+    порт переворачивает не всегда; склонность к перевороту видна именно с места
+    спавна на дрифте, а после проезда и сброса газа дрифт обычно снос без
+    переворота. Закрыто как «потенциально закрыто»; оставшийся репро.
+    первичная проверка: холодная резина/первый разгон от спавна.
 
 ### DRV-12 Коробка не переключается выше первой под полным газом
 - **Симптом:** 10 с полного газа, 77 км/ч, `gear=1 ratio=10.85` всё время;
@@ -79,6 +84,23 @@ Move fixed items to the bottom with the fixing commit.
 - **Статус:** закрыт как стенд-артефакт. Скоростные сценарии на этой прямой
   невалидны выше ~60 км/ч; для чистых замеров нужен спавн с другой точки или
   карта с длинной прямой (см. план стенда в DRV-1).
+
+### DRV-14 Reverse unreachable at a standstill (2026-11-26)
+- **Symptom:** in the original, tapping Down (brake) at zero speed selects
+  reverse. In OpenSLRR Down did nothing, and reverse could not be selected
+  manually either -- only neutral.
+- **Root cause:** `VehicleDynamics::update_gear` selected R (`gear=7`), then
+  the standstill rule `road_kph < 2 && gear > 1` immediately reset it to 1.
+  So R was unreachable exactly where it is selected. Down was also only a
+  brake, with no standstill reverse selector.
+- **Fix:** the standstill reset excludes gear 7. One-pedal classic: Down held
+  brakes while moving forward; stopped with Down still held, reverse engages
+  and the same held input becomes the reverse throttle (pedal swap in
+  `update_gear`); releasing Down returns to drive. Manual shift-down to R is
+  gated to `road_kph < 2` too.
+- **Status:** driver confirmed: hold Down -> brake, stop, R engages and the held
+  Down drives backwards; no gear oscillation. The one-off purple car at
+  05:18 did not reproduce after a restart in identical conditions.
 
 ### STB-1 Crashes on scene transitions
 - **Symptom:** the game crashes on various scene transitions: garage -> map,
@@ -131,10 +153,26 @@ Move fixed items to the bottom with the fixing commit.
   pointer that is no longer heap memory is skipped with a `[gc-finalize]` line
   instead of being called. A 180 s city drive runs without the line ever
   printing.
-- **Next:** a long live session across map changes, then read the report. The
-  scene unload hook still comes after a signed report, not before.
-- **Status:** cause identified and closed (`gc.cpp`); awaiting a session long
-  enough to call it gone.
+- **Reopened (2026-11-26, driver: вход и выход из ValoCity, часто):** те же два
+  signed report (`crash-20261126-031146`, `031232`, один стек
+  `tree_eval.cpp:460` ← `gc_safe_point` `gc.cpp:55`) при сборке, где `da802c67`
+  уже есть (строка `[gc-finalize] skipped` в exe есть). Значит, падение идёт
+  не через протухшую очередь: объект-финализатор жив и проходит проверку, а
+  мёртвым оказывается *другой* объект, чьё поле читает финализатор. Финалка
+  выполняется на host-потоке, где `script_thread_active` ложен и корней кадра
+  у tree_eval нет, поэтому окно -- это любой путь, на котором сборка может
+  пройти вне `GcCallScope` (натив, качающий кадры, прямой вызов).
+- **Hardening (2026-11-26):** объект, чей финализатор сейчас идёт, тоже корень
+  (`gc_finalize_current_`), и getfield на освобождённом получателе в tree_eval
+  (`push_instance_field`) больше не крашит процесс, а пишет `[gc-stale]`
+  (метод+класс+поле, 16 строк) и даёт null -- краш превращается в диагноз.
+  `--probe-gc` зелёный. Нужна длинная сессия с переходами, чтобы поймать
+  `[gc-stale]` и назвать виновный объект.
+- **Next:** a long live session across map changes, then read the report (and
+  `stderr` for `[gc-stale]`). The scene unload hook still comes after a signed
+  report, not before.
+- **Status:** open again (da802c67 was necessary but not sufficient); hardened
+  and instrumented, awaiting a session long enough to call it gone.
 
 ### STB-2 Second spawn lands at a different point
 - **Symptom:** in ValoCity the player can spawn twice in a row; the first
@@ -378,6 +416,84 @@ look at, so the check takes a minute rather than a session.
   fade). Fix direction: alpha-to-coverage or manual alpha supersampling in
   the shader.
 - **Status:** geometry fixed; alpha case open (low priority).
+
+### GFX-5 Blue in the reflection cube on non-stock (mod) maps at night
+- **Symptom (driver, 2026-11-29):** на тест-треке и нескольких треках,
+  сделанных не стоковыми инструментами (Invictus/ваниль), ночью машину
+  заливает синим -- кузов и хром синие, в карту отражений записано
+  «что-то синее». На стоковом ValoCity того же ночью нет. Смена времени
+  суток не помогает. Подтверждено на нескольких модах.
+- **Root cause (code-level, one open question):** каждый face захвата
+  очищается в `0x577493ff` (`bgfx_lib_backend.cpp:2375`, flat steel blue);
+  процедурное небо дорисовывается в захват только когда
+  `outdoor_lighting_` (world cam + GroundProps-узел карты, см.
+  `scene_instances_has_ground_props`, `scene_instances.cpp:2045`)
+  либо в сцене есть instance с `object.sky` (выбирается из поля `skydome`,
+  `mainloop.cpp:220`). Карты без обоих -- тест-трек (bench-drive на нём
+  не стартует именно из-за отсутствия ground props) и моды, не несущие
+  GroundProps/`skydome` в ожидаемом виде -- оставляют грани со flat-blue.
+  Отражаясь в краске/хроме, это и даёт «синеву».
+- **Почему ValoCity чист:** есть ground props → `outdoor_lighting_` true →
+  захват рисует небо.
+- **Почему заметно только ночью:** заливка не зависит от времени; днём
+  синяя карта неотличима от неба в отражениях, ночью - яркое пятно на
+  тёмной сцене. Фоновый clear главного вида тёмный (`0x1a2230`/
+  `0x3a342c`), поэтому на экране «небо» ночью неотличимо от плоского
+  тёмного фона, и баг выдал только карту.
+- **Открытый вопрос (различает две гипотезы):** на экране днём на таких
+  картах плоское тёмно-синее небо (т.е. небо не рисуется нигде)? Проверка
+  за 5 секунд у водителя. Если днём небо нормальное - корень не в clear.
+- **Fix direction (not applied per driver):** рисовать небо в захвате по
+  тому же условию, что в главном виде/`always`-квад процедурного неба,
+  либо при отсутствии sky-инстанса подставлять не сталь-синий, а тёмный/нейтральный
+  clear. Точка входа - `capture_face` (`bgfx_lib_backend.cpp:2375..2386`).
+- **Why the first fix didn't help (2026-11-26, driver: «всё равно заливает
+  синим»):** был второй, более глубокий гейт выше захвата -- `update_reflections`
+  вообще возвращался, если в сцене нет ни ground-инстанса, ни sky-инстанса
+  (`find_if ... ground_polygons || sky` → early return). На таких картах куб
+  не захватывался никогда, а `reflection_env_valid_` оставался true от
+  предыдущей карты: в краску сэмплился *несвежий*, дневной синий куб ValoCity.
+  Оттого и смена времени суток не помогала -- захвата просто не было.
+- **Fix (2026-11-26, второй этап):** early return убран: захват идёт и без
+  ground/sky, ключ мира -- сентинел (`no_ground_world`), смена карты всё равно
+  инвалидирует куб через `reflection_env_world_ != world_key`; гаражный
+  fallback бокса (единственное место с дереференсом `ground`) ограждён.
+  Sky-фон в захвате (первый этап) оставлен: теперь он реально исполняется на
+  модифицированных картах. ValoCity ночь: дамп куба тёмный, без flat-blue;
+  TestTrack ночь: публикации идут. Живая проверка на тест-треке и одном моде --
+  за водителем.
+- **Static-cube follow-up (2026-11-26, driver: «в кубмапе что-то статичное»,
+  гараж как последний кадр ValoCity):** флаг baked-слоя переживал смену мира.
+  На картах без ground props bake не перезаписывался, но `mode=2` по-прежнему
+  блитовал старый Valo bake под moving layer; в гараже то же самое. Теперь
+  смена мира сбрасывает `reflection_bake_ready_/face/world`, а bake используется
+  только при `reflection_bake_world_ == reflection_world_` (и в
+  `reflection_cube_to_sample`). Trace после фикса: TestTrack только `mode=0`
+  (полный живой захват), ValoCity `mode=1/2` (bake жив), гараж `mode=0`.
+  Живая проверка на гараже/тест-треке/моде -- за водителем.
+- **Car sun not day-cycled on non-stock maps (2026-11-26):** cubemap normal at
+  night but the car bright light-blue: `scene_instances_light` applied the day
+  cycle only when GroundProps existed, so on mod maps the car kept the
+  directional light's daytime diffuse/ambient at 02:00. Now the cycle applies
+  to every `g_world`. The garage is exempt (own interior lighting, via
+  `g_garage` from `scene_instances_select`). Test track has no directional
+  light in its data, so the car is reflection-only there (aluminium). A
+  neutral-sun fallback was tried and reverted on the driver's word. Pending
+  driver checks: garage unchanged, Drag Track 02:20, test track at 05:30.
+- **Mod-map location never darkens at night (2026-11-26):** mesh shader falls
+  back to a constant ndl light when no sun is bound. The sun was bound only
+  when GroundProps existed (`outdoor_lighting_`), so on mod maps the location
+  looked identical day and night. Sun now binds for every non-garage world
+  mesh (same `garage_` exemption as the car sun). Pending driver check:
+  Drag Track / test track night vs day. Test track additionally has no
+  directional-light resource at all, so its sun stays unset (constant) until
+  a fallback is agreed.
+- **Cubemap viewer (2026-11-26):** галочка в F12 не включала вьюер, потому что
+  `draw_cube_faces` требовал `SLRR_REFL_DUMP`. Гейт убран: чекбокс работает в
+  обычном запуске; freeze куба — тоже по чекбоксу. После этого водитель
+  подтвердил: на модовой карте синьки нет.
+- **Status:** fix in code, build passes; ValoCity night cube verified dark;
+  live check remains on TestTrack and at least one additional mod map.
 
 ### GFX-4 The garage keeps the street's reflection map
 - **Symptom (driver, 2026-11-26):** "В гараже карта отражений остаётся от улицы,

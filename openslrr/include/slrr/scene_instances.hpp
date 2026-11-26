@@ -66,7 +66,8 @@ void scene_instances_set_envmap(uint32_t resource);
 // (the chassis GameRef). 1 removes the entry. Everything else draws at 1.
 void scene_instances_set_fade(void *owner, float fade);
 std::string scene_instances_envmap();
-void scene_instances_select(void *world, void *skydome, bool preview_lamps);
+void scene_instances_select(void *world, void *skydome, bool preview_lamps,
+                             bool garage);
 using SceneFrustum = std::array<std::array<float, 4>, 6>;
 bool scene_instances_has_ground_props();
 void* scene_instances_world();
