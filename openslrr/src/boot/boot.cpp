@@ -608,6 +608,9 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     constexpr int kBenchSettle = 2 * kBenchRate;
     bool bench_map_started = opt.bench_map.empty();
     int bench_shot = 0;
+    // --roc two-step (see boot.hpp): 0 idle, 1 sent CMD_BEGIN_ROC, waiting.
+    int roc_step = 0;
+    int roc_frames = 0;
     // --fps-cap: frame limiter. Without vsync there are no present stalls,
     // but an uncapped loop burns power and (with the fixed-step bench) warps
     // simulation time. The wait runs before the sim step so real_dt still
@@ -689,6 +692,29 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
           mainloop_sync_section_render(render, sections);
         } else {
           std::fprintf(stderr, "[bench] no MapBox track matches %s\n", opt.bench_map.c_str());
+        }
+      }
+      if (opt.roc && sections.actual() &&
+          sections.actual()->class_name.find("Garage") != std::string::npos) {
+        // Garage.CMD_BEGIN_ROC=128 builds Roc(player) and stays in Garage;
+        // Garage.CMD_ROCRACE=120 then starts ROCTrack when the player car
+        // is driveable. The fee/ranking/prestige checks live in CMD_ROC's
+        // dialog, which this skips on purpose (dev shortcut).
+        if (roc_step == 0) {
+          roc_step = 1;
+          std::printf("[roc] Garage.osdCommand(128) begin\n");
+          jvm.invoke("java.game.Garage", "osdCommand", "(I)V",
+                     {Value::make_obj(sections.actual()), Value::make_int(128)},
+                     false);
+          mainloop_adopt_section(jvm, sections);
+        } else if (roc_step == 1 && ++roc_frames > 120) {
+          roc_step = 2;
+          std::printf("[roc] Garage.osdCommand(120) race\n");
+          jvm.invoke("java.game.Garage", "osdCommand", "(I)V",
+                     {Value::make_obj(sections.actual()), Value::make_int(120)},
+                     false);
+          mainloop_adopt_section(jvm, sections);
+          mainloop_sync_section_render(render, sections);
         }
       }
       if (opt.bench_drive_seconds > 0.f) {

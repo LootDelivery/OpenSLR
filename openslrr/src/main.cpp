@@ -38,6 +38,7 @@ void usage() {
       "           [--perf-log CSV|-] [--perf-frames CSV] [--bench-map TRACK]\n"
       "           [--bench-drive SECONDS|manual]\n"
       "           [--bench-time HOUR] [--bench-shots DIR] [--bench-route]\n"
+      "           [--roc]\n"
       "           [--no-vsync] [--fps-cap N] [--debug-overlay]\n"
       "           [PlayerName]\n"
       "\n"
@@ -168,6 +169,10 @@ static int run_host(int argc, char** argv) {
     }
     if (std::strcmp(a, "--bench-map") == 0 && i + 1 < argc) {
       opt.bench_map = argv[++i];
+      continue;
+    }
+    if (std::strcmp(a, "--roc") == 0) {
+      opt.roc = true;
       continue;
     }
     if (std::strcmp(a, "--bench-drive") == 0 && i + 1 < argc) {

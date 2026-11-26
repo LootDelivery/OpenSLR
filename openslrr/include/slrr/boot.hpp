@@ -43,6 +43,11 @@ struct BootOptions {
   // --bench-shots: directory for window captures (TGA) at the start of the
   // benchmark drive and every 10 seconds after it.
   std::string bench_shots;
+  // --roc: right after Garage, fire Garage.osdCommand(CMD_BEGIN_ROC=128)
+  // then CMD_ROCRACE=120, bypassing the ROC entry dialog (fee / ranking /
+  // prestige gates) so the ROCTrack scene and the spline-driven bot can be
+  // exercised without winning the career up to ROC first.
+  bool roc = false;
   bool vsync = true;          // --no-vsync clears it
   float fps_cap = 0.f;        // --fps-cap N: frame limiter (pair with --no-vsync)
   bool debug_overlay = false; // --debug-overlay opens the Ctrl+F12 panel
