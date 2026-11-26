@@ -492,8 +492,9 @@ look at, so the check takes a minute rather than a session.
   `draw_cube_faces` требовал `SLRR_REFL_DUMP`. Гейт убран: чекбокс работает в
   обычном запуске; freeze куба — тоже по чекбоксу. После этого водитель
   подтвердил: на модовой карте синьки нет.
-- **Status:** fix in code, build passes; ValoCity night cube verified dark;
-  live check remains on TestTrack and at least one additional mod map.
+- **Status:** driver confirmed 2026-11-26: no blue on mod maps (cubemap viewer
+  fix), Drag Track 02:20 dark, location cycles day/night on Drag Track and
+  test track (mesh-sun fix). Closed.
 
 ### GFX-4 The garage keeps the street's reflection map
 - **Symptom (driver, 2026-11-26):** "В гараже карта отражений остаётся от улицы,
