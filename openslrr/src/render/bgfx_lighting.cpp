@@ -230,7 +230,7 @@ void batch_probe_report() {
   p.frames = 0;
 }
 
-  void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials)
+  void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials,bool always_depth)
 {
     // preview alone means "an inset render", which uses a trimmed material.
     // A preview that asks for the full material keeps the real lights, glass
@@ -535,10 +535,13 @@ void batch_probe_report() {
             ? std::filesystem::path(part.geo.textures[texture_index]).extension().string() : "";
         std::transform(extension.begin(), extension.end(), extension.begin(),
                        [](unsigned char c) { return std::tolower(c); });
-        state |= BGFX_STATE_DEPTH_TEST_GREATER | (extension == ".dds" ? BGFX_STATE_BLEND_ALPHA
+        state |= (always_depth ? BGFX_STATE_DEPTH_TEST_ALWAYS : BGFX_STATE_DEPTH_TEST_GREATER) |
+            (extension == ".dds" ? BGFX_STATE_BLEND_ALPHA
             : BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
       } else if (!instance.sky) {
-        state |= BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_GREATER;
+        state |= BGFX_STATE_WRITE_Z |
+            (always_depth ? BGFX_STATE_DEPTH_TEST_ALWAYS
+                          : BGFX_STATE_DEPTH_TEST_GREATER);
       }
       bgfx::setState(state);
       bgfx::submit(view_id, skinned ? skin_program_ : program_);

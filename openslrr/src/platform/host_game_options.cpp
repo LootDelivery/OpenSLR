@@ -1,4 +1,5 @@
 #include "slrr/host_game_options.hpp"
+#include "slrr/camera_settings.hpp"
 #include "slrr/jvm.hpp"
 #include <algorithm>
 #include <chrono>
@@ -171,6 +172,7 @@ void host_game_options_load(Jvm& jvm) {
   loaded=false;dirty=false;
   // Read the host file first: read_options takes the handbrake multiple from it.
   load_host_options(jvm.game_root());
+  camera_settings_load(jvm.game_root());
   // Engine-owned Config in stock. A VM static keeps it alive through GC.
   Object* options=jvm.new_object("java.util.Config");
   jvm.set_static("java.lang.System","_hostGameOptions",Value::make_obj(options));

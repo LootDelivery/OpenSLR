@@ -127,7 +127,10 @@ class LibBgfxBackend final : public IRenderBackend {
   void clear_scene();
   void set_debug_context(Jvm& jvm, const SectionMachine& sections) {
     debug_overlay_.set_context(jvm, sections);
+    camera_sections_ = &sections;
+    camera_jvm_ = &jvm;
   }
+  const SectionMachine* camera_sections() const { return camera_sections_; }
   void set_debug_startup(bool vsync, bool overlay) {
     debug_overlay_.render_options().vsync = vsync;
     // SLRR_EXPOSURE seeds the panel slider (the slider is the single source
@@ -144,6 +147,10 @@ class LibBgfxBackend final : public IRenderBackend {
 
 
  private:
+  const SectionMachine* camera_sections_ = nullptr;
+  Jvm* camera_jvm_ = nullptr;
+  Object* camera_dialog_ = nullptr;
+  bool camera_root_added_ = false;
   DebugOverlay debug_overlay_;
   bool debug_was_visible_ = false;
   struct ScenePart {
@@ -209,7 +216,7 @@ class LibBgfxBackend final : public IRenderBackend {
                         bool receive_static_shadow = false, const SceneSun* sun = nullptr, const float* sky = nullptr);
 
 
-  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials = false);
+  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,bool full_materials = false,bool always_depth = false);
   void draw_prop_batches(uint16_t view_id, const std::vector<SceneBatch>& batches,
                          bool shadow, bool conservative = false);
   void refresh_distance_fog(const float render_eye[3]);

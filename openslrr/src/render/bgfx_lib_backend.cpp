@@ -12,6 +12,12 @@
 #include "slrr/host_sfx.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/ptx_image.hpp"
+#include "slrr/camera_overlay.hpp"
+#include "slrr/camera_settings.hpp"
+#include "slrr/gc_roots.hpp"
+#include "slrr/jvm.hpp"
+#include "slrr/object.hpp"
+#include "slrr/section_machine.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/slrr_localization.hpp"
 #include "slrr/video_fmv.hpp"
@@ -3097,10 +3103,29 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
       if (bgfx::isValid(preview_fb_)) bgfx::setViewFrameBuffer(id, preview_fb_);
       else if (scene_rt_active_) bgfx::setViewFrameBuffer(id, scene_fb_);
       for (int pass = 0; pass < 2; ++pass) {
-        // Turn the part about its pivot while the cursor is over its slot.
-        // Just a pivot spin for now, no orbit and no drag.
-        const bool hover = mouse_x_ >= x && mouse_x_ < x + w &&
-                           mouse_y_ >= y && mouse_y_ < y + h;
+        // The catalogue's VEHICLE viewport (0.45x0.40) is the showroom plate:
+        // it turns on its own, with no cursor. Small part slots (0.20x0.15)
+        // keep the hover-turn. Hover-turn also requires the pointer to sit
+        // on the slot's own InventoryPanel button; any other OSD (menu,
+        // minimap GPS bezel, drum) parked under the cursor blocks it.
+        // Navigator/GPS map rides in previews_ too (Viewport 12, .21x.23).
+        // Its Camera is built with FOV 90, so half_aov is 45; every catalog
+        // slot camera uses FOV 110 (half_aov 55), so the FOV gate is the
+        // reliable discriminator.
+        const bool is_navigator_map = p.camera.half_aov < 50.0f;
+        const bool vehicle_preview =
+            p.viewport.vp_w >= 0.40f && p.viewport.vp_h >= 0.35f;
+        const OsdWidget* hovered_widget = osd_hover_widget();
+        const bool over_own_panel =
+            !hovered_widget || !hovered_widget->handler ||
+            hovered_widget->handler->class_name.find("InventoryPanel") !=
+                std::string::npos;
+        const bool over_minimap_widget =
+            hovered_widget && !over_own_panel;
+        const bool hover = vehicle_preview ||
+                           (!is_navigator_map && !over_minimap_widget &&
+                            mouse_x_ >= x && mouse_x_ < x + w && mouse_y_ >= y &&
+                            mouse_y_ < y + h);
         // Rotate about the slot's own centre, not the world origin.
         float pivot[3] = {0.f, 0.f, 0.f};
         float spin = preview_spins_[p.camera.key];
@@ -3147,8 +3172,34 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
           // would turn it twice.
           bgfx::setViewTransform(id, turned, proj);
         }
-        for(const auto&i:p.instances)
+        for(const auto&i:p.instances) {
+          if (is_navigator_map && i.map_marker_rank > 0) continue;
           draw_instance(id,i,i.transform.data(),true,pass,p.full_materials);
+        }
+        // Minimap icons are an overlay layer: draw them after the tiles, in
+        // rank order, with depth testing disabled. Player marker (2) sits
+        // over the map and police/other markers (1); camera red dot (3) sits
+        // over the player, camera cone (4) over the red dot.
+        if (is_navigator_map && pass == 1) {
+          std::vector<const SceneInstance*> markers;
+          markers.reserve(p.instances.size());
+          for (const auto& i : p.instances)
+            if (i.map_marker_rank > 0) markers.push_back(&i);
+          std::stable_sort(markers.begin(), markers.end(),
+                    [](const SceneInstance* a, const SceneInstance* b) {
+                      return a->map_marker_rank < b->map_marker_rank;
+                    });
+          for (const SceneInstance* m : markers) {
+            if (m->vehicle_material) continue;
+            const bool non_alpha =
+                m->geometry->info.version != 3 ||
+                m->geometry->groups.empty() ||
+                (m->geometry->groups.front().material_flags & 0x101u) != 0x101u;
+            draw_instance(id, *m, m->transform.data(), true,
+                          non_alpha ? 0 : 1,
+                          p.full_materials, true);
+          }
+        }
       }
       ++id;
     }
@@ -3582,6 +3633,9 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         self->lmb_down_ = true;
         float x, y;
         osd_pixel_to_text(self->lmb_x_, self->lmb_y_, self->width_, self->height_, &x, &y);
+        // The camera panel is game OSD, ahead of widget clicks: a press on
+        // a row starts the row drag here and the game never sees it.
+        if (camera_overlay_mouse_down(x, y)) return 0;
         const int slider_hit=osd_hit_index(x,y);
         self->slider_drag_index_=!video_fmv_block_osd() && osd_update_slider_at(slider_hit,x,y) ? slider_hit : -1;
         self->inventory_drag_source_ = video_fmv_block_osd()
@@ -3600,6 +3654,14 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
     if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP) {
       if (msg == WM_LBUTTONUP && self && self->lmb_down_ && !in.rmb_down) {
         self->lmb_down_ = false;
+        // End of a camera-row drag: the row already moved, the click below
+        // must not fire a game widget.
+        if (camera_overlay_dragging()) {
+          camera_overlay_mouse_up();
+          self->inventory_drag_source_ = nullptr;
+          ReleaseCapture();
+          return 0;
+        }
         if (self->slider_drag_index_ >= 0) {
           float x,y;
           osd_pixel_to_text(static_cast<short>(LOWORD(lp)),static_cast<short>(HIWORD(lp)),
@@ -3700,19 +3762,68 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         osd_on_char(27);
         return 0;
       }
-      // F8 cycles the interface language (EN → RU → PL) and re-translates
-      // every live text in place.
+      // F8 opens the chase-camera dialog (main camera only, garage and
+      // driving): a plain modal Dialog on the game's own OSD, with frame,
+      // backshield and sliders. The old F8-language test key is gone; the
+      // language lives in the main menu (MainMenu LANGUAGE).
       if (wp == VK_F8) {
-        slrr_loc_set_language((slrr_loc_language() + 1) % SLRR_LANG_COUNT);
-        slrr_text_refresh_language();
-        std::printf("[loc] language=%s\n",
-                    slrr_loc_language_name(slrr_loc_language()));
+        if ((lp & (1L << 30)) == 0 && self) {
+          const std::string section =
+              self->camera_sections() ? self->camera_sections()->actual_name()
+                                      : std::string{};
+          if (camera_overlay_allowed(section)) {
+            camera_panel_set_open(false);
+            if (self->camera_jvm_) {
+              if (!self->camera_root_added_) {
+                self->camera_jvm_->add_gc_roots([self](const GcRootVisitor& visit) {
+                  visit(self->camera_dialog_);
+                });
+                self->camera_root_added_ = true;
+              }
+              if (!self->camera_dialog_) {
+                self->camera_dialog_ =
+                    self->camera_jvm_->new_object("java.game.CameraDialog");
+                self->camera_jvm_->invoke("java.game.CameraDialog", "<init>", "()V",
+                                          {Value::make_obj(self->camera_dialog_)}, false);
+                self->camera_jvm_->invoke("java.game.CameraDialog", "show", "()V",
+                                          {Value::make_obj(self->camera_dialog_)}, false);
+              } else {
+                // Toggle via the dialog's own `shown` flag: shown dialogs hide,
+                // hidden dialogs build their rows again on show().
+                const auto it = self->camera_dialog_->fields.find("shown");
+                const bool shown =
+                    it != self->camera_dialog_->fields.end() && it->second.tag == ValueTag::Int &&
+                    it->second.v.i != 0;
+                self->camera_jvm_->invoke(
+                    "java.game.CameraDialog", shown ? "hide" : "show", "()V",
+                    {Value::make_obj(self->camera_dialog_)}, false);
+              }
+            }
+          }
+        }
         return 0;
       }
     }
     if (msg == WM_MOUSEMOVE) {
       const int x = static_cast<short>(LOWORD(lp));
       const int y = static_cast<short>(HIWORD(lp));
+      // Row drag of the camera panel: value changes here, the camera must
+      // not orbit under the same mouse, so the orbit/hover below is skipped.
+      if (camera_overlay_dragging()) {
+        float sx, sy;
+        osd_pixel_to_text(x, y, self ? self->width_ : 800,
+                          self ? self->height_ : 600, &sx, &sy);
+        camera_overlay_mouse_move(sx, sy);
+        if (self) {
+          self->mouse_x_ = x;
+          self->mouse_y_ = y;
+          self->have_mouse_ = true;
+        }
+        in.pointer_valid = false;
+        in.cursor_x = 0.f;
+        in.cursor_y = 0.f;
+        return 0;
+      }
       if(self && self->lmb_down_ && self->slider_drag_index_>=0 && !in.rmb_down && !video_fmv_block_osd()) {
         float sx,sy;osd_pixel_to_text(x,y,self->width_,self->height_,&sx,&sy);
         osd_update_slider_at(self->slider_drag_index_,sx,sy);

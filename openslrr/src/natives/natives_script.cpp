@@ -1,6 +1,7 @@
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 
+#include "slrr/camera_settings.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
@@ -107,6 +108,48 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         slrr_loc_set_language((slrr_loc_language() + 1) % SLRR_LANG_COUNT);
         slrr_text_refresh_language();
         return Value::make_int(slrr_loc_language());
+      });
+  // MainMenu LANGUAGE row (patch class, same live effect as the old F8
+  // test key). Declared native in the patch MainMenu.java, so only slrr_host
+  // has it; the stock exe stops on the missing native if the patch tree is
+  // copied into the install, the same contract as handbrake.
+  auto camera_get = [](float CameraSettings::* field) {
+    return [field](Object*, const std::vector<Value>&) {
+      return Value::make_float(camera_settings().*field);
+    };
+  };
+  jvm.natives().register_method("java.game.CameraDialog", "getFov", "()F", camera_get(&CameraSettings::fov));
+  jvm.natives().register_method("java.game.CameraDialog", "getDistance", "()F", camera_get(&CameraSettings::distance));
+  jvm.natives().register_method("java.game.CameraDialog", "getLift", "()F", camera_get(&CameraSettings::lift));
+  jvm.natives().register_method("java.game.CameraDialog", "getTilt", "()F", camera_get(&CameraSettings::tilt));
+  jvm.natives().register_method("java.game.CameraDialog", "getReturnSpeed", "()F", camera_get(&CameraSettings::return_speed));
+  jvm.natives().register_method("java.game.CameraDialog", "setFov", "(F)V", [](Object*, const std::vector<Value>& args) {
+    if (!args.empty()) { CameraSettings s = camera_settings(); s.fov = args[0].tag == ValueTag::Float ? args[0].v.f : float(args[0].v.i); camera_settings_set(s); }
+    return Value::make_void();
+  });
+  jvm.natives().register_method("java.game.CameraDialog", "setDistance", "(F)V", [](Object*, const std::vector<Value>& args) {
+    if (!args.empty()) { CameraSettings s = camera_settings(); s.distance = args[0].tag == ValueTag::Float ? args[0].v.f : float(args[0].v.i); camera_settings_set(s); }
+    return Value::make_void();
+  });
+  jvm.natives().register_method("java.game.CameraDialog", "setLift", "(F)V", [](Object*, const std::vector<Value>& args) {
+    if (!args.empty()) { CameraSettings s = camera_settings(); s.lift = args[0].tag == ValueTag::Float ? args[0].v.f : float(args[0].v.i); camera_settings_set(s); }
+    return Value::make_void();
+  });
+  jvm.natives().register_method("java.game.CameraDialog", "setTilt", "(F)V", [](Object*, const std::vector<Value>& args) {
+    if (!args.empty()) { CameraSettings s = camera_settings(); s.tilt = args[0].tag == ValueTag::Float ? args[0].v.f : float(args[0].v.i); camera_settings_set(s); }
+    return Value::make_void();
+  });
+  jvm.natives().register_method("java.game.CameraDialog", "setReturnSpeed", "(F)V", [](Object*, const std::vector<Value>& args) {
+    if (!args.empty()) { CameraSettings s = camera_settings(); s.return_speed = args[0].tag == ValueTag::Float ? args[0].v.f : float(args[0].v.i); camera_settings_set(s); }
+    return Value::make_void();
+  });
+  jvm.natives().register_method("java.game.MainMenuDialog", "toggleLanguage", "()V",
+      [](Object*, const std::vector<Value>&) {
+        slrr_loc_set_language((slrr_loc_language() + 1) % SLRR_LANG_COUNT);
+        slrr_text_refresh_language();
+        std::printf("[loc] language=%s (MainMenu)\n",
+                    slrr_loc_language_name(slrr_loc_language()));
+        return Value::make_void();
       });
   jvm.natives().register_method(
       "java.game.localization", "getLanguageNames",

@@ -197,11 +197,17 @@ Move fixed items to the bottom with the fixing commit.
 
 ### STB-2 Second spawn lands at a different point
 - **Symptom:** in ValoCity the player can spawn twice in a row; the first
-  spawn is by the garage, the second somewhere else. Reproduced by pressing
-  the map-chooser transition twice.
-- **Suspect:** same class as STB-1 -- spawn selection reads state that did
-  not reset on the previous scene exit.
-- **Status:** open.
+  spawn is by the garage, the second somewhere else. The cycle repeats on
+  every return to the garage.
+- **Root cause:** `Garage`'s `HITTHESTREET` does not enter `Valocity`
+  directly; it enters `DriverSelect` first. `Valocity.enter` only filled
+  `posStart` when the previous section was `Garage` or `TrackSelect`, so a
+  fresh `Valocity` created from `DriverSelect` kept `posStart` unset and the
+  car carried its previous transform into the next spawn.
+- **Fix:** add `DriverSelect` to that branch in the `Valocity` patch class,
+  so every career/freeride city spawn starts from `posGarage[club]`.
+- **Status:** fixed; awaiting in-game confirmation of the repeated return
+  cycle.
 
 ### GFX-D Driver triangle (fixed)
 - **Symptom:** a black triangle stretched from the driver model downward, one
@@ -1141,6 +1147,30 @@ a 0.5 lock flick at ~50 km/h still shows `as=-0.40` of a lock against a held axi
   orbit offsets decay to zero (~1.5 s); `gameref_orbit_world_camera` resets
   the idle timer on any drag. The garage/showroom camera keeps its orbit.
 - **Status:** fix in code, awaiting driver verification.
+- **F8 camera panel (2026-11-26, awaiting driver verification):** the main
+  chase is tuned in-game, independent of any `.cfg` (secondary cameras keep
+  the original cfg behaviour). Panel is the game's own OSD text (same store
+  as the drive HUD), not the ImGui debug overlay; it opens in the garage and
+  in City/Valocity/TestTrack only, and F8 ignores everywhere else. Rows:
+  FOV (20..90 deg, was hardcoded 42), DISTANCE (1..40 m, was 7), LIFT (0..5 m,
+  was 1.4), TILT (-0.6..0.6 rad, was 0), RETURN SPEED (0.2..3 1/s, was 2.2).
+  Panel is a modal `Dialog` on the game's own OSD (frame, backshield,
+  sliders, like the delete-career confirmation) built by the patch class
+  `java.game.CameraDialog`, opened by F8 in the driving sections only
+  (garage showroom camera excluded), with a CLOSE row and Esc. Values
+  persist in `save/game/camera_settings` (same place as the stock options)
+  and apply live, with no pause. Variants 3/4 keep their numbers.
+  The old test key F8-language is gone: language lives in the main menu as
+  LANGUAGE (patch `MainMenu.java`, native `MainMenuDialog.toggleLanguage()`
+  like the handbrake row, compiles only under slrr_host). Driver note:
+  first iteration was a text-only HUD overlay the driver rejected (not
+  centered, no frame, no sliders); the dialog above is the redo. Follow-up:
+  the panel used to override neither cam_distance (script `move ... dist`
+  state) nor fov wait: distance is now panel-owned for the main chase
+  (without the script dist range clamp), and the offset is orthogonal:
+  DISTANCE = chase length, LIFT = eye height above the focus at the default 7 m (height scales proportionally to DISTANCE, so the elevation angle is kept), and
+  TILT pitches the view (look point) instead of moving the eye, so it can
+  no longer pose as LIFT.
 
 ## UI
 

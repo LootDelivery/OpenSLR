@@ -12,6 +12,7 @@
 #include "slrr/video_fmv.hpp"
 #include "slrr/host_music.hpp"
 #include "slrr/host_game_options.hpp"
+#include "slrr/camera_overlay.hpp"
 #include "slrr/drive_hud.hpp"
 #include "slrr/resource_loading.hpp"
 

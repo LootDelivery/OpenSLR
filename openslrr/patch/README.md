@@ -12,6 +12,12 @@ The **Video Options** menu applies the resolution and the Enhanced settings in g
 | `java.game.OptionsDialog.setRendererOption(II)V` | Applies the value to the session. Unknown identifiers are ignored. |
 | `java.game.OptionsDialog.getHandbrakeStrength()F` | Reads the handbrake moment as a multiple of the recovered law (0…5, 1 = original). |
 | `java.game.OptionsDialog.setHandbrakeStrength(F)V` | Applies it, rounded to 0.1 steps and saved in `save/game/openslrr_options`. |
+| `java.game.MainMenuDialog.toggleLanguage()V` | Cycles the interface language (EN→RU→PL) and re-translates live texts in place; driven by the LANGUAGE row of the main menu. |
+| `java.game.CameraDialog.getFov()F` / `setFov(F)V` | F8 camera panel dialog (main chase only): read/write the chase FOV in degrees, saved in `save/game/camera_settings`. |
+| `java.game.CameraDialog.getDistance()F` / `setDistance(F)V` | Same panel: chase distance in metres. |
+| `java.game.CameraDialog.getLift()F` / `setLift(F)V` | Same panel: chase height above the hub in metres. |
+| `java.game.CameraDialog.getTilt()F` / `setTilt(F)V` | Same panel: added base elevation in radians. |
+| `java.game.CameraDialog.getReturnSpeed()F` / `setReturnSpeed(F)V` | Same panel: orbit-offset decay rate in 1/s. |
 
 | ID | Option | Values |
 | --- | --- | --- |
@@ -23,6 +29,13 @@ The **Video Options** menu applies the resolution and the Enhanced settings in g
 | 5 | Framerate adaptive behaviour | 0 Classic (60 Hz), any non-zero value Adaptive |
 
 The menu and ImGui share options 0–4. They reset on the next launch. Resolution, the global shadow toggle, and flares use the game's existing configuration.
+
+## Valocity spawn fix
+
+The patched `Valocity` script also accepts `DriverSelect` in the branch that
+initializes `posStart` from `posGarage[club]`. Career `HITTHESTREET` routes
+through `DriverSelect` first; without it, a fresh `Valocity` left `posStart`
+unset and repeated city entries kept the car's previous transform.
 
 ## Running from OpenSLRR without touching the install
 

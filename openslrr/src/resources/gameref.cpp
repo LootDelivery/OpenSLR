@@ -1,4 +1,5 @@
 #include "slrr/gc_roots.hpp"
+#include "slrr/camera_settings.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/race_runtime.hpp"
 #include "slrr/script_events.hpp"
@@ -737,26 +738,43 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
   // staying where it was left. Carried on the chase pose only, so the
   // garage and showroom cameras keep their orbit.
   if (dt > 0.f) {
-    const float idle = cam.orbit_idle_time += dt;
+    // While the right mouse button is held the camera is being steered:
+    // the return must not run, and the timer restarts from the release.
+    const float idle = host_input().rmb_down ? (cam.orbit_idle_time = 0.f)
+                                             : (cam.orbit_idle_time += dt);
     if (idle > .6f && (cam.orbit_yaw != 0.f || cam.orbit_pitch != 0.f)) {
-      const float k = std::exp(-dt * 2.2f);  // ~1.5 s to near zero after the wait
+      const float k = std::exp(-dt * camera_settings().return_speed);  // ~1.5 s to near zero after the wait
       cam.orbit_yaw *= k;
       cam.orbit_pitch *= k;
     }
   }
   const double azimuth = std::atan2(frame[8], frame[10]) + cam.orbit_yaw +
                          (cam.follow_variant == 4 ? 3.141592653589793 : 0);
+  // The F8 panel tunes the main chase only; variants 3/4 keep their numbers.
+  // The panel owns distance for the main chase, with no script clamp: the
+  // script `dist min max` range is a zoom limiter for the orbit camera,
+  // and applying it here made the slider die at its ceiling. Settings
+  // sanitize() already keeps the panel inside 1..40 m.
+  const CameraSettings& cs = camera_settings();
+  const bool main_chase = cam.follow_variant == 0;
   const double distance = cam.follow_variant == 4 ? 11. : cam.follow_variant == 3 ? 12. :
-      std::clamp(cam.cam_distance > 0.f ? cam.cam_distance : 7.f,
-                 cam.script_dist_min, cam.script_dist_max);
-  const double lift = cam.follow_variant == 4 ? 1.9 : cam.follow_variant == 3 ? 2.4 : 1.4;
-  const double radius = std::hypot(distance, lift);
-  const double elevation = std::clamp(std::atan2(lift, distance) + cam.orbit_pitch, -1.35, 1.35);
-  const Vec3 offset{std::sin(azimuth) * std::cos(elevation) * radius,
-                    std::sin(elevation) * radius,
-                    std::cos(azimuth) * std::cos(elevation) * radius};
-  const Vec3 focus{frame[12], frame[13] + 1.1, frame[14]};
-  const Vec3 desired = focus + offset;
+      double(cs.distance);
+  const double lift = cam.follow_variant == 4 ? 1.9 : cam.follow_variant == 3 ? 2.4 :
+                    double(cs.lift);
+  const double tilt = main_chase ? double(cs.tilt) : 0.;
+  // Offset: DISTANCE is the chase length, LIFT is the eye height above the
+  // pivot at the default 7 m, and the height is scaled proportionally to
+  // DISTANCE so the chase keeps its elevation angle: at 40 m the eye rises
+  // to 5.7x instead of taking the ground-level flyby the slider showed at
+  // mid-range (and dropping under the car through the sweep). TILT keeps
+  // the eye fixed and pitches the view: it can no longer pose as LIFT.
+  const double orbit_lift = double(cam.orbit_pitch) * distance;
+  const double eye_height = lift * (distance / 7.0) + orbit_lift;
+  const Vec3 offset{std::sin(azimuth) * distance, eye_height,
+                    std::cos(azimuth) * distance};
+  const Vec3 origin{frame[12], frame[13] + 1.1, frame[14]};
+  const Vec3 focus{origin.x, origin.y + distance * std::tan(tilt), origin.z};
+  const Vec3 desired = origin + offset;
   const float position[3] = {float(desired.x), float(desired.y), float(desired.z)};
   const float center[3] = {float(focus.x), float(focus.y), float(focus.z)};
   if (!cam.cam_pose_init) {
@@ -791,7 +809,7 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
   if (up) { up[0] = 0; up[1] = 1; up[2] = 0; }
   if (driving_camera_pose(*cam, eye, at, up, dt)) {
     const bool cockpit = cam->camera_attached && !cam->follow_variant;
-    if (fov) *fov = cockpit ? cam->half_aov : 42.f;
+    if (fov) *fov = cockpit ? cam->half_aov : camera_settings().fov;
     // Outside the cockpit, reserve more depth precision for close body seams.
     if (znear) *znear = cockpit ? .03f : .20f;
     if (zfar) *zfar = 3000.f;

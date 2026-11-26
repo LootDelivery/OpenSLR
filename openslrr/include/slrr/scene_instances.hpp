@@ -32,6 +32,11 @@ struct SceneInstance {
   uint32_t light_flags = 0;
   // Render-object id. Carries `flags` (dynamic shadow caster) and `shd_*`.
   int32_t type_id = 0;
+  // Navigator overlay rank: 0 = not a minimap marker; 1 = other marker;
+  // 2 = player marker; 3 = camera red dot; 4 = camera cone. Drawn last
+  // with an always depth test so the top-down mini icons do not sink
+  // under each other when they overlap (red dot stays under the cone).
+  int map_marker_rank = 0;
   // Upload-space bone palette (scaled, Z flipped). Empty keeps the CPU pose.
   // Inside a renderer frame, a walker outside the collecting view has
   // gpu_skin set and an empty palette; it is kept for residency, not drawn.

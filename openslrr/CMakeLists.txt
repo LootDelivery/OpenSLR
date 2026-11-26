@@ -42,6 +42,7 @@ add_executable(slrr_host
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
   src/platform/host_game_options.cpp
+  src/platform/camera_settings.cpp
   src/platform/host_cursor.cpp
   src/platform/video_fmv.cpp
   src/platform/video_fmv_vlc.cpp
@@ -171,6 +172,7 @@ set(SLRR_IMGUI_DIR "${BGFX_DIR}/3rdparty/dear-imgui")
 target_sources(slrr_host PRIVATE
   src/render/debug_overlay.cpp
   src/render/drive_hud.cpp
+  src/render/camera_overlay.cpp
   "${BGFX_DIR}/examples/common/imgui/imgui.cpp"
   "${SLRR_IMGUI_DIR}/imgui.cpp"
   "${SLRR_IMGUI_DIR}/imgui_draw.cpp"

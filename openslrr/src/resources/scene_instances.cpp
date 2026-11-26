@@ -1881,6 +1881,19 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
       }
     }
     instance.light_flags = n->light_flags;
+    {
+      std::string path = instance.geometry->info.path;
+      for (char& c : path) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      const uint32_t full_id = static_cast<uint32_t>(n->type_id);
+      if (path.find("camera_marker2") != std::string::npos)
+        instance.map_marker_rank = 3;  // red camera dot, below the cone
+      else if (path.find("camera_marker") != std::string::npos)
+        instance.map_marker_rank = 4;  // camera cone, above the red dot
+      else if (full_id == 0x22005cu)
+        instance.map_marker_rank = 2;  // frontend:0x5c player marker
+      else if (path.find("mapmarker") != std::string::npos)
+        instance.map_marker_rank = 1;
+    }
     if (n->paint_source || !n->texture_replacements.empty()) {
       // The mesh list may prefer a DDS sidecar while the resource names the
       // original image. Match the path without the extension.
