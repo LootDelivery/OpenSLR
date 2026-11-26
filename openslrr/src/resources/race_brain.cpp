@@ -33,7 +33,8 @@
 namespace slrr {
 namespace {
 struct Brain {
-  void *key = nullptr;
+  void *key = nullptr;    // brain object (the Bot's GameRef, under the world)
+  void *ground = nullptr; // map ground resolved from the chain, once known
   uint64_t incarnation = 0;
   Object *car = nullptr;
   uint64_t car_incarnation = 0;
@@ -63,14 +64,30 @@ bool read_point(std::istream &in, RoadPoint &p) {
                      [](float x) { return std::isfinite(x); });
 }
 
-void *car_ground(Object *car) {
-  auto *n = gameref_get(car);
+bool is_ground_node(GameRefState *n) {
+  // A native ground is recognised by its class, the same check the resref
+  // natives use: the GameRef state kind is Generic for every scripted ref,
+  // so the kind tag alone can never match.
+  return n && (n->kind == GameRefKind::GroundRef ||
+               n->class_name.find("GroundRef") != std::string::npos);
+}
+
+void *find_ground(void *key) {
+  auto *n = gameref_get(key);
   for (int i = 0; n && i < 32; ++i) {
-    if (n->kind == GameRefKind::GroundRef)
+    if (is_ground_node(n))
       return n->key;
     n = gameref_get(n->parent);
   }
   return nullptr;
+}
+
+// The bot constructs its brain under the world (the map ground), so when the
+// car's own chain reaches no ground the brain's chain is the fallback.
+void *car_ground(Object *car, void *brain = nullptr) {
+  if (auto *ground = find_ground(car))
+    return ground;
+  return brain ? find_ground(brain) : nullptr;
 }
 
 RoadPoint car_position(Object *car) {
@@ -177,7 +194,9 @@ RoadRoute spline(const RpkIndex &rpk, const std::string &file,
 }
 
 void traffic_route(Brain &b, const RoadPoint &position) {
-  auto graph = race_ground_roads(*b.resources, car_ground(b.car));
+  if (!b.ground)
+    b.ground = car_ground(b.car, b.key);
+  auto graph = race_ground_roads(*b.resources, b.ground);
   PartMatrix frame;
   RoadPoint heading{};
   if (scene_instances_script_matrix(b.car, frame.data()))
@@ -237,6 +256,8 @@ bool race_brain_command(const RpkIndex &rpk, void *key,
     b.incarnation = n->incarnation;
   }
   b.resources = &rpk;
+  if (!b.ground)
+    b.ground = find_ground(key);
   if (verb == "controllable") {
     int32_t id = 0;
     if (input >> id) {
@@ -280,15 +301,16 @@ bool race_brain_command(const RpkIndex &rpk, void *key,
   b.replan = 0;
   b.blocked_for = b.reverse_for = 0;
   std::fprintf(stderr, "[race-brain] cmd=%s brain=%p car=%p ground=%p\n", verb.c_str(), key,
-               static_cast<void*>(b.car), b.car ? car_ground(b.car) : nullptr);
+               static_cast<void*>(b.car), b.car ? car_ground(b.car, key) : nullptr);
   std::fflush(stderr);
   if (!b.car)
     return true;
   if (verb == "AI_race" || verb == "AI_GoToTarget") {
     RoadPoint finish;
     if (read_point(input, finish)) {
-      auto route =
-          race_query_route(rpk, car_ground(b.car), car_position(b.car), finish);
+      if (!b.ground)
+        b.ground = car_ground(b.car, key);
+      auto route = race_query_route(rpk, b.ground, car_position(b.car), finish);
       if (route)
         b.route = *route;
     }
@@ -397,8 +419,9 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
         auto finish = car_position(target);
         for (int k = 0; k < 3; ++k)
           finish[k] += b->offset[k];
-        auto r =
-            race_query_route(*b->resources, car_ground(car), position, finish);
+        if (!b->ground)
+          b->ground = car_ground(car, b->key);
+        auto r = race_query_route(*b->resources, b->ground, position, finish);
         b->route = r ? *r : RoadRoute{};
         b->progress = 0;
       }
