@@ -617,12 +617,17 @@ look at, so the check takes a minute rather than a session.
   wrote that the driver said the original does the same. The driver now
   confirms the original holds on the slope with the handbrake and this is a
   port defect, not original behaviour. The old "no action" verdict is void.
-- **Mechanism (documented):** our rest-contact hold caps the impulse by the
-  tyre's peak, and the brake torque at rest competes with gravity through
-  `braking_at_rest`; a slope steeper than the balance creeps.
-- **Fix direction:** raise the static brake hold or the rest-contact friction
-  for handbraked wheels.
-- **Status:** open, port defect.
+- **Mechanism (measured 2026-11-26):** the standstill hold is a rest contact
+  gated on contact-point speed < 0.05 m/s. On a slope the car rocks while
+  settling, drifts past the gate once, and the hold never re-engages; only the
+  moving-path tyre force remains (clamped by the slip limit), which balances
+  gravity at ~1 m/s creep. Probe (1300 kg, rear handbrake, engine idling):
+  slope 0.20 drifted 9.95 m in 10 s, slope 0.40 drifted 17.8 m.
+- **Fix:** handbrake hold gate widened 0.05 -> 0.5 m/s (service brakes keep
+  0.05). Same probe after the fix: slope 0.20 drift 0.0006 m, slope 0.40
+  drift 0.0017 m.
+- **Status:** fix in code, build passes; awaiting driver verification on a
+  real slope (measured in physics probe, not yet in the game).
 
 ### DRV-8 A braked rear wheel hovers below rolling in a braking slide
 - **Symptom:** the driver's MC GT trace (2026-11-24): in braking slides

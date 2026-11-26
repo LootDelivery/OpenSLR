@@ -1611,13 +1611,21 @@ void VehicleDynamics::step(const Terrain &terrain) {
     if (!wheels[i].enabled || !s.contact || !(s.force > 0)) continue;
     // The F12 strength counts here too: at 0 the handbrake is genuinely absent,
     // so a parked car must roll instead of being held by a disabled brake.
-    const bool braked = (drive.brake > .05 && cfg.brake > 0) ||
-                        (drive.handbrake > .05 && cfg.handbrake > 0 &&
-                         drive_tuning().handbrake > 0) ||
+    const bool handbraked = drive.handbrake > .05 && cfg.handbrake > 0 &&
+                            drive_tuning().handbrake > 0;
+    const bool braked = (drive.brake > .05 && cfg.brake > 0) || handbraked ||
                         (drive.native_traffic && drive.brake > .5);
     const Vec3 v = body.point_velocity(s.patch);
     const double speed = (v - s.normal * v.dot(s.normal)).length();
-    if (!parked && !(braked && speed < .05 && std::abs(s.spin * wheels[i].radius) < .05))
+    // The standstill hold must survive the settle bounce: at 0.05 m/s a
+    // parked-on-slope car drifts past the gate once and the hold never
+    // re-engages, so it creeps at the moving-path balance (~1 m/s). The
+    // handbrake hold is therefore allowed well past rest (still far below
+    // any drift speed); service brakes keep the tight gate so braking to a
+    // stop is not finished by a standstill solver.
+    const double hold_speed = handbraked ? 0.5 : .05;
+    if (!parked && !(braked && speed < hold_speed &&
+                     std::abs(s.spin * wheels[i].radius) < .05))
       continue;
     const double mu = wheels[i].metal_contact ? .4 : .8;
     TireForces caps{mu * s.force, mu * s.force};
