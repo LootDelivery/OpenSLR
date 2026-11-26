@@ -2759,8 +2759,7 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   // Down is the reverse throttle, not the service brake. Done here, once per
   // input frame, because update_gear runs on physics substeps and a swap
   // there would feed the swapped value back into the latch.
-  if (rec.dynamics.gear == 7 && rec.dynamics.brake_reverse_latched() &&
-      drive.brake > .5f) {
+  if (rec.dynamics.gear == 7 && drive.brake > .5f) {
     drive.throttle = std::max(drive.throttle, drive.brake);
     drive.brake = 0;
   }

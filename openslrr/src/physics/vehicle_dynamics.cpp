@@ -757,29 +757,27 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
   shift_time_ = std::max(0.0, shift_time_ - timestep);
   if (gear != 7 && gear > drive.gears)
     gear = drive.gears;
-  // One-pedal classic: Down held brakes while moving forward; once the car
-  // is stopped with Down still held, reverse engages and the same held input
-  // drives backwards (the pedal swap below). Releasing Down returns to drive.
+  // One-pedal classic: Down held brakes while moving forward; at a
+  // standstill it selects reverse, and reverse stays selected after the
+  // pedal is released (leaving R is a shift action, not a pedal release).
+  // The pedal swap that makes the held Down drive backwards is in the
+  // input stage (part_runtime), gated on gear==7 && brake>0.5.
   const double raw_brake = drive.raw_brake > 0.001 ? drive.raw_brake : drive.brake;
-  if (road_kph < 2.0 && raw_brake > .5 && drive.ratios[7] < 0)
+  if ((road_kph < 2.0 && raw_brake > .5) || drive.reverse)
     brake_reverse_latched_ = true;
-  else if (raw_brake <= .5)
-    brake_reverse_latched_ = false;
   if (brake_reverse_latched_ && !forced_reverse_ && drive.ratios[7] < 0) {
     forced_reverse_ = true;
     gear = 7;
     shift_time_ = 0;
-  } else if (drive.reverse && !forced_reverse_ && drive.ratios[7] < 0) {
-    forced_reverse_ = true;
-    gear = 7;
-    shift_time_ = 0;
-  } else if (!drive.reverse && forced_reverse_ && !brake_reverse_latched_) {
-    forced_reverse_ = false;
-    gear = drive.automatic_shift || drive.automatic_first ? 1 : 0;
-  } else if (shift_pressed && shift_time_ == 0 && !forced_reverse_) {
+  } else if (shift_pressed && shift_time_ == 0) {
     const int low = (drive.ratios[7] < 0 && road_kph < 2.0) ? -1 : 0;
     const int next = std::clamp((gear == 7 ? -1 : gear) + drive.shift,
                                 low, drive.gears);
+    if (forced_reverse_ && next >= 0) {
+      // Shifting out of reverse clears the selection; staying at -1 keeps it.
+      forced_reverse_ = false;
+      brake_reverse_latched_ = false;
+    }
     gear = next < 0 ? 7 : next;
     shift_time_ = .22;
   }

@@ -111,6 +111,9 @@ Move fixed items to the bottom with the fixing commit.
 - **Status:** driver confirmed: hold Down -> brake, stop, R engages and the held
   Down drives backwards; no gear oscillation. The one-off purple car at
   05:18 did not reproduce after a restart in identical conditions.
+- **Follow-up (2026-11-26):** releasing the pedal returned to 1st. Now R
+  stays selected after release; leaving R is a shift action (up through
+  neutral). Awaiting the driver's check.
 
 ### STB-1 Crashes on scene transitions
 - **Symptom:** the game crashes on various scene transitions: garage -> map,
