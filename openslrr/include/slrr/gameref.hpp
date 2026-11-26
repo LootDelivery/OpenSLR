@@ -150,6 +150,11 @@ struct GameRefState {
   float orbit_yaw = 0.f;
   float orbit_pitch = 0.f;
   float orbit_zoom = 0.f;
+  // Time since the last mouse drag on a chase camera (DRV-6): the driving
+  // pose decays the orbit offsets back to zero once this passes a second,
+  // so the camera returns behind the car instead of staying where the
+  // user left it. The garage/showroom camera keeps its orbit.
+  float orbit_idle_time = 1e9f;
   // Spring length of the native camera (`move` distance). The wheel scales it
   // inside the `dist` range: garage 1–10, dealer 2.5–4.6.
   float cam_distance = 0.f;

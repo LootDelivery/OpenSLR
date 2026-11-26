@@ -732,6 +732,18 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
 
   // SLRR_rev FollowCamera keeps the car's actual translation and damps
   // the offset. This avoids camera lag when a render frame has fewer ticks.
+  // DRV-6: while driving, the mouse offsets drift back to zero once the
+  // user stops dragging -- the camera returns behind the car instead of
+  // staying where it was left. Carried on the chase pose only, so the
+  // garage and showroom cameras keep their orbit.
+  if (dt > 0.f) {
+    const float idle = cam.orbit_idle_time += dt;
+    if (idle > .6f && (cam.orbit_yaw != 0.f || cam.orbit_pitch != 0.f)) {
+      const float k = std::exp(-dt * 2.2f);  // ~1.5 s to near zero after the wait
+      cam.orbit_yaw *= k;
+      cam.orbit_pitch *= k;
+    }
+  }
   const double azimuth = std::atan2(frame[8], frame[10]) + cam.orbit_yaw +
                          (cam.follow_variant == 4 ? 3.141592653589793 : 0);
   const double distance = cam.follow_variant == 4 ? 11. : cam.follow_variant == 3 ? 12. :
@@ -958,6 +970,9 @@ void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,
   GameRefState* cam = fullscreen_script_camera();
   if (cam && (cam->camera_free || (cam->follow_vehicle && cam->cockpit_index < 0) ||
               driving)) {
+    // Any mouse motion resets the DRV-6 return timer (the decay itself
+    // runs in the driving camera pose).
+    if (in.mouse_dx != 0.f || in.mouse_dy != 0.f) cam->orbit_idle_time = 0.f;
     cam->orbit_yaw = std::remainder(cam->orbit_yaw + in.mouse_dx * .003f, 6.2831853f);
     cam->orbit_pitch = std::clamp(cam->orbit_pitch + in.mouse_dy * .003f, -1.1f, 1.1f);
   }

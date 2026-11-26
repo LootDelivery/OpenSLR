@@ -1092,7 +1092,9 @@ a 0.5 lock flick at ~50 km/h still shows `as=-0.40` of a lock against a held axi
   into a tree minutes into the run, so long runs are not reproducible.
 - **Fix direction:** follow traffic splines (Navigator plotRoute paths) or
   let a human drive while a passive logger records.
-- **Status:** open. (M3/M4.)
+- **Finding (2026-11-26):** `--bench-route` now exists (route follower with
+  stuck-backoff reverse in `boot.cpp`); long-route use was not measured.
+- **Status:** open, route follower exists but unmeasured for long runs.
 
 ### DRV-3 Handbrake barely locks the wheels
 - **Symptom:** the handbrake has minimal effect; wheels keep rolling.
@@ -1114,7 +1116,13 @@ a 0.5 lock flick at ~50 km/h still shows `as=-0.40` of a lock against a held axi
 - **Suspect:** the attach/detach path runs a physics reset/step with a stale
   chassis transform (or rebuilds the vehicle body and re-derives the wheel
   steer angle from a dirty state).
-- **Status:** open.
+- **Finding (2026-11-26):** code review only, no live repro yet.
+  `refresh_chassis` sets `physics_dirty`, so the next step re-runs
+  `dynamics_configure` with the current script frame; when the chassis was
+  not held this also calls `release_wheels()` and `reset_clock()`, wiping
+  wheel spin. The steering-help and slot rebuilds themselves look clean.
+- **Status:** open, needs a live garage repro (attach/detach while watching
+  the wheels).
 
 ### DRV-5 Wheel rotation changes on clutch toggle in test mode
 - **Symptom:** switching the clutch on/off in the garage test mode also
@@ -1125,10 +1133,14 @@ a 0.5 lock flick at ~50 km/h still shows `as=-0.40` of a lock against a held axi
 - **Symptom:** after rotating the camera with the mouse while driving in the
   city, the camera stays where the user left it. In the original game it
   drifts back behind the car after ~2 s.
-- **Suspect:** the auto-return (centering) logic in the chase-camera path
-  was not carried over from stock; look for a "return to car" timer/blend in
-  the stock camera script.
-- **Status:** open.
+- **Finding (2026-11-26):** the mouse integrates into `orbit_yaw/orbit_pitch`
+  permanently; nothing decayed them. Our chase orientation is car-frame
+  relative (heading from the part camera frame + orbit offsets) -- NOT cfg
+  based, and per the driver that stays.
+- **Fix:** in `driving_camera_pose`, when no mouse motion for 0.6 s the
+  orbit offsets decay to zero (~1.5 s); `gameref_orbit_world_camera` resets
+  the idle timer on any drag. The garage/showroom camera keeps its orbit.
+- **Status:** fix in code, awaiting driver verification.
 
 ## UI
 
