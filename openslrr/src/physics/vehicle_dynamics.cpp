@@ -760,9 +760,16 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
   // One-pedal classic: Down held brakes while moving forward; at a
   // standstill it selects reverse, and reverse stays selected after the
   // pedal is released (leaving R is a shift action, not a pedal release).
-  // The pedal swap that makes the held Down drive backwards is in the
-  // input stage (part_runtime), gated on gear==7 && brake>0.5.
+  // Up in reverse brakes (the swap is in the input stage); once stopped,
+  // the same Up press selects first and becomes the forward throttle.
   const double raw_brake = drive.raw_brake > 0.001 ? drive.raw_brake : drive.brake;
+  if (gear == 7 && road_kph < 2.0 && drive.raw_throttle > .1 &&
+      drive.ratios[7] < 0) {
+    forced_reverse_ = false;
+    brake_reverse_latched_ = false;
+    gear = drive.automatic_shift || drive.automatic_first ? 1 : 0;
+    shift_time_ = .1;
+  }
   if ((road_kph < 2.0 && raw_brake > .5) || drive.reverse)
     brake_reverse_latched_ = true;
   if (brake_reverse_latched_ && !forced_reverse_ && drive.ratios[7] < 0) {

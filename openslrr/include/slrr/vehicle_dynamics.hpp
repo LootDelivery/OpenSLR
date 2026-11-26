@@ -175,9 +175,10 @@ struct DriveInput {
   bool engaged = false, reverse = false, automatic_shift = true, auto_clutch = true;
   bool automatic_first = false;
   double throttle = 0, brake = 0, handbrake = 0;
-  // Physical Down pedal before the brake-reverse pedal swap: the latch in
-  // update_gear reads this, not the (possibly swapped) brake.
+  // Physical pedals before the reverse pedal swaps: update_gear reads these,
+  // not the (possibly swapped) pedals.
   double raw_brake = 0;
+  double raw_throttle = 0;
   // Only the bearing term still uses a scale: its wheel[0xFC] meaning is not
   // recovered, so it keeps the pre-recovery form. Brakes and the tyre no longer
   // use a scale at all -- see the three fields below.
