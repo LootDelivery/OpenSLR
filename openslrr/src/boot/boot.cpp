@@ -694,6 +694,14 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
           std::fprintf(stderr, "[bench] no MapBox track matches %s\n", opt.bench_map.c_str());
         }
       }
+      if (opt.roc && roc_step == 0 && sections.actual() &&
+          sections.actual()->class_name.find("Garage") == std::string::npos) {
+        if (++roc_frames > 300) {
+          roc_frames = 0;
+          std::fprintf(stderr, "[roc] waiting for Garage (section=%s)\n",
+                       sections.actual()->class_name.c_str());
+        }
+      }
       if (opt.roc && sections.actual() &&
           sections.actual()->class_name.find("Garage") != std::string::npos) {
         // Garage.CMD_BEGIN_ROC=128 builds Roc(player) and stays in Garage;
