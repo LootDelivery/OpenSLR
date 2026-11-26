@@ -702,14 +702,14 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
         // dialog, which this skips on purpose (dev shortcut).
         if (roc_step == 0) {
           roc_step = 1;
-          std::printf("[roc] Garage.osdCommand(128) begin\n");
+          std::fprintf(stderr, "[roc] Garage.osdCommand(128) begin\n");
           jvm.invoke("java.game.Garage", "osdCommand", "(I)V",
                      {Value::make_obj(sections.actual()), Value::make_int(128)},
                      false);
           mainloop_adopt_section(jvm, sections);
         } else if (roc_step == 1 && ++roc_frames > 120) {
           roc_step = 2;
-          std::printf("[roc] Garage.osdCommand(120) race\n");
+          std::fprintf(stderr, "[roc] Garage.osdCommand(120) race\n");
           jvm.invoke("java.game.Garage", "osdCommand", "(I)V",
                      {Value::make_obj(sections.actual()), Value::make_int(120)},
                      false);
